@@ -3199,6 +3199,7 @@ function startMultiplayer(w){
       S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
     }
   }catch(e){}
+  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999}; cheatMax=false; }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -3245,6 +3246,32 @@ $('btnNew').addEventListener('click',()=>{
   startGame(false);
 });
 $('btnTitleImport').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); $('importWrap').classList.remove('hidden'); });
+
+/* ---------- secret "Commander" host: maxed resources ---------- */
+let cheatMax=false, secretTaps=0, secretT=0;
+function secretHost(){
+  if(S.running) return;
+  cheatMax=true; NET.isHost=true;
+  let name=''; try{ name=localStorage.getItem('starfall_name')||''; }catch(e){}
+  NET.name=name||'COMMANDER';
+  SND.ensure(); SND.tierUp();
+  showToast('⚡ COMMANDER MODE — hosting a new world with maxed resources');
+  NET.connect({t:'host',name:NET.name});
+}
+function secretTap(){
+  if(S.running) return;
+  const now=performance.now();
+  if(now-secretT>1400) secretTaps=0;
+  secretT=now; secretTaps++;
+  if(secretTaps>=5){ secretTaps=0; secretHost(); }
+}
+(function(){
+  const h=document.querySelector('#start h1');
+  if(h){ h.style.cursor='default';
+    h.addEventListener('click',secretTap);
+    h.addEventListener('touchstart',e=>{ e.preventDefault(); secretTap(); },{passive:false});
+  }
+})();
 
 /* autosave */
 setInterval(saveGame,30000);
