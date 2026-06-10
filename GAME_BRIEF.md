@@ -127,6 +127,20 @@ Authoritative for the shared world only: room membership (4-player cap, 5-char c
 
 ---
 
+## 5b. Combat & vehicles update (save v2)
+
+- **Health & combat**: players have HP (100) with a HUD bar. Weapons live in hotbar slots (keys 1-4 / taps): slot 0 mining tool, 1 Energy Blade (melee), 2 Blaster Pistol (Light Cells), 3 Pulse Rifle (Heavy Cells). First-person viewmodels; `WEAPONS`/`CRAFT` tables drive stats and recipes. Fire = left-click / `mAct` button.
+- **Armory** (Tier 2 structure, `interact:'armory'`): craft menu (`renderCraftGrid`/`craft`) for weapons (one-time), ammo, and Med-Packs (`useMed`, +50 HP). Open with E when nearby.
+- **Death/loot**: weapon death drops a server-owned loot container (`lootBoxes`, claimed by proximity), respawn at base with 4s spawn protection (`player.invuln`). O2 blackout still drops nothing.
+- **Safe zone**: no PvP within `SAFE_R` of a Colony Beacon (visible green ground ring); turrets idle there too. `inSafeZone()`.
+- **Sentry Turret** (Tier 3, `owned:true`): tracks/shoots nearest non-owner player (`updateTurrets`/`turretTarget`); owner stored in structure data; cap 8. Damage is victim-applied.
+- **Rover** (Tier 2, `dynamic:true`): drivable buggy rendered as its own group (`roverMeshes`/`buildRover`), not instanced. `enterRover`/`updateRover`/`exitRover`; server arbitrates the seat (`roverSeat`/`roverMove`).
+- **Avatar animation**: remote astronauts have pivoted limbs (`animateAvatar`), held weapons, and a spawn shimmer; synced via the `pu` `wp`/`iv`/`dr`/`sw` fields.
+- **Chat / compass / minimap** (Phase 5): `addChat`/`openChat` (MP only, escaped + sanitized), `renderCompass`, `drawMinimap` (M / MAP button). Compass + minimap work in solo.
+- **Furniture**: bed, chair, holo console (animated screen), shelf, rug, ceiling light, locker, railing — all in `CAT` as decor.
+- **New net messages**: `fire`, `died`, `lootClaim/lootSpawn/lootGone/lootGot`, `chat`/`sys`, `roverSeat/roverSeatClear/roverMove` — see the protocol comment atop `server.js`. Damage is client-authoritative; loot/seats/turret-owner are server-authoritative.
+- **Save**: bumped to v2 with graceful v1 migration (combat fields default). `SAVE_VER`, `parseSave` accepts v1 and v2.
+
 ## 6. Current feature list (what exists today)
 
 - Full space flight + landing/launch transitions; 3 planets with distinct biomes.
