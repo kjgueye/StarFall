@@ -430,6 +430,10 @@ const CAT={
            {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
            {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisC',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
     glow:{y:1.6,c:'#ffb070',s:3}},
+  turret: {name:'Sentry Turret', ic:'⌖', tier:3, cost:{fe:40,cy:20}, hp:110, owned:true, headParts:[2,3,4],
+    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[1.2,0.6,1.2]},{g:'cyl',m:'metal',o:[0,0.85,0],s:[0.5,0.7,0.5]},
+           {g:'box',m:'dark',o:[0,1.35,0],s:[0.9,0.5,0.7]},{g:'cyl',m:'metal',o:[0,1.35,-0.55],s:[0.12,0.7,0.12],r:[Math.PI/2,0,0]},
+           {g:'sphere',m:'emisR',o:[0,1.35,-0.22],s:[0.2,0.2,0.2]}], glow:{y:1.35,c:'#ff5a4a',s:2.6}},
   beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
            {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
@@ -530,6 +534,7 @@ const NET={
   },
 };
 function mpStatus(s){ const el=$('mpStatus'); if(el) el.textContent=s; }
+function myPid(){ return NET.active?NET.pid:'self'; }
 function mpPlayerKey(){ return 'starfall_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
 function updateRoomBadge(){
   const b=$('roomBadge');
@@ -1270,6 +1275,7 @@ const COLLIDERS={
   ramp:   {ramp:true},
   shieldgen:{r:1.55,h:1.7},
   armory: {boxes:[{cx:0,hx:1.35,hz:0.72}],h:1.5,step:0.6},
+  turret: {r:0.8,h:1.6},
   beacon: {r:1.4,h:5},
   lightpole:{r:0.22,h:3},
   relay:  {r:0.35,h:2.4},
@@ -1564,6 +1570,8 @@ function placeStructure(){
   if(!buildSel||!ghost) return;
   const def=CAT[buildSel];
   if(structCount()>=MAX_STRUCT){ showToast('Construction limit reached ('+MAX_STRUCT+' pieces) — remove something first'); SND.denied(); return; }
+  if(buildSel==='turret'){ let mine=0; for(const s of S.structures) if(s.t==='turret'&&s.owner===myPid()) mine++;
+    if(mine>=8){ showToast('Turret limit reached (8 per player)'); SND.denied(); return; } }
   if(!canAfford(def.cost)){ showToast('Need '+costStr(def.cost)); SND.denied(); return; }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
@@ -1576,6 +1584,9 @@ function applyPlaced(m,byMe){
   const def=CAT[m.t]; if(!def) return;
   const st={t:m.t,pl:m.pl,x:m.x,y:m.y,z:m.z,r:m.r,hp:m.hp!==undefined?m.hp:def.hp};
   if(m.id!==undefined) st.id=m.id;
+  if(m.owner!==undefined&&m.owner!==null) st.owner=m.owner;
+  else if(def.owned&&byMe) st.owner=myPid();
+  if(m.ry!==undefined) st.ry=m.ry;
   S.structures.push(st);
   if(S.mode==='surface'&&st.pl===S.planet){
     refreshStructures();
@@ -1938,6 +1949,62 @@ function renderHotbar(){
 }
 
 /* ============================================================
+   SENTRY TURRETS — track & shoot non-owner players
+   ============================================================ */
+const TURRET_R=25, TURRET_DMG=8, TURRET_CD=1.0;
+function structMatrixHead(st,part,out,yawAbs){
+  _e.set(0,yawAbs,0); _q.setFromEuler(_e);
+  _m1.compose(_v.set(st.x,st.y,st.z),_q,_sv.set(1,1,1));
+  const pr=part.r||[0,0,0];
+  _e.set(pr[0],pr[1],pr[2]);
+  _m2.compose(_v.set(part.o[0],part.o[1],part.o[2]),_q.setFromEuler(_e),_sv.set(part.s[0],part.s[1],part.s[2]));
+  out.multiplyMatrices(_m1,_m2);
+}
+function turretTarget(st){
+  let best=TURRET_R*TURRET_R, found=null;
+  const me=myPid();
+  if(st.owner!==me&&!inSafeZone(player.x,player.z)){
+    const dx=player.x-st.x,dz=player.z-st.z,d2=dx*dx+dz*dz;
+    if(d2<best){ best=d2; found={x:player.x,y:player.y,z:player.z,me:true}; }
+  }
+  if(NET.active) for(const [pid,r] of remotes){
+    if(pid===st.owner||!r.avatar.visible) continue;
+    const ax=r.avatar.position.x,az=r.avatar.position.z;
+    if(inSafeZone(ax,az)) continue;
+    const dx=ax-st.x,dz=az-st.z,d2=dx*dx+dz*dz;
+    if(d2<best){ best=d2; found={x:ax,y:r.avatar.position.y,z:az,me:false}; }
+  }
+  return found;
+}
+function turretFire(st,tg){
+  const o=[st.x,st.y+1.35,st.z], p=[tg.x,tg.y+1,tg.z];
+  tracerFx(o,p,0xff6a4a);
+  const dxs=player.x-st.x,dzs=player.z-st.z;
+  if(dxs*dxs+dzs*dzs<1600) SND.shoot();
+  if(tg.me) applyDamageToSelf(TURRET_DMG);
+}
+function updateTurrets(dt){
+  const list=placedByType.turret||[];
+  if(!list.length) return;
+  const def=CAT.turret;
+  for(let i=0;i<list.length;i++){
+    const st=list[i];
+    if(st._tyaw===undefined) st._tyaw=st.r*Math.PI/2;
+    let tg=null;
+    if(st.hp>0&&!inSafeZone(st.x,st.z)) tg=turretTarget(st);
+    let desired = tg ? Math.atan2(-(tg.x-st.x),-(tg.z-st.z)) : st._tyaw+dt*0.6;
+    let dy=desired-st._tyaw; dy=((dy+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-Math.PI;
+    st._tyaw+=dy*Math.min(1,dt*6);
+    for(const pi of def.headParts){ structMatrixHead(st,def.parts[pi],_doorM,st._tyaw); structMeshes.turret[pi].setMatrixAt(i,_doorM); }
+    if(tg&&st.hp>0){
+      st._tfire=(st._tfire||0)-dt;
+      if(st._tfire<=0&&Math.abs(dy)<0.5){ st._tfire=TURRET_CD; turretFire(st,tg); }
+    } else st._tfire=0.4;
+  }
+  for(const pi of def.headParts) structMeshes.turret[pi].instanceMatrix.needsUpdate=true;
+}
+
+/* ============================================================
    METEOR SHOWERS
    ============================================================ */
 const meteors=[]; // {mesh,glow,vx,vy,vz,tx,ty,tz}
@@ -2134,7 +2201,7 @@ function renderBuildGrid(){
     grid.appendChild(d);
   };
   addSection('Structures');
-  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','window','door','dome','beacon']) addItem(k);
+  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','turret','window','door','dome','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
 }
@@ -2694,6 +2761,7 @@ function updateSurface(dt){
   updateNodes(dt);
   updateMeteors(dt);
   updateLoot(dt);
+  updateTurrets(dt);
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
 }
