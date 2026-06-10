@@ -124,6 +124,53 @@
     background:rgba(2,8,14,0.88); text-align:center; }
   #netLost h2 { font-weight:300; letter-spacing:0.25em; color:#ff9a8a; margin-bottom:18px; font-size:22px; }
 
+  /* ---------- Combat / weapons ---------- */
+  #hpbar { background:linear-gradient(90deg,#ff5060,#ff9aa6); }
+  #hpbar.low { animation:o2flash .5s infinite alternate; }
+  #hotbar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:7px; z-index:22; pointer-events:auto; }
+  .slot { width:50px; height:50px; border:1px solid rgba(110,210,250,0.45); background:rgba(8,22,34,0.72); display:flex;
+    align-items:center; justify-content:center; position:relative; cursor:pointer; color:#bfe6f6; font-size:21px; }
+  .slot.sel { border-color:#7fefff; box-shadow:0 0 12px rgba(80,220,255,0.55); background:rgba(22,64,94,0.8); }
+  .slot.locked { opacity:0.28; }
+  .slot .sk { position:absolute; top:1px; left:4px; font-size:9px; color:#6fa8c4; }
+  .slot .sa { position:absolute; bottom:0; right:3px; font-size:10px; color:#ffd9a0; letter-spacing:0; }
+  .slot.noammo .sa { color:#ff6a5a; }
+  #medSlot { width:50px; height:50px; border:1px solid rgba(120,255,180,0.5); background:rgba(10,34,24,0.72); display:flex;
+    align-items:center; justify-content:center; position:relative; cursor:pointer; color:#9affc8; font-size:20px; }
+  #medSlot .sa { position:absolute; bottom:0; right:3px; font-size:10px; color:#bfffd8; }
+  #dmgFlash { position:fixed; inset:0; pointer-events:none; z-index:17; box-shadow:inset 0 0 150px rgba(255,30,30,0); transition:box-shadow .12s; }
+  #protRing { position:fixed; inset:0; pointer-events:none; z-index:17; box-shadow:inset 0 0 90px rgba(120,220,255,0.55);
+    animation:protPulse 1s infinite alternate; }
+  @keyframes protPulse { from{box-shadow:inset 0 0 70px rgba(120,220,255,0.4);} to{box-shadow:inset 0 0 110px rgba(150,240,255,0.7);} }
+  #craftGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:9px; }
+  .cItem { border:1px solid rgba(120,220,255,0.4); background:rgba(14,36,54,0.6); padding:10px; cursor:pointer; position:relative; }
+  .cItem:hover { background:rgba(30,90,130,0.7); }
+  .cItem.locked { opacity:0.4; cursor:default; }
+  .cItem.owned { border-color:#7fefb0; }
+  .cItem .cn { font-size:13.5px; color:#cfeefe; } .cItem .cd { font-size:10.5px; color:#8fc0d8; margin:3px 0; }
+  .cItem .cc { font-size:11px; color:#ffd9a0; } .cItem .ct { font-size:10px; color:#7fefb0; margin-top:3px; }
+  .cSection { grid-column:1/-1; font-size:12px; letter-spacing:0.25em; color:#5fa8c8; margin-top:6px; text-transform:uppercase; }
+  /* ---------- Compass / minimap / chat ---------- */
+  #compass { position:fixed; top:8px; left:50%; transform:translateX(-50%); width:min(420px,72vw); height:26px;
+    overflow:hidden; z-index:21; pointer-events:none; border-bottom:1px solid rgba(110,210,250,0.3); }
+  #compassStrip { position:absolute; top:0; left:0; height:26px; white-space:nowrap; font-size:12px; color:#9fd6ef; }
+  #compassCtr { position:absolute; left:50%; top:11px; transform:translateX(-50%); color:#7fefff; font-size:13px; }
+  .cmkr { display:inline-block; position:absolute; top:4px; transform:translateX(-50%); font-size:13px; }
+  body.touch #compass { top:42px; width:64vw; }
+  #minimap { position:fixed; right:18px; bottom:80px; width:200px; height:200px; z-index:22; pointer-events:none;
+    border:1px solid rgba(110,210,250,0.5); border-radius:50%; background:rgba(4,12,20,0.6); }
+  body.touch #minimap { width:150px; height:150px; right:12px; bottom:200px; }
+  #chatLog { position:fixed; left:18px; bottom:120px; width:min(360px,52vw); z-index:21; pointer-events:none; font-size:13px; }
+  .chatMsg { background:rgba(6,20,32,0.6); padding:3px 9px; margin-top:3px; border-left:2px solid #3fa9d4; color:#d4f4ff;
+    transition:opacity 1s; max-width:100%; word-wrap:break-word; }
+  .chatMsg.sys { border-left-color:#ffb070; color:#ffd9b0; font-style:italic; }
+  #chatInput { position:fixed; left:18px; bottom:90px; width:min(420px,70vw); padding:9px 12px; z-index:66;
+    background:#06141f; color:#cfeefe; border:1px solid #2e8fb8; font-size:15px; font-family:inherit; }
+  body.touch #chatLog { bottom:auto; top:130px; left:12px; font-size:11.5px; }
+  #mMed { right:176px; bottom:30px; width:54px; height:54px; background:rgba(10,60,40,0.55); border-color:rgba(120,255,190,0.6); }
+  #mChat { left:96px; bottom:30px; width:50px; height:50px; }
+  #mMap { left:26px; bottom:96px; width:50px; height:50px; font-size:10px; }
+
   /* ---------- Mobile ---------- */
   #mob { position:fixed; inset:0; z-index:25; pointer-events:none; display:none; }
   body.touch #mob { display:block; }
@@ -158,6 +205,8 @@
 
 <div id="hud" class="hidden">
   <div id="statBox">
+    <div class="barLabel">HEALTH</div>
+    <div class="barOuter"><div class="barInner" id="hpbar"></div></div>
     <div class="barLabel">OXYGEN</div>
     <div class="barOuter"><div class="barInner" id="o2bar"></div></div>
     <div id="fuelwrap" class="hidden">
@@ -177,6 +226,11 @@
   <div id="crosshair"></div>
   <div id="prompt"></div>
   <div id="prog" class="hidden"><div id="progFill"></div></div>
+  <div id="hotbar"></div>
+  <div id="dmgFlash"></div>
+  <div id="protRing" class="hidden"></div>
+  <div id="compass" class="hidden"><div id="compassStrip"></div><div id="compassCtr">▲</div></div>
+  <div id="chatLog"></div>
 </div>
 
 <div id="vignette" class="hidden"></div>
@@ -211,8 +265,18 @@
     <button class="menuBtn" id="btnImportGo">Load This Save</button>
   </div>
   <button class="menuBtn" id="btnSound">Sound: ON</button>
+  <button class="menuBtn" id="btnBob">Head Bob: ON</button>
   <button class="menuBtn" id="btnQuit">Save & Quit to Title</button>
 </div>
+
+<div id="craftMenu" class="panel hidden">
+  <button class="closeX" data-close="craftMenu">✕</button>
+  <h2>Armory — Fabricate</h2>
+  <div id="craftGrid"></div>
+</div>
+
+<canvas id="minimap" class="hidden" width="320" height="320"></canvas>
+<input id="chatInput" class="hidden" maxlength="120" placeholder="Say something… (Enter to send, Esc to cancel)" autocomplete="off">
 
 <div id="mpSetup" class="panel hidden">
   <button class="closeX" data-close="mpSetup">✕</button>
@@ -261,6 +325,9 @@
   <button class="mBtn" id="mBuild">BUILD</button>
   <button class="mBtn hidden" id="mThrust">▲</button>
   <button class="mBtn hidden" id="mBrake">▼</button>
+  <button class="mBtn" id="mMed">+MED</button>
+  <button class="mBtn hidden" id="mChat">CHAT</button>
+  <button class="mBtn" id="mMap">MAP</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.158.0/three.min.js"></script>
@@ -358,6 +425,11 @@ const CAT={
            {g:'box',m:'emisC',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
   dome:   {name:'Dome Roof', ic:'◠', tier:2, cost:{fe:10,cy:4}, hp:90,
     parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisC',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
+  armory:{name:'Armory', ic:'⚒', tier:2, cost:{fe:35,cy:15}, hp:120, interact:'armory',
+    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[2.6,1.0,1.4]},{g:'box',m:'metal',o:[0,1.06,0],s:[2.75,0.12,1.55]},
+           {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
+           {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisC',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
+    glow:{y:1.6,c:'#ffb070',s:3}},
   beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
            {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
@@ -383,18 +455,45 @@ const CAT={
 };
 const MAX_STRUCT=400;
 const GRID=4;
+const SAFE_R=32;          // PvP-free radius around a Colony Beacon
+const HP_MAX=100;
+const SPAWN_PROT=4;       // seconds of spawn protection
+
+/* ---------- weapons (viewmodels built from primitives) ---------- */
+/* slot 0 = mining tool (default). melee uses arc; ranged is hitscan. */
+const WEAPONS={
+  tool:  {slot:0, name:'Mining Tool'},
+  blade: {slot:1, name:'Energy Blade', melee:true, dmg:34, range:3.4, cd:0.5,  arc:0.45},
+  pistol:{slot:2, name:'Blaster Pistol', dmg:20, range:65, cd:0.33, ammo:'light', col:0xffd060},
+  rifle: {slot:3, name:'Pulse Rifle', dmg:14, range:85, cd:0.12, ammo:'heavy', col:0x7fff9a},
+};
+const SLOT_KEYS=['tool','blade','pistol','rifle'];
+const AMMO_NAMES={light:'Light Cells',heavy:'Heavy Cells'};
+/* ---------- Armory craft recipes ---------- */
+const CRAFT={
+  blade:  {kind:'weapon', name:'Energy Blade',   ic:'╱', cost:{fe:15},        tier:1, desc:'Melee · no ammo'},
+  pistol: {kind:'weapon', name:'Blaster Pistol', ic:'┍', cost:{fe:30,cy:10},  tier:2, desc:'Uses Light Cells'},
+  rifle:  {kind:'weapon', name:'Pulse Rifle',    ic:'╤', cost:{fe:50,cy:25},  tier:3, desc:'Uses Heavy Cells'},
+  light:  {kind:'ammo',   name:'Light Cells ×20',ic:'▪', cost:{fe:8},          give:20, ammo:'light', tier:1},
+  heavy:  {kind:'ammo',   name:'Heavy Cells ×20',ic:'▫', cost:{fe:10,cy:6},    give:20, ammo:'heavy', tier:2},
+  medpack:{kind:'med',    name:'Med-Pack (+50 HP)',ic:'+', cost:{cy:10}, costT3:{cy:6,bio:3}, tier:1, desc:'Heals 50'},
+};
+function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 
 /* ---------- game state ---------- */
 const S={
   running:false, mode:'space', planet:'rust',
   tier:1, res:{fe:0,cy:0,bio:0},
-  structures:[],            // {t, pl, x,y,z, r, hp}
+  structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingVerdantCutscene:false,
+  weapons:{blade:false,pistol:false,rifle:false},  // owned
+  ammo:{light:0,heavy:0}, medkits:0, slot:0, headbob:true,
 };
 const SAVE_KEY='starfall_save_v1';
+const SAVE_VER=2;
 const MP_WORLD_KEY='starfall_mp_world_v1';
 
 /* ============================================================
@@ -467,20 +566,66 @@ function netHandle(m){
     case 'meteorActive': NET.meteor[m.pl]={phase:'active',endAt:performance.now()+(m.secs||12)*1000}; break;
     case 'meteor': if(S.mode==='surface'&&S.planet===m.pl&&surf.built) spawnMeteorAt(m.tx,m.tz,m.sx,m.sz); break;
     case 'meteorEnd': NET.meteor[m.pl]={phase:'idle',endAt:0}; break;
+    case 'fire': onRemoteFire(m); break;
+    case 'lootSpawn': spawnLootBox(m.id,m.pl,m.pos,m.loot); break;
+    case 'lootGone': removeLootBox(m.id); break;
+    case 'lootGot': addLoot(m.loot); break;
+    case 'sys': addChat(null,m.text,true); break;
+    case 'chat': addChat(m.name,m.text,false); break;
+    case 'roverSeat': onRoverSeat(m.id,m.pid); break;
+    case 'roverMove': onRoverMove(m); break;
   }
 }
+/* chat / system message overlay (also used by Phase 5) */
+const chatMsgs=[];
+function escHtml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function addChat(name,text,sys){
+  const log=$('chatLog');
+  const d=document.createElement('div');
+  d.className='chatMsg'+(sys?' sys':'');
+  d.innerHTML=sys?escHtml(text):('<b style="color:#7fd6f5">'+escHtml(name)+':</b> '+escHtml(text));
+  log.appendChild(d); chatMsgs.push({el:d,t:performance.now()});
+  while(chatMsgs.length>6){ const old=chatMsgs.shift(); if(old.el.parentNode) old.el.parentNode.removeChild(old.el); }
+  if(sys) SND.blip();
+}
+function updateChatFade(){
+  const now=performance.now();
+  for(const c of chatMsgs){ const age=now-c.t; c.el.style.opacity = age>9000?Math.max(0,1-(age-9000)/2000):1; }
+}
+function openChat(){
+  if(!NET.active) return;
+  const inp=$('chatInput'); inp.classList.remove('hidden'); inp.value=''; setTimeout(()=>inp.focus(),0);
+  if(document.pointerLockElement) document.exitPointerLock();
+}
+function closeChat(){ const inp=$('chatInput'); inp.classList.add('hidden'); inp.blur(); }
+$('chatInput').addEventListener('keydown',e=>{
+  e.stopPropagation();
+  if(e.code==='Enter'){ const t=$('chatInput').value.trim(); if(t&&NET.active) NET.send({t:'chat',text:t.slice(0,120)}); closeChat(); }
+  else if(e.code==='Escape'){ closeChat(); }
+});
+function toggleMap(){ /* defined fully in Phase 5 */ }
+function onRoverSeat(id,pid){ /* defined fully in Phase 4 */ }
+function onRoverMove(m){ /* defined fully in Phase 4 */ }
 
 /* ============================================================
    SAVE / LOAD — versioned, bulletproof
    ============================================================ */
+function structSave(s){
+  const o={t:s.t,pl:s.pl,x:+s.x.toFixed(2),y:+s.y.toFixed(2),z:+s.z.toFixed(2),r:s.r,hp:s.hp|0};
+  if(s.owner!==undefined&&s.owner!==null) o.owner=s.owner;
+  if(s.ry!==undefined) o.ry=+s.ry.toFixed(3);
+  return o;
+}
 function buildSaveObj(){
-  return {v:1, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},
-    structures:S.structures.map(s=>({t:s.t,pl:s.pl,x:+s.x.toFixed(2),y:+s.y.toFixed(2),z:+s.z.toFixed(2),r:s.r,hp:s.hp|0})),
+  return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},
+    structures:S.structures.map(structSave),
     mode:S.mode==='surface'?'surface':'space', planet:S.planet,
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
-    pvc:!!S.pendingVerdantCutscene, sound:SND.on};
+    pvc:!!S.pendingVerdantCutscene, sound:SND.on,
+    weapons:{blade:!!S.weapons.blade,pistol:!!S.weapons.pistol,rifle:!!S.weapons.rifle},
+    ammo:{light:S.ammo.light|0,heavy:S.ammo.heavy|0}, medkits:S.medkits|0, headbob:S.headbob!==false};
 }
 function saveGame(){
   if(!S.running) return;
@@ -490,17 +635,21 @@ function saveGame(){
 function saveMP(){
   try{
     localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
-      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown}));
+      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
+      weapons:{blade:!!S.weapons.blade,pistol:!!S.weapons.pistol,rifle:!!S.weapons.rifle},
+      ammo:{light:S.ammo.light|0,heavy:S.ammo.heavy|0}, medkits:S.medkits|0, headbob:S.headbob!==false}));
     if(NET.isHost){
       localStorage.setItem(MP_WORLD_KEY,JSON.stringify({v:1,worldId:NET.worldId,savedAt:Date.now(),beacon:!!S.beacon,
-        structures:S.structures.map(s=>({t:s.t,pl:s.pl,x:+s.x.toFixed(2),y:+s.y.toFixed(2),z:+s.z.toFixed(2),r:s.r,hp:s.hp|0}))}));
+        structures:S.structures.map(structSave)}));
     }
   }catch(e){}
 }
 function parseSave(json){
   try{
     const d=JSON.parse(json);
-    if(!d||d.v!==1||typeof d.tier!=='number') return null;
+    /* migration: accept v1 (pre-combat) and v2; default missing fields */
+    if(!d||typeof d.v!=='number'||d.v<1||d.v>SAVE_VER||typeof d.tier!=='number') return null;
+    const w=d.weapons||{}, am=d.ammo||{};
     const out={
       tier:clamp(d.tier|0,1,4),
       res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0)},
@@ -512,14 +661,20 @@ function parseSave(json){
       syaw:Number(d.syaw)||0, spitch:clamp(Number(d.spitch)||0,-1.2,1.2),
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown, pvc:!!d.pvc,
-      sound:d.sound!==false};
+      sound:d.sound!==false,
+      weapons:{blade:!!w.blade,pistol:!!w.pistol,rifle:!!w.rifle},
+      ammo:{light:Math.max(0,am.light|0),heavy:Math.max(0,am.heavy|0)},
+      medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
         if(out.structures.length>=MAX_STRUCT) break;
         if(!s||!CAT[s.t]||!PLANETS[s.pl]) continue;
         const x=Number(s.x),y=Number(s.y),z=Number(s.z);
         if(!isFinite(x)||!isFinite(y)||!isFinite(z)) continue;
-        out.structures.push({t:s.t,pl:s.pl,x,y,z,r:((s.r|0)%4+4)%4,hp:clamp(Number(s.hp)||CAT[s.t].hp,1,CAT[s.t].hp)});
+        const st={t:s.t,pl:s.pl,x,y,z,r:((s.r|0)%4+4)%4,hp:clamp(Number(s.hp)||CAT[s.t].hp,1,CAT[s.t].hp)};
+        if(s.owner!==undefined&&s.owner!==null) st.owner=s.owner;
+        if(s.ry!==undefined&&isFinite(Number(s.ry))) st.ry=Number(s.ry);
+        out.structures.push(st);
       }
     }
     if(out.ppos.some(v=>!isFinite(v))) out.ppos=[0,0,0];
@@ -538,6 +693,7 @@ function applySave(d){
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
   S.pendingVerdantCutscene=d.pvc; SND.on=d.sound;
+  S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
 }
 function exportSave(){
   const code=btoa(unescape(encodeURIComponent(JSON.stringify(buildSaveObj()))));
@@ -830,7 +986,7 @@ function removeRemote(pid){
 function clearRemotes(){ for(const pid of [...remotes.keys()]) removeRemote(pid); }
 function remotePU(m){
   const r=remotes.get(m.pid); if(!r) return;
-  r.mode=m.mode; r.pl=m.pl;
+  r.mode=m.mode; r.pl=m.pl; r.wp=m.wp|0; r.iv=!!m.iv; r.dr=m.dr|0; if(m.sw) r.swingT=0.26;
   r.snaps.push({t:performance.now(),x:m.pos[0],y:m.pos[1],z:m.pos[2],yaw:m.yaw,pitch:m.pitch});
   if(r.snaps.length>12) r.snaps.shift();
 }
@@ -866,7 +1022,8 @@ function updateRemotes(){
 function sendPU(){
   if(S.mode==='surface'){
     NET.send({t:'pu',pos:[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)],
-      yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet});
+      yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet,
+      wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0});
   } else {
     NET.send({t:'pu',pos:[+ship.position.x.toFixed(1),+ship.position.y.toFixed(1),+ship.position.z.toFixed(1)],
       yaw:+S.syaw.toFixed(3),pitch:+S.spitch.toFixed(3),mode:'space',pl:S.planet});
@@ -1089,6 +1246,13 @@ function rebuildAux(){
       shieldDomes.push({x:st.x,y:st.y,z:st.z,r:def.shieldR,mesh:dome,st});
     }
   }
+  /* beacon safe-zone ground ring (no PvP inside) */
+  const b=beaconOnPlanet(S.planet);
+  if(b){
+    const ring=new THREE.Mesh(new THREE.RingGeometry(SAFE_R-0.5,SAFE_R,56),
+      new THREE.MeshBasicMaterial({color:0x6fffb0,transparent:true,opacity:0.2,side:THREE.DoubleSide,depthWrite:false}));
+    ring.rotation.x=-Math.PI/2; ring.position.set(b.x,terrainH(b.x,b.z,curP())+0.12,b.z); auxGroup.add(ring);
+  }
 }
 function structCount(){ return S.structures.length; }
 function crateCount(){ return S.structures.filter(s=>s.t==='crate'&&s.hp>0).length; }
@@ -1105,6 +1269,7 @@ const COLLIDERS={
   crate:  {boxes:[{cx:0,hx:0.8,hz:0.8}],h:1.2,step:0.55},
   ramp:   {ramp:true},
   shieldgen:{r:1.55,h:1.7},
+  armory: {boxes:[{cx:0,hx:1.35,hz:0.72}],h:1.5,step:0.6},
   beacon: {r:1.4,h:5},
   lightpole:{r:0.22,h:3},
   relay:  {r:0.35,h:2.4},
@@ -1228,7 +1393,7 @@ function groundYAt(x,z,curY){
 /* ============================================================
    PLAYER (surface) + first-person tool
    ============================================================ */
-const player={x:0,y:0,z:0,vy:0,yaw:0,pitch:0,grounded:true,h:1.7};
+const player={x:0,y:0,z:0,vy:0,yaw:0,pitch:0,grounded:true,h:1.7,hp:HP_MAX,invuln:0};
 const tool=new THREE.Group();
 {
   const grip=new THREE.Mesh(GEO.box,MAT.dark); grip.scale.set(0.07,0.2,0.1); grip.position.set(0,-0.07,0.05); tool.add(grip);
@@ -1497,6 +1662,282 @@ function updateRepair(dt,interactHeld,target){
 }
 
 /* ============================================================
+   COMBAT — weapons, firing, damage, death/loot, safe zone
+   ============================================================ */
+SND.swing=function(){ this.tone(430,0.12,'sawtooth',0.06,170); };
+SND.shoot=function(){ this.tone(720,0.07,'square',0.05,300); };
+SND.shootHvy=function(){ this.tone(540,0.07,'square',0.05,240); };
+SND.hurt=function(){ this.tone(200,0.16,'square',0.08,90); };
+SND.heal=function(){ [440,660,880].forEach((f,i)=>setTimeout(()=>this.tone(f,0.12,'sine',0.07),i*70)); };
+SND.craft=function(){ [330,494,660].forEach((f,i)=>setTimeout(()=>this.tone(f,0.13,'triangle',0.08),i*80)); };
+
+let driving=null;          // rover entity when seated (Phase 4)
+let weaponCd=0, swingT=0, fireHeld=false;
+const weaponVM={};
+function buildWeaponVMs(){
+  const blade=new THREE.Group();
+  const hilt=new THREE.Mesh(GEO.box,MAT.dark); hilt.scale.set(0.05,0.16,0.05); hilt.position.set(0,-0.05,0); blade.add(hilt);
+  const guard=new THREE.Mesh(GEO.box,MAT.metal); guard.scale.set(0.16,0.03,0.05); guard.position.set(0,0.03,0); blade.add(guard);
+  const edge=new THREE.Mesh(GEO.box,MAT.emisC); edge.scale.set(0.028,0.72,0.012); edge.position.set(0,0.44,0); blade.add(edge);
+  blade.position.set(0.32,-0.32,-0.5); blade.rotation.set(-0.5,0.12,0); weaponVM.blade=blade;
+  const pistol=new THREE.Group();
+  const pgr=new THREE.Mesh(GEO.box,MAT.dark); pgr.scale.set(0.06,0.16,0.07); pgr.position.set(0,-0.08,0.03); pistol.add(pgr);
+  const pbd=new THREE.Mesh(GEO.box,MAT.metal); pbd.scale.set(0.07,0.09,0.26); pbd.position.set(0,0.02,-0.08); pistol.add(pbd);
+  const pmz=new THREE.Mesh(GEO.sphere,emisMat(0xffd060,0xcc8000,1.9)); pmz.scale.set(0.035,0.035,0.035); pmz.position.set(0,0.02,-0.22); pmz.name='muz'; pistol.add(pmz);
+  pistol.position.set(0.3,-0.27,-0.45); weaponVM.pistol=pistol;
+  const rifle=new THREE.Group();
+  const rbd=new THREE.Mesh(GEO.box,MAT.dark); rbd.scale.set(0.07,0.1,0.5); rbd.position.set(0,-0.02,-0.12); rifle.add(rbd);
+  const rbar=new THREE.Mesh(GEO.cyl,MAT.metal); rbar.scale.set(0.03,0.34,0.03); rbar.rotation.x=Math.PI/2; rbar.position.set(0,0,-0.36); rifle.add(rbar);
+  const rsc=new THREE.Mesh(GEO.box,MAT.metal); rsc.scale.set(0.04,0.06,0.12); rsc.position.set(0,0.08,-0.05); rifle.add(rsc);
+  const rmz=new THREE.Mesh(GEO.sphere,emisMat(0x7fff9a,0x10cc44,1.9)); rmz.scale.set(0.04,0.04,0.04); rmz.position.set(0,0,-0.52); rmz.name='muz'; rifle.add(rmz);
+  rifle.position.set(0.28,-0.25,-0.4); weaponVM.rifle=rifle;
+  for(const g of [blade,pistol,rifle]){ g.visible=false; camera.add(g); }
+}
+buildWeaponVMs();
+function curWeapon(){ return WEAPONS[SLOT_KEYS[S.slot]]; }
+function ownsSlot(i){ const k=SLOT_KEYS[i]; return i===0 || !!S.weapons[k]; }
+function updateViewmodel(){
+  const surf2=S.mode==='surface'&&!driving;
+  tool.visible=(S.slot===0&&surf2);
+  weaponVM.blade.visible=(S.slot===1&&surf2);
+  weaponVM.pistol.visible=(S.slot===2&&surf2);
+  weaponVM.rifle.visible=(S.slot===3&&surf2);
+}
+function setSlot(i){
+  if(i<0||i>3) return;
+  if(!ownsSlot(i)){ showToast(WEAPONS[SLOT_KEYS[i]].name+' — craft it at an Armory'); SND.denied(); return; }
+  S.slot=i; updateViewmodel(); renderHotbar(); SND.blip();
+}
+/* safe zone */
+function beaconOnPlanet(pl){ pl=pl||S.planet; for(const st of S.structures){ if(st.t==='beacon'&&st.pl===pl) return st; } return null; }
+function inSafeZone(x,z){ const b=beaconOnPlanet(S.planet); if(!b) return false; const dx=x-b.x,dz=z-b.z; return dx*dx+dz*dz<SAFE_R*SAFE_R; }
+
+/* transient visual fx (tracers, muzzle flashes) */
+const transientFx=[];
+function pushFx(o,life,o0){ o.userData._fx={life,max:life,o0:o0||1}; surfScene.add(o); transientFx.push(o); }
+function updateFx(dt){
+  for(let i=transientFx.length-1;i>=0;i--){
+    const o=transientFx[i], f=o.userData._fx; f.life-=dt;
+    const k=clamp(f.life/f.max,0,1);
+    if(o.material&&o.material.opacity!==undefined) o.material.opacity=k*f.o0;
+    if(f.life<=0){ surfScene.remove(o); if(o.material&&o.material.dispose) o.material.dispose(); transientFx.splice(i,1); }
+  }
+}
+const _cw=new THREE.Vector3(), _cf=new THREE.Vector3();
+function camWorld(){ camera.getWorldPosition(_cw); camera.getWorldDirection(_cf); }
+function tracerFx(a,b,col){
+  const len=Math.hypot(b[0]-a[0],b[1]-a[1],b[2]-a[2])||0.01;
+  const m=new THREE.Mesh(GEO.box,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+  m.position.set((a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2);
+  m.scale.set(0.05,0.05,len); m.lookAt(b[0],b[1],b[2]);
+  pushFx(m,0.08,0.9);
+}
+function muzzleFlash(col){
+  camWorld();
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW_TEX,color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+  sp.scale.set(0.7,0.7,1);
+  sp.position.set(_cw.x+_cf.x*0.55,_cw.y+_cf.y*0.55-0.08,_cw.z+_cf.z*0.55);
+  pushFx(sp,0.06,0.85);
+}
+function aimPoint(dist){ camWorld(); return [_cw.x+_cf.x*dist,_cw.y+_cf.y*dist,_cw.z+_cf.z*dist]; }
+function avatarHitCenter(r){ return [r.avatar.position.x,r.avatar.position.y+1,r.avatar.position.z]; }
+function fireWeapon(){
+  if(weaponCd>0||driving||S.mode!=='surface') return;
+  const w=curWeapon();
+  if(w.melee){
+    weaponCd=w.cd; swingT=0.26; SND.swing();
+    doAttack(w,1,'melee');
+  } else {
+    if(S.ammo[w.ammo]<=0){ SND.denied(); showToast('Out of '+AMMO_NAMES[w.ammo]); weaponCd=0.3; renderHotbar(); return; }
+    S.ammo[w.ammo]--; weaponCd=w.cd;
+    (w.ammo==='heavy'?SND.shootHvy:SND.shoot).call(SND);
+    muzzleFlash(w.col);
+    doAttack(w,S.slot,'ranged');
+    renderHotbar();
+  }
+}
+function doAttack(w,wp,kind){
+  camWorld();
+  let hitPid=null, hitDist=w.range;
+  const safe=inSafeZone(player.x,player.z);
+  if(NET.active&&!safe){
+    for(const [pid,r] of remotes){
+      if(!r.avatar.visible) continue;
+      const c=avatarHitCenter(r), mx=c[0]-_cw.x,my=c[1]-_cw.y,mz=c[2]-_cw.z;
+      const tca=mx*_cf.x+my*_cf.y+mz*_cf.z;
+      if(tca<0||tca>hitDist) continue;
+      if(kind==='melee'){
+        const d=Math.hypot(mx,my,mz)||1;
+        if((mx/d)*_cf.x+(my/d)*_cf.y+(mz/d)*_cf.z<1-w.arc) continue;
+        if(d>w.range) continue;
+        hitDist=d; hitPid=pid;
+      } else {
+        const perp2=mx*mx+my*my+mz*mz-tca*tca;
+        if(perp2>0.85*0.85) continue;
+        hitDist=tca; hitPid=pid;
+      }
+    }
+  }
+  const end = hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
+            : (kind==='ranged' ? aimPoint(w.range) : aimPoint(w.range*0.7));
+  if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col);
+  else spawnBurst(end[0],end[1],end[2],0x9feaff,5,2,2,0.3,1);
+  if(hitPid!==null) spawnBurst(end[0],end[1],end[2],0xffd0a0,9,2,2,0.4,3);
+  if(NET.active){
+    NET.send({t:'fire',wp,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+end[0].toFixed(2),+end[1].toFixed(2),+end[2].toFixed(2)],
+      target:hitPid!==null?hitPid:undefined,dmg:hitPid!==null?w.dmg:undefined});
+  }
+}
+function onRemoteFire(m){
+  if(!m.p) {}
+  else if(m.wp>=2){ const o=m.o; if(o) tracerFx(o,m.p,m.wp===2?0xffd060:0x7fff9a); }
+  else spawnBurst(m.p[0],m.p[1],m.p[2],0x9feaff,5,2,2,0.3,1);
+  if(m.target===NET.pid&&m.dmg){ NET.lastHitBy=m.by; applyDamageToSelf(m.dmg); }
+}
+function openCraftMenu(){ renderCraftGrid(); openPanel('craftMenu'); }
+/* rover stubs — replaced in Phase 4 */
+function nearRover(){ return null; }
+function enterRover(){}
+function exitRover(){ driving=null; }
+function updateRover(){}
+function dmgFlashFx(){
+  const f=$('dmgFlash'); f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0.7)';
+  setTimeout(()=>{ f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0)'; },120);
+}
+function applyDamageToSelf(dmg){
+  if(!S.running||S.mode!=='surface') return;
+  if(player.invuln>0||inSafeZone(player.x,player.z)) return;
+  player.hp=Math.max(0,player.hp-dmg);
+  dmgFlashFx(); SND.hurt();
+  spawnBurst(player.x,player.y+1.2,player.z,0xff4040,8,2,2,0.4,3);
+  if(player.hp<=0) die();
+}
+let soloLootId=1;
+function die(){
+  const loot={fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0};
+  S.res={fe:0,cy:0,bio:0}; updateHUDRes();
+  spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
+  spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
+  SND.impact();
+  const pos=[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)];
+  if(NET.active) NET.send({t:'died',by:NET.lastHitBy||0,pos,loot});
+  else if(loot.fe||loot.cy||loot.bio) spawnLootBox('Lsolo'+(soloLootId++),S.planet,pos,loot);
+  respawnPlayer();
+}
+function respawnPlayer(){
+  if(driving) exitRover();
+  player.x=surf.shipPos.x-3; player.z=surf.shipPos.z+3;
+  player.y=groundYAt(player.x,player.z,1e9); player.vy=0;
+  player.hp=HP_MAX; S.o2=o2Max(); player.invuln=SPAWN_PROT;
+  $('protRing').classList.remove('hidden');
+  showToast('Recovered at base — '+SPAWN_PROT+'s spawn protection',3000);
+}
+/* loot containers */
+const lootBoxes=new Map();
+function makeLootMesh(){
+  const g=new THREE.Group();
+  const b=new THREE.Mesh(GEO.box,new THREE.MeshStandardMaterial({color:0x2a3440,emissive:0xffc040,emissiveIntensity:0.8,roughness:0.5}));
+  b.scale.set(0.9,0.7,0.9); b.position.y=0.4; b.name='box'; g.add(b);
+  const gl=makeGlow('#ffd070',2.6); gl.position.y=0.7; g.add(gl);
+  return g;
+}
+function spawnLootBox(id,pl,pos,loot){
+  if(lootBoxes.has(id)) return;
+  const g=makeLootMesh(); g.position.set(pos[0],pos[1],pos[2]); surfScene.add(g);
+  lootBoxes.set(id,{mesh:g,pl,pos,loot});
+}
+function removeLootBox(id){ const c=lootBoxes.get(id); if(c){ surfScene.remove(c.mesh); lootBoxes.delete(id); } }
+function clearLoot(){ for(const id of [...lootBoxes.keys()]) removeLootBox(id); }
+function addLoot(loot){
+  const cap=carryCap();
+  S.res.fe=Math.min(cap,S.res.fe+(loot.fe|0));
+  S.res.cy=Math.min(cap,S.res.cy+(loot.cy|0));
+  S.res.bio=Math.min(cap,S.res.bio+(loot.bio|0));
+  updateHUDRes(); SND.collect(); showToast('Recovered cache');
+}
+function updateLoot(dt){
+  for(const [id,c] of lootBoxes){
+    const vis=(c.pl===S.planet&&S.mode==='surface');
+    c.mesh.visible=vis; if(!vis) continue;
+    c.mesh.rotation.y+=dt*1.2;
+    const bx=c.mesh.getObjectByName('box'); if(bx) bx.position.y=0.4+Math.sin(performance.now()*0.004)*0.08;
+    const dx=player.x-c.pos[0], dz=player.z-c.pos[2];
+    if(dx*dx+dz*dz<6.25&&!driving){
+      if(NET.active){ NET.send({t:'lootClaim',id}); removeLootBox(id); }
+      else { addLoot(c.loot); removeLootBox(id); spawnBurst(c.pos[0],c.pos[1]+0.6,c.pos[2],0xffd070,10,2,2,0.5,2); }
+    }
+  }
+}
+
+/* ---------- Armory craft menu ---------- */
+function nearArmory(){
+  for(const st of placedByType.armory||[]){ if(st.hp<=0) continue; const dx=player.x-st.x,dz=player.z-st.z; if(dx*dx+dz*dz<16) return st; }
+  return null;
+}
+function renderCraftGrid(){
+  const grid=$('craftGrid'); grid.innerHTML='';
+  const sec=t=>{ const d=document.createElement('div'); d.className='cSection'; d.textContent=t; grid.appendChild(d); };
+  const item=key=>{
+    const c=CRAFT[key];
+    const cost = key==='medpack'?medCost():c.cost;
+    const locked = c.tier>S.tier;
+    const owned = c.kind==='weapon'&&S.weapons[key];
+    const d=document.createElement('div');
+    d.className='cItem'+(locked?' locked':'')+(owned?' owned':'');
+    d.innerHTML='<div class="cn">'+c.ic+' '+c.name+'</div>'+(c.desc?'<div class="cd">'+c.desc+'</div>':'')+
+      '<div class="cc">'+Object.keys(cost).map(k=>'<span style="color:'+RES_DOTS[k]+'">'+cost[k]+' '+RES_NAMES[k]+'</span>').join(' · ')+'</div>'+
+      (locked?'<div class="ct" style="color:#ff9a8a">Requires Tier '+c.tier+'</div>':owned?'<div class="ct">✓ Crafted</div>':'');
+    if(!locked&&!owned) d.addEventListener('click',()=>craft(key));
+    grid.appendChild(d);
+  };
+  sec('Weapons'); ['blade','pistol','rifle'].forEach(item);
+  sec('Ammo'); ['light','heavy'].forEach(item);
+  sec('Medical'); item('medpack');
+}
+function craft(key){
+  const c=CRAFT[key];
+  if(c.tier>S.tier){ SND.denied(); return; }
+  if(c.kind==='weapon'&&S.weapons[key]){ showToast('Already crafted'); return; }
+  const cost=key==='medpack'?medCost():c.cost;
+  if(!canAfford(cost)){ SND.denied(); showToast('Need '+costStr(cost)); return; }
+  payCost(cost);
+  if(c.kind==='weapon'){ S.weapons[key]=true; showToast(c.name+' crafted — equip from hotbar'); }
+  else if(c.kind==='ammo'){ S.ammo[c.ammo]+=c.give; showToast('+'+c.give+' '+AMMO_NAMES[c.ammo]); }
+  else if(c.kind==='med'){ S.medkits++; showToast('Med-Pack crafted ('+S.medkits+')'); }
+  SND.craft();
+  renderCraftGrid(); renderHotbar(); saveGame();
+}
+function useMed(){
+  if(S.medkits<=0){ showToast('No Med-Packs — craft at an Armory'); SND.denied(); return; }
+  if(player.hp>=HP_MAX){ showToast('Health already full'); return; }
+  S.medkits--; player.hp=Math.min(HP_MAX,player.hp+50);
+  SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
+  showToast('+50 HP'); renderHotbar(); saveGame();
+}
+/* ---------- hotbar HUD ---------- */
+function renderHotbar(){
+  const hb=$('hotbar'); hb.innerHTML='';
+  for(let i=0;i<4;i++){
+    const k=SLOT_KEYS[i], w=WEAPONS[k];
+    const d=document.createElement('div');
+    d.className='slot'+(i===S.slot?' sel':'')+(ownsSlot(i)?'':' locked');
+    const ic=['⛏','╱','┍','╤'][i];        // pick · blade · pistol · rifle (font-safe glyphs)
+    let amm='';
+    if(w.ammo) amm='<span class="sa">'+(S.ammo[w.ammo]|0)+'</span>';
+    d.innerHTML='<span class="sk">'+(i+1)+'</span><span class="si">'+ic+'</span>'+amm;
+    if(w.ammo&&S.ammo[w.ammo]<=0&&ownsSlot(i)) d.classList.add('noammo');
+    d.addEventListener('click',()=>setSlot(i));
+    d.addEventListener('touchstart',e=>{e.preventDefault();setSlot(i);},{passive:false});
+    hb.appendChild(d);
+  }
+  const med=document.createElement('div'); med.id='medSlot';
+  med.innerHTML='+<span class="sa">'+(S.medkits|0)+'</span>';
+  med.addEventListener('click',useMed);
+  med.addEventListener('touchstart',e=>{e.preventDefault();useMed();},{passive:false});
+  hb.appendChild(med);
+}
+
+/* ============================================================
    METEOR SHOWERS
    ============================================================ */
 const meteors=[]; // {mesh,glow,vx,vy,vz,tx,ty,tz}
@@ -1693,7 +2134,7 @@ function renderBuildGrid(){
     grid.appendChild(d);
   };
   addSection('Structures');
-  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','window','door','dome','beacon']) addItem(k);
+  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','window','door','dome','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
 }
@@ -1766,7 +2207,15 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyT'){ if(anyPanelOpen()){closeAllPanels();} else { renderTierList(); openPanel('tierMenu'); } }
   if(e.code==='KeyR'&&buildSel) ghostRot=(ghostRot+1)%4;
   if(e.code==='KeyX'){ if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
-  if(e.code==='Escape'){ closeAllPanels(); }
+  if(e.code==='Escape'){ if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
+  if(S.mode==='surface'&&!driving){
+    if(e.code==='Digit1') setSlot(0);
+    else if(e.code==='Digit2') setSlot(1);
+    else if(e.code==='Digit3') setSlot(2);
+    else if(e.code==='Digit4') setSlot(3);
+    else if(e.code==='KeyH') useMed();
+  }
+  if(e.code==='Enter'&&NET.active&&!anyPanelOpen()) openChat();
 });
 document.addEventListener('keyup',e=>{ keys[e.code]=false; });
 window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; });
@@ -1782,8 +2231,10 @@ document.addEventListener('mousedown',e=>{
     return;
   }
   if(e.button===0&&buildSel&&S.mode==='surface') placeStructure();
+  else if(e.button===0&&!buildSel&&S.mode==='surface'&&S.slot>0&&!driving) fireHeld=true;
   else if(e.button===2){ if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
 });
+document.addEventListener('mouseup',e=>{ if(e.button===0) fireHeld=false; });
 document.addEventListener('mousemove',e=>{
   if(!document.pointerLockElement||!S.running||anyPanelOpen()||cs.active) return;
   const sens=0.0024;
@@ -1851,8 +2302,17 @@ function bindHold(id,code){
   el.addEventListener('touchend',e=>{ e.preventDefault(); keys[code]=false; },{passive:false});
   el.addEventListener('touchcancel',()=>{ keys[code]=false; });
 }
-bindHold('mJump','Space'); bindHold('mAct','KeyE');
+bindHold('mJump','Space');
 bindHold('mThrust','KeyW'); bindHold('mBrake','KeyS');
+/* mAct = fire when a weapon is equipped (mFire), else interact/mine */
+let mFire=false;
+(function(){
+  const el=$('mAct');
+  el.addEventListener('touchstart',e=>{ e.preventDefault(); if(mFire&&S.mode==='surface'&&!driving){ fireHeld=true; } else { keys.KeyE=true; justE=true; } },{passive:false});
+  el.addEventListener('touchend',e=>{ e.preventDefault(); keys.KeyE=false; fireHeld=false; },{passive:false});
+  el.addEventListener('touchcancel',()=>{ keys.KeyE=false; fireHeld=false; });
+})();
+$('mMed').addEventListener('touchstart',e=>{ e.preventDefault(); useMed(); },{passive:false});
 $('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) placeStructure(); },{passive:false});
 $('mRemove').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); },{passive:false});
 $('mBuild').addEventListener('touchstart',e=>{ e.preventDefault();
@@ -1866,6 +2326,10 @@ function refreshMobileUI(){
   $('mJump').classList.toggle('hidden',sp);
   $('mRemove').classList.toggle('hidden',sp);
   $('mBuild').classList.toggle('hidden',sp);
+  $('mMed').classList.toggle('hidden',sp);
+  $('mMap').classList.toggle('hidden',sp);
+  $('mChat').classList.toggle('hidden',sp||!NET.active);
+  $('hotbar').classList.toggle('hidden',sp);
   if(sp) $('mPlace').classList.add('hidden');
 }
 
@@ -1879,6 +2343,7 @@ function openSettings(){
   $('btnImportTog').classList.toggle('hidden',S.running&&NET.active);
   $('btnQuit').classList.toggle('hidden',!S.running);
   $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF');
+  $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
   $('importWrap').classList.add('hidden');
   openPanel('settings');
 }
@@ -1889,7 +2354,10 @@ $('btnImportGo').addEventListener('click',()=>{
   if(d){ showToast('Save imported — reloading...'); setTimeout(()=>location.reload(),800); }
 });
 $('btnSound').addEventListener('click',()=>{ SND.on=!SND.on; $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip(); });
+$('btnBob').addEventListener('click',()=>{ S.headbob=!S.headbob; $('btnBob').textContent='Head Bob: '+(S.headbob?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
+$('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
+$('mMap').addEventListener('touchstart',e=>{ e.preventDefault(); toggleMap(); },{passive:false});
 
 /* ============================================================
    MODE TRANSITIONS
@@ -1915,7 +2383,7 @@ function enterSurface(planetKey,fromSave){
   ship.rotation.set(0,2.4,0);
   ship.getObjectByName('engGlow').visible=false;
   ship.getObjectByName('legs').visible=true;
-  tool.visible=true;
+  updateViewmodel();
   clearMeteors();
   if(fromSave&&S.ppos&&Math.hypot(S.ppos[0],S.ppos[2])<WORLD_R){
     player.x=S.ppos[0]; player.z=S.ppos[2];
@@ -1936,7 +2404,7 @@ function enterSpace(fromPlanetKey,fromSave){
   spaceScene.add(ship);
   ship.getObjectByName('engGlow').visible=true;
   ship.getObjectByName('legs').visible=false;
-  tool.visible=false;
+  updateViewmodel();
   cancelBuild();
   clearMeteors();
   if(fromSave){
@@ -2101,6 +2569,10 @@ let o2BeepT=0, footT=0;
 function updateSurface(dt){
   if(anyPanelOpen()||transitioning){ justE=false; renderSurfaceCam(); return; }
   const p=curP();
+  /* --- combat timers --- */
+  weaponCd=Math.max(0,weaponCd-dt); swingT=Math.max(0,swingT-dt);
+  if(player.invuln>0){ player.invuln=Math.max(0,player.invuln-dt); if(player.invuln<=0) $('protRing').classList.add('hidden'); }
+  if(driving){ updateRover(dt); return; }
   /* --- movement --- */
   let ix=0,iz=0;
   if(keys.KeyW||keys.ArrowUp) iz-=1;
@@ -2121,6 +2593,8 @@ function updateSurface(dt){
   /* structure collision + doors */
   updateDoors(dt);
   collidePlayer();
+  /* weapon fire */
+  if(S.slot>0&&fireHeld&&!buildSel) fireWeapon();
   /* gravity / jump / jetpack */
   const gy=groundYAt(player.x,player.z,player.y);
   player.grounded=player.y<=gy+0.02;
@@ -2149,12 +2623,18 @@ function updateSurface(dt){
   if(o2f<0.25&&!safe){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
   if(S.o2<=0){ doBlackout(); justE=false; return; }
   if(S.tier>=3) $('fuelbar').style.width=S.fuel+'%';
+  /* --- health --- */
+  const hpf=player.hp/HP_MAX;
+  $('hpbar').style.width=(hpf*100)+'%';
+  $('hpbar').classList.toggle('low',hpf<0.25);
   /* --- interactions --- */
   const dxs=player.x-surf.shipPos.x, dzs=player.z-surf.shipPos.z;
   const nearShip=dxs*dxs+dzs*dzs<60;
   const aimed=buildSel?null:aimedStructure();
   const damaged=aimed&&aimed.hp<CAT[aimed.t].hp?aimed:null;
-  let prompted=false;
+  const arm=(!buildSel&&!nearShip&&!damaged)?nearArmory():null;
+  const roverHere=(!buildSel&&!nearShip&&!damaged&&!arm)?nearRover():null;
+  let prompted=false; mFire=false;
   if(buildSel){
     updateGhost();
     setPrompt(ghostOK?'<span class="key">CLICK</span>PLACE '+CAT[buildSel].name+' · <span class="key">R</span>ROTATE · <span class="key">X</span>CANCEL'
@@ -2172,14 +2652,27 @@ function updateSurface(dt){
     $('prog').classList.toggle('hidden',!busy);
     $('progFill').style.width=(repairHold/0.8*100)+'%';
     updateMining(0,false);
+  } else if(arm){
+    setPrompt('<span class="key">E</span>OPEN ARMORY'); setMAct('USE'); prompted=true;
+    if(justE){ openCraftMenu(); justE=false; return; }
+    updateMining(0,false);
+  } else if(roverHere){
+    setPrompt('<span class="key">E</span>DRIVE ROVER'); setMAct('DRIVE'); prompted=true;
+    if(justE){ enterRover(roverHere); justE=false; return; }
+    updateMining(0,false);
   } else {
     updateRepair(0,false,null);
-    updateMining(dt,!!keys.KeyE);
-    if(mineTarget>=0){
-      setPrompt('<span class="key">E</span>HOLD TO MINE '+RES_NAMES[p.res].toUpperCase());
-      setMAct('MINE'); prompted=true;
-      $('prog').classList.toggle('hidden',!(mineProgress>0));
-      $('progFill').style.width=(mineProgress/1.4*100)+'%';
+    if(S.slot>0){
+      mFire=true; setMAct(curWeapon().melee?'SWING':'FIRE'); prompted=true;
+      setPrompt(inSafeZone(player.x,player.z)?'<span style="color:#8fefb0">SAFE ZONE — weapons disabled near Beacon</span>':'');
+    } else {
+      updateMining(dt,!!keys.KeyE);
+      if(mineTarget>=0){
+        setPrompt('<span class="key">E</span>HOLD TO MINE '+RES_NAMES[p.res].toUpperCase());
+        setMAct('MINE'); prompted=true;
+        $('prog').classList.toggle('hidden',!(mineProgress>0));
+        $('progFill').style.width=(mineProgress/1.4*100)+'%';
+      }
     }
   }
   if(!prompted){
@@ -2188,19 +2681,25 @@ function updateSurface(dt){
     $('prog').classList.add('hidden');
   }
   if(!buildSel&&!(mineProgress>0)&&!repairHold) $('prog').classList.add('hidden');
-  /* tool anim */
-  const mining2=keys.KeyE&&(mineTarget>=0||damaged);
+  /* tool / weapon anim */
+  const mining2=S.slot===0&&keys.KeyE&&(mineTarget>=0||damaged);
   tool.rotation.x=mining2?Math.sin(performance.now()*0.04)*0.12:lerp(tool.rotation.x,0,0.2);
   tool.position.y=-0.3+Math.sin(footT)*0.012;
+  if(weaponVM.blade.visible) weaponVM.blade.rotation.x=-0.5-(swingT>0?Math.sin((1-swingT/0.26)*Math.PI)*1.3:0);
+  const kick=weaponCd>0&&S.slot>=2?Math.min(0.12,weaponCd):0;
+  if(weaponVM.pistol.visible) weaponVM.pistol.position.z=-0.45+kick;
+  if(weaponVM.rifle.visible) weaponVM.rifle.position.z=-0.4+kick;
   justE=false;
   /* timers */
   updateNodes(dt);
   updateMeteors(dt);
+  updateLoot(dt);
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
 }
 function renderSurfaceCam(){
-  camera.position.set(player.x,player.y+player.h+Math.sin(footT*2)*0.045,player.z);
+  const bob=S.headbob!==false?Math.sin(footT*2)*0.045:0;
+  camera.position.set(player.x,player.y+player.h+bob,player.z);
   camera.rotation.set(player.pitch,player.yaw,0);
 }
 
@@ -2215,6 +2714,9 @@ function resetState(){
   S.spos=[PLANETS.rust.pos[0]+50,PLANETS.rust.pos[1]+18,PLANETS.rust.pos[2]+55];
   S.syaw=Math.atan2(50,55); S.spitch=-0.12; S.sspeed=4;
   S.pendingVerdantCutscene=false;
+  S.weapons={blade:false,pistol:false,rifle:false};
+  S.ammo={light:0,heavy:0}; S.medkits=0; S.slot=0;
+  player.hp=HP_MAX; player.invuln=0;
 }
 function showGameUI(){
   $('start').classList.add('hidden');
@@ -2225,7 +2727,9 @@ function showGameUI(){
 function startGame(fromSave){
   S.running=true;
   showGameUI();
-  updateHUDRes(); updateTierBadge(); updateCapNote();
+  player.hp=HP_MAX; player.invuln=0; S.slot=0; driving=null;
+  $('protRing').classList.add('hidden');
+  updateHUDRes(); updateTierBadge(); updateCapNote(); renderHotbar(); updateViewmodel();
   $('fuelwrap').classList.toggle('hidden',S.tier<3);
   if(S.tier>=3&&verdantShield.parent&&!S.pendingVerdantCutscene) spaceScene.remove(verdantShield);
   if(fromSave&&S.mode==='surface') enterSurface(S.planet,true);
@@ -2283,7 +2787,12 @@ $('btnReconnect').addEventListener('click',()=>{
 $('btnNetQuit').addEventListener('click',()=>{ NET.quitting=true; location.reload(); });
 
 function installWorld(world){
-  S.structures=world.structures.map(s=>({id:s.id,t:s.t,pl:s.pl,x:s.x,y:s.y,z:s.z,r:s.r,hp:s.hp}));
+  S.structures=world.structures.map(s=>{
+    const st={id:s.id,t:s.t,pl:s.pl,x:s.x,y:s.y,z:s.z,r:s.r,hp:s.hp};
+    if(s.owner!==undefined) st.owner=s.owner;
+    if(s.ry!==undefined) st.ry=s.ry;
+    return st;
+  });
   S.beacon=!!world.beacon;
   NET.deadNodes={};
   for(const pl in (world.deadNodes||{})) NET.deadNodes[pl]=new Set(world.deadNodes[pl]);
@@ -2291,6 +2800,9 @@ function installWorld(world){
   for(const pl in (world.meteor||{})){
     NET.meteor[pl]={phase:world.meteor[pl].phase,endAt:performance.now()+world.meteor[pl].secs*1000};
   }
+  clearLoot();
+  for(const c of (world.loot||[])) spawnLootBox(c.id,c.pl,c.pos,c.loot);
+  NET.seats=new Map(world.seats||[]);
 }
 function startMultiplayer(w){
   NET.active=true;
@@ -2305,6 +2817,10 @@ function startMultiplayer(w){
       S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0)};
       S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
       if(p.victoryShown) S.victoryShown=true;
+      const w=p.weapons||{}, am=p.ammo||{};
+      S.weapons={blade:!!w.blade,pistol:!!w.pistol,rifle:!!w.rifle};
+      S.ammo={light:Math.max(0,am.light|0),heavy:Math.max(0,am.heavy|0)};
+      S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
     }
   }catch(e){}
   clearRemotes();
@@ -2385,6 +2901,8 @@ function loop(now){
   }
   if(verdantShield.parent){ verdantShield.rotation.y+=dt*0.3; verdantShield.rotation.x+=dt*0.11; }
   updateParticles(dt);
+  updateFx(dt);
+  if(NET.active) updateChatFade();
   renderer.render(activeScene,camera);
 }
 requestAnimationFrame(loop);

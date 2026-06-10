@@ -1,6 +1,18 @@
 /* ============================================================
    STARFALL co-op server — rooms, world authority, relay
    Serves index.html over HTTP and the game protocol over WS.
+
+   PROTOCOL (JSON frames, server is authoritative for shared-world objects):
+   client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
+     place{st}, remove{id}, repair{id}, mine{pl,i},
+     fire{wp,o,p,target?,dmg?}, died{by,pos,loot}, lootClaim{id},
+     chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
+   server->client: welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats}},
+     err, pjoin, pleave, pu, placed, removed, hp, destroyed,
+     nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
+     fire, lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
+   Damage is client-authoritative (victim applies); loot containers,
+   turret ownership and rover seats are server-authoritative.
    ============================================================ */
 'use strict';
 const http = require('node:http');
@@ -20,10 +32,13 @@ const ROOM_GC_MS = 10 * 60 * 1000;
 /* mini structure catalog — hp + protection rules (mirrors CAT in index.html) */
 const SCAT = {
   floor: 100, wall: 100, ramp: 100, lightpole: 60, crate: 120, relay: 80,
-  shieldgen: 150, window: 80, door: 100, dome: 90, beacon: 500,
+  shieldgen: 150, armory: 120, window: 80, door: 100, dome: 90, beacon: 500,
+  turret: 110, rover: 160,
   flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
   table: 50, antenna: 40,
 };
+const OWNED = new Set(['turret']);   // structures that record their placer
+const DYNAMIC = new Set(['rover']);  // movable structures (skipped by meteor centroid jitter is fine)
 const NOKILL = new Set(['crate', 'beacon']);
 const SHIELD_R = 18;
 const METEOR_DMG = 35;
@@ -75,10 +90,12 @@ function makeRoom(world) {
     code,
     worldId: (world && typeof world.worldId === 'string' && world.worldId.length <= 24)
       ? world.worldId : 'w' + crypto.randomBytes(6).toString('hex'),
-    nextId: 1, nextPid: 1,
+    nextId: 1, nextPid: 1, nextLoot: 1,
     structures: [], beacon: false,
     players: new Map(),                 // pid -> {ws,name,slot,pos,yaw,pitch,mode,pl}
     nodeDead: new Map(),                // "pl:i" -> respawnAt(ms epoch)
+    loot: new Map(),                    // lootId -> {id,pl,pos,loot,expireAt}
+    seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     emptySince: 0,
   };
@@ -90,6 +107,8 @@ function makeRoom(world) {
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
       const hp = Math.min(Math.max(1, (+s.hp || SCAT[s.t])), SCAT[s.t]);
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp };
+      if (s.owner !== undefined && s.owner !== null) st.owner = s.owner;
+      if (isFinite(+s.ry)) st.ry = +s.ry;
       room.structures.push(st);
       if (s.t === 'beacon') room.beacon = true;
     }
@@ -130,6 +149,8 @@ function welcomeMsg(room, pid) {
       beacon: room.beacon,
       deadNodes: deadNodesByPlanet(room),
       meteor: meteorSnapshot(room),
+      loot: [...room.loot.values()].map(c => ({ id: c.id, pl: c.pl, pos: c.pos, loot: c.loot })),
+      seats: [...room.seats.entries()],
     },
   };
 }
@@ -154,6 +175,7 @@ wss.on('connection', ws => {
     const p = room.players.get(ws.pid);
     if (p && p.ws === ws) {
       room.players.delete(ws.pid);
+      for (const [rid, dpid] of room.seats) if (dpid === ws.pid) { room.seats.delete(rid); bcast(room, { t: 'roverSeat', id: rid, pid: 0 }); }
       bcast(room, { t: 'pleave', pid: ws.pid });
       if (room.players.size === 0) room.emptySince = Date.now();
     }
@@ -208,7 +230,8 @@ function handle(ws, m) {
       me.pos = m.pos.map(Number); me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
       me.mode = m.mode === 'surface' ? 'surface' : 'space';
       me.pl = PLANETS.includes(m.pl) ? m.pl : me.pl;
-      bcast(room, { t: 'pu', pid: ws.pid, pos: me.pos, yaw: me.yaw, pitch: me.pitch, mode: me.mode, pl: me.pl }, ws.pid);
+      bcast(room, { t: 'pu', pid: ws.pid, pos: me.pos, yaw: me.yaw, pitch: me.pitch, mode: me.mode, pl: me.pl,
+        wp: m.wp | 0, iv: m.iv ? 1 : 0, dr: m.dr | 0, sw: m.sw ? 1 : 0 }, ws.pid);
       return;
     }
     case 'place': {
@@ -218,7 +241,13 @@ function handle(ws, m) {
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       if (room.structures.length >= MAX_STRUCT) { sendTo(ws, { t: 'err', msg: 'Construction limit reached (' + MAX_STRUCT + ' pieces)' }); return; }
       if (s.t === 'beacon' && room.beacon) { sendTo(ws, { t: 'err', msg: 'The Beacon is already placed' }); return; }
+      if (s.t === 'turret') {
+        let mine = 0; for (const o of room.structures) if (o.t === 'turret' && o.owner === ws.pid) mine++;
+        if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
+      }
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: SCAT[s.t] };
+      if (OWNED.has(s.t)) st.owner = ws.pid;
+      if (DYNAMIC.has(s.t)) st.ry = isFinite(+s.ry) ? +s.ry : 0;
       room.structures.push(st);
       if (st.t === 'beacon') room.beacon = true;
       bcast(room, { t: 'placed', by: ws.pid, st });
@@ -247,6 +276,56 @@ function handle(ws, m) {
       if (room.nodeDead.has(key)) return;     // race loser
       room.nodeDead.set(key, Date.now() + RESPAWN_MS);
       bcast(room, { t: 'nodeDead', pl: m.pl, i, by: ws.pid });
+      return;
+    }
+    /* ---- combat (client-authoritative damage; server relays) ---- */
+    case 'fire': {
+      bcast(room, { t: 'fire', by: ws.pid, wp: m.wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
+      return;
+    }
+    case 'died': {
+      const loot = m.loot || {};
+      const drop = { fe: Math.max(0, loot.fe | 0), cy: Math.max(0, loot.cy | 0), bio: Math.max(0, loot.bio | 0) };
+      if (Array.isArray(m.pos) && (drop.fe || drop.cy || drop.bio)) {
+        const id = 'L' + (room.nextLoot++);
+        const cont = { id, pl: me.pl, pos: m.pos.map(Number), loot: drop, expireAt: Date.now() + 300000 };
+        room.loot.set(id, cont);
+        bcast(room, { t: 'lootSpawn', id, pl: cont.pl, pos: cont.pos, loot: drop });
+      }
+      const killer = room.players.get(m.by);
+      bcast(room, { t: 'sys', text: (killer ? killer.name : 'Someone') + ' eliminated ' + me.name });
+      return;
+    }
+    case 'lootClaim': {
+      const c = room.loot.get(m.id);
+      if (!c) return;
+      room.loot.delete(m.id);
+      sendTo(ws, { t: 'lootGot', id: m.id, loot: c.loot });
+      bcast(room, { t: 'lootGone', id: m.id });
+      return;
+    }
+    case 'chat': {
+      let text = String(m.text || '').replace(/[<>]/g, '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+      if (!text) return;
+      bcast(room, { t: 'chat', name: me.name, text });
+      return;
+    }
+    case 'roverSeat': {
+      const cur = room.seats.get(m.id);
+      if (cur && cur !== ws.pid) { sendTo(ws, { t: 'err', msg: 'Rover is occupied' }); return; }
+      room.seats.set(m.id, ws.pid);
+      bcast(room, { t: 'roverSeat', id: m.id, pid: ws.pid });
+      return;
+    }
+    case 'roverSeatClear': {
+      if (room.seats.get(m.id) === ws.pid) { room.seats.delete(m.id); bcast(room, { t: 'roverSeat', id: m.id, pid: 0 }); }
+      return;
+    }
+    case 'roverMove': {
+      if (room.seats.get(m.id) !== ws.pid) return;
+      const st = room.structures.find(s => s.id === m.id);
+      if (st) { st.x = +m.x; st.y = +m.y; st.z = +m.z; st.ry = +m.ry || 0; }
+      bcast(room, { t: 'roverMove', id: m.id, x: m.x, y: m.y, z: m.z, ry: m.ry }, ws.pid);
       return;
     }
   }
@@ -307,6 +386,10 @@ setInterval(() => {
         const [pl, i] = key.split(':');
         bcast(room, { t: 'nodeAlive', pl, i: +i });
       }
+    }
+    /* loot despawn (5 min) */
+    for (const [id, c] of room.loot) {
+      if (now >= c.expireAt) { room.loot.delete(id); bcast(room, { t: 'lootGone', id }); }
     }
     /* meteors: per planet, clock advances only while someone is on that surface */
     for (const pl of PLANETS) {
