@@ -36,6 +36,7 @@ const SCAT = {
   turret: 110, rover: 160,
   flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
   table: 50, antenna: 40,
+  bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
 };
 const OWNED = new Set(['turret']);   // structures that record their placer
 const DYNAMIC = new Set(['rover']);  // movable structures (skipped by meteor centroid jitter is fine)

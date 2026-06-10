@@ -80,7 +80,8 @@
 
   /* ---------- Panels ---------- */
   .panel { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(680px,94vw); max-height:84vh; overflow-y:auto;
-    background:rgba(6,18,30,0.94); border:1px solid #2e8fb8; box-shadow:0 0 40px rgba(20,120,180,0.35); z-index:65; padding:22px; pointer-events:auto; }
+    -webkit-overflow-scrolling:touch; background:rgba(6,18,30,0.94); border:1px solid #2e8fb8; box-shadow:0 0 40px rgba(20,120,180,0.35); z-index:65; padding:22px; pointer-events:auto; }
+  .panel h2 { position:sticky; top:-22px; background:rgba(6,18,30,0.97); padding:4px 0 8px; margin:-4px 0 14px; z-index:1; }
   .panel h2 { font-weight:300; letter-spacing:0.3em; color:#aee8ff; font-size:20px; margin-bottom:14px; text-transform:uppercase; }
   .closeX { position:absolute; top:12px; right:14px; background:none; border:1px solid #3fa9d4; color:#aee8ff; width:30px; height:30px;
     cursor:pointer; font-size:15px; }
@@ -457,6 +458,33 @@ const CAT={
   antenna:{name:'Antenna', ic:'⫯', tier:0, cost:{fe:5}, hp:40, decor:true,
     parts:[{g:'cyl',m:'dark',o:[0,1.6,0],s:[0.09,3.2,0.09]},{g:'box',m:'metal',o:[0,2.4,0],s:[1.4,0.06,0.06]},
            {g:'box',m:'metal',o:[0,2.9,0],s:[0.9,0.06,0.06]},{g:'sphere',m:'emisR',o:[0,3.3,0],s:[0.16,0.16,0.16]}], glow:{y:3.3,c:'#ff5a4a',s:1.6}},
+  /* ---- furniture / interior (Phase 6) ---- */
+  bed:    {name:'Bed', ic:'▤', tier:0, cost:{fe:8}, hp:50, decor:true,
+    parts:[{g:'box',m:'dark',o:[0,0.3,0],s:[1.4,0.4,2.6]},{g:'box',m:'cloth',o:[0,0.62,0.1],s:[1.3,0.25,2.2]},
+           {g:'box',m:'trim',o:[0,0.7,-1.0],s:[1.2,0.3,0.4]}]},
+  chair:  {name:'Chair', ic:'⑁', tier:0, cost:{fe:4}, hp:30, decor:true,
+    parts:[{g:'box',m:'metal',o:[0,0.5,0],s:[0.7,0.1,0.7]},{g:'box',m:'cloth',o:[0,0.56,0],s:[0.6,0.08,0.6]},
+           {g:'box',m:'metal',o:[0,0.9,-0.3],s:[0.7,0.8,0.1]},{g:'cyl',m:'dark',o:[0,0.25,0],s:[0.13,0.5,0.13]}]},
+  console:{name:'Holo Console', ic:'▣', tier:0, cost:{fe:7}, hp:50, decor:true,
+    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[1.6,1.0,0.7]},{g:'box',m:'metal',o:[0,1.05,0],s:[1.7,0.1,0.8]},
+           {g:'box',m:'dark',o:[0,1.55,-0.26],s:[1.4,0.95,0.1]},{g:'box',m:'screen',o:[0,1.58,-0.19],s:[1.2,0.72,0.03]}],
+    glow:{y:1.55,c:'#5fe0ff',s:2}},
+  shelf:  {name:'Wall Shelf', ic:'☰', tier:0, cost:{fe:5}, hp:30, decor:true,
+    parts:[{g:'box',m:'wood',o:[0,2.0,0],s:[1.8,0.08,0.5]},{g:'box',m:'wood',o:[0,1.5,0],s:[1.8,0.08,0.5]},
+           {g:'box',m:'wood',o:[0,1.0,0],s:[1.8,0.08,0.5]},{g:'box',m:'dark',o:[-0.85,1.5,0],s:[0.08,1.2,0.5]},
+           {g:'box',m:'dark',o:[0.85,1.5,0],s:[0.08,1.2,0.5]}]},
+  rug:    {name:'Floor Rug', ic:'▭', tier:0, cost:{fe:3}, hp:20, decor:true,
+    parts:[{g:'box',m:'rug',o:[0,0.32,0],s:[2.4,0.04,3.0]},{g:'box',m:'trim',o:[0,0.345,0],s:[2.0,0.02,2.6]}]},
+  ceilinglight:{name:'Ceiling Light', ic:'☼', tier:0, cost:{fe:5}, hp:30, decor:true,
+    parts:[{g:'cyl',m:'dark',o:[0,2.6,0],s:[0.06,1.0,0.06]},{g:'box',m:'metal',o:[0,2.12,0],s:[1.0,0.12,1.0]},
+           {g:'box',m:'emisW',o:[0,2.03,0],s:[0.85,0.05,0.85]}], glow:{y:2.0,c:'#eaf6ff',s:4}},
+  locker: {name:'Locker', ic:'▯', tier:0, cost:{fe:6}, hp:50, decor:true,
+    parts:[{g:'box',m:'metal',o:[0,1.1,0],s:[0.9,2.2,0.6]},{g:'box',m:'dark',o:[0,1.1,0.31],s:[0.8,2.0,0.04]},
+           {g:'box',m:'emisC',o:[0.25,1.45,0.34],s:[0.06,0.3,0.02]}]},
+  railing:{name:'Railing', ic:'╫', tier:0, cost:{fe:4}, hp:30, decor:true,
+    parts:[{g:'box',m:'metal',o:[0,1.0,0],s:[4,0.08,0.08]},{g:'box',m:'metal',o:[0,0.6,0],s:[4,0.08,0.08]},
+           {g:'cyl',m:'dark',o:[-1.85,0.6,0],s:[0.08,1.2,0.08]},{g:'cyl',m:'dark',o:[0,0.6,0],s:[0.08,1.2,0.08]},
+           {g:'cyl',m:'dark',o:[1.85,0.6,0],s:[0.08,1.2,0.08]}]},
 };
 const MAX_STRUCT=400;
 const GRID=4;
@@ -850,6 +878,10 @@ const MAT={
   flagM:emisMat(0xff6a4a,0x661505,0.6),
   pot:stdMat(0x7a5a40,{roughness:0.9,metalness:0.05}),
   plant:emisMat(0x4adf6a,0x0a5520,0.7),
+  cloth:stdMat(0x35628a,{roughness:0.9,metalness:0.02}),
+  rug:stdMat(0x6a3a5a,{roughness:0.95,metalness:0.0}),
+  wood:stdMat(0x7a5a3a,{roughness:0.85,metalness:0.05}),
+  screen:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   ghostOk:new THREE.MeshBasicMaterial({color:0x4aff8a,transparent:true,opacity:0.42,depthWrite:false}),
   ghostBad:new THREE.MeshBasicMaterial({color:0xff5040,transparent:true,opacity:0.42,depthWrite:false}),
 };
@@ -1426,6 +1458,11 @@ const COLLIDERS={
   lampB:  {r:0.18,h:1.25},
   table:  {r:0.8,h:1.0},
   antenna:{r:0.15,h:3.2},
+  bed:    {boxes:[{cx:0,hx:0.7,hz:1.3}],h:0.7,step:0.5},
+  console:{boxes:[{cx:0,hx:0.8,hz:0.35}],h:1.1,step:0.6},
+  locker: {r:0.5,h:2.2},
+  chair:  {r:0.4,h:0.9},
+  railing:{boxes:[{cx:0,hx:2,hz:0.06}],h:1.1,step:0.3},
 };
 function doorBoxes(st){
   const b=[{cx:1.45,hx:0.56,hz:0.16},{cx:-1.45,hx:0.56,hz:0.16}];
@@ -2470,6 +2507,8 @@ function renderBuildGrid(){
   for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','turret','rover','window','door','dome','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
+  addSection('Furniture & Interior');
+  for(const k of ['bed','chair','console','shelf','rug','ceilinglight','locker','railing']) addItem(k);
 }
 function renderTierList(){
   const list=$('tierList'); list.innerHTML='';
@@ -3237,6 +3276,9 @@ function loop(now){
     activeScene=spaceScene;
   }
   if(verdantShield.parent){ verdantShield.rotation.y+=dt*0.3; verdantShield.rotation.x+=dt*0.11; }
+  /* animated holo screens (consoles, holo-signs, armory) */
+  const ho=0.55+0.3*Math.sin(now*0.005);
+  MAT.screen.opacity=ho; MAT.holo.opacity=0.5+0.25*Math.sin(now*0.004+1.3);
   updateParticles(dt);
   updateFx(dt);
   if(S.running){ renderCompass(dt); updateMinimap(dt); }
