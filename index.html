@@ -1674,7 +1674,7 @@ function updateSurface(dt){
   const sprinting=S.tier>=2&&keys.ShiftLeft&&im>0.1;
   const spd=sprinting?9.6:6;
   const sy=Math.sin(player.yaw), cy=Math.cos(player.yaw);
-  const mx=(ix*cy-iz*sy)*spd*dt, mz=(ix*sy+iz*cy)*spd*dt;
+  const mx=(ix*cy+iz*sy)*spd*dt, mz=(iz*cy-ix*sy)*spd*dt;
   player.x+=mx; player.z+=mz;
   /* bounds */
   const pr=Math.hypot(player.x,player.z);
@@ -1838,7 +1838,7 @@ function loop(now){
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship};
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys};
 </script>
 </body>
 </html>
