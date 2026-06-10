@@ -555,10 +555,10 @@ function netHandle(m){
     case 'pjoin':
       NET.players.set(m.pid,{name:m.name,slot:m.slot});
       addRemote(m.pid,m.name,m.slot);
-      showToast(m.name+' joined the expedition'); SND.blip(); updateRoomBadge(); break;
+      addChat(null,m.name+' joined the expedition',true); updateRoomBadge(); break;
     case 'pleave': {
       const p=NET.players.get(m.pid);
-      if(p) showToast(p.name+' left');
+      if(p) addChat(null,p.name+' left',true);
       NET.players.delete(m.pid); removeRemote(m.pid); updateRoomBadge(); break;
     }
     case 'pu': remotePU(m); break;
@@ -609,7 +609,71 @@ $('chatInput').addEventListener('keydown',e=>{
   if(e.code==='Enter'){ const t=$('chatInput').value.trim(); if(t&&NET.active) NET.send({t:'chat',text:t.slice(0,120)}); closeChat(); }
   else if(e.code==='Escape'){ closeChat(); }
 });
-function toggleMap(){ /* defined fully in Phase 5 */ }
+/* ============================================================
+   COMPASS + MINIMAP (Phase 5)
+   ============================================================ */
+const _pv=new THREE.Vector3();
+let compassT=0;
+function projNDCx(wx,wz){
+  _pv.set(wx,camera.position.y,wz).project(camera);
+  if(_pv.z>1) return null;            // behind camera
+  return _pv.x;
+}
+function renderCompass(dt){
+  if(!S.running||S.mode!=='surface'){ $('compass').classList.add('hidden'); return; }
+  compassT-=dt; if(compassT>0) return; compassT=0.06;
+  $('compass').classList.remove('hidden');
+  const strip=$('compassStrip'), W=strip.parentElement.clientWidth;
+  const px=player.x, pz=player.z, D=1000;
+  let html='';
+  const mk=(wx,wz,label,color)=>{ const nx=projNDCx(wx,wz); if(nx===null||nx<-1.05||nx>1.05) return;
+    html+='<span class="cmkr" style="left:'+((nx*0.5+0.5)*W).toFixed(0)+'px;color:'+(color||'#9fd6ef')+'">'+label+'</span>'; };
+  mk(px,pz-D,'N','#cfe8ff'); mk(px+D,pz,'E'); mk(px,pz+D,'S'); mk(px-D,pz,'W');
+  if(surf.built) mk(surf.shipPos.x,surf.shipPos.z,'⌂','#7fd6f5');
+  const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
+  if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
+  if(NET.active) for(const r of remotes.values()){ if(r.avatar.visible) mk(r.avatar.position.x,r.avatar.position.z,'◆','#'+new THREE.Color(SLOT_COLORS[r.slot%4]).getHexString()); }
+  strip.innerHTML=html;
+}
+let mapOn=false, mapT=0;
+function toggleMap(){ mapOn=!mapOn; $('minimap').classList.toggle('hidden',!mapOn||S.mode!=='surface'); if(mapOn) drawMinimap(); SND.blip(); }
+function updateMinimap(dt){
+  if(!mapOn) return;
+  if(S.mode!=='surface'){ $('minimap').classList.add('hidden'); return; }
+  $('minimap').classList.remove('hidden');
+  mapT-=dt; if(mapT>0) return; mapT=0.25; drawMinimap();
+}
+function drawMinimap(){
+  const cv=$('minimap'), g=cv.getContext('2d'), W=cv.width, H=cv.height, cx=W/2, cy=H/2;
+  const R=140, scale=(W/2-6)/R, p=curP(), yaw=player.yaw;
+  g.clearRect(0,0,W,H);
+  g.save(); g.beginPath(); g.arc(cx,cy,W/2-2,0,Math.PI*2); g.clip();
+  g.fillStyle='#'+new THREE.Color(p.surfCol2).getHexString(); g.fillRect(0,0,W,H);
+  const sy=Math.sin(yaw), cyaw=Math.cos(yaw);
+  const w2m=(wx,wz)=>{ const dx=wx-player.x, dz=wz-player.z;
+    const ahead=-(dx*sy+dz*cyaw), side=-dx*cyaw+dz*sy;
+    return [cx+side*scale, cy-ahead*scale]; };
+  const dot=(wx,wz,col,rad)=>{ const m=w2m(wx,wz); g.fillStyle=col; g.beginPath(); g.arc(m[0],m[1],rad||2,0,Math.PI*2); g.fill(); };
+  // resource nodes (alive)
+  if(surf.built) for(const nd of surf.nodes){ if(nd.alive) dot(nd.x,nd.z,'#'+new THREE.Color(p.nodeCol).getHexString(),1.6); }
+  // structures
+  for(const s of S.structures){ if(s.pl!==S.planet) continue;
+    dot(s.x,s.z, s.t==='beacon'?'#aef9c8':(s.t==='turret'?'#ff7a6a':(s.t==='rover'?'#ffd060':'#8fb6cc')), s.t==='beacon'?3:2); }
+  // ship
+  if(surf.built) dot(surf.shipPos.x,surf.shipPos.z,'#7fd6f5',3);
+  // active meteor zone
+  const ms=NET.active?(NET.meteor[S.planet]&&NET.meteor[S.planet].phase!=='idle'):(meteorState.phase!=='idle');
+  if(ms){ const c=baseCentroid(); const m=w2m(c.x,c.z); g.strokeStyle='rgba(255,90,60,0.8)'; g.lineWidth=2; g.beginPath(); g.arc(m[0],m[1],50*scale,0,Math.PI*2); g.stroke(); }
+  // teammates
+  if(NET.active) for(const r of remotes.values()){ if(r.avatar.visible) dot(r.avatar.position.x,r.avatar.position.z,'#'+new THREE.Color(SLOT_COLORS[r.slot%4]).getHexString(),3); }
+  g.restore();
+  // player arrow at center (always pointing up)
+  g.fillStyle='#eaffff'; g.beginPath(); g.moveTo(cx,cy-6); g.lineTo(cx-4,cy+5); g.lineTo(cx+4,cy+5); g.closePath(); g.fill();
+  // N marker on rim
+  g.fillStyle='#cfe8ff'; g.font='10px sans-serif'; g.textAlign='center';
+  const nm=w2m(player.x,player.z-1000); const ang=Math.atan2(nm[1]-cy,nm[0]-cx);
+  g.fillText('N',cx+Math.cos(ang)*(W/2-10),cy+Math.sin(ang)*(W/2-10)+3);
+}
 function onRoverSeat(id,pid){
   if(pid===0||pid===undefined) NET.seats.delete(id);
   else NET.seats.set(id,pid);
@@ -2484,6 +2548,7 @@ document.addEventListener('keydown',e=>{
     else if(e.code==='Digit4') setSlot(3);
     else if(e.code==='KeyH') useMed();
   }
+  if(e.code==='KeyM'&&S.mode==='surface') toggleMap();
   if(e.code==='Enter'&&NET.active&&!anyPanelOpen()) openChat();
 });
 document.addEventListener('keyup',e=>{ keys[e.code]=false; });
@@ -3174,6 +3239,7 @@ function loop(now){
   if(verdantShield.parent){ verdantShield.rotation.y+=dt*0.3; verdantShield.rotation.x+=dt*0.11; }
   updateParticles(dt);
   updateFx(dt);
+  if(S.running){ renderCompass(dt); updateMinimap(dt); }
   if(NET.active) updateChatFade();
   renderer.render(activeScene,camera);
 }
