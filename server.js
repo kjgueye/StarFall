@@ -1,0 +1,348 @@
+/* ============================================================
+   STARFALL co-op server — rooms, world authority, relay
+   Serves index.html over HTTP and the game protocol over WS.
+   ============================================================ */
+'use strict';
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { WebSocketServer } = require('ws');
+
+const PORT = process.env.PORT || 3000;
+const METEOR_FAST = !!process.env.METEOR_FAST;     // test knob: rapid showers
+const RESPAWN_MS = +process.env.RESPAWN_MS || 180000;
+const MAX_ROOMS = 200;
+const MAX_PLAYERS = 4;
+const MAX_STRUCT = 400;
+const ROOM_GC_MS = 10 * 60 * 1000;
+
+/* mini structure catalog — hp + protection rules (mirrors CAT in index.html) */
+const SCAT = {
+  floor: 100, wall: 100, ramp: 100, lightpole: 60, crate: 120, relay: 80,
+  shieldgen: 150, window: 80, door: 100, dome: 90, beacon: 500,
+  flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
+  table: 50, antenna: 40,
+};
+const NOKILL = new Set(['crate', 'beacon']);
+const SHIELD_R = 18;
+const METEOR_DMG = 35;
+const HITS_PER_SHOWER = 6;
+const PLANETS = ['rust', 'glacius', 'verdant'];
+
+/* meteor phase timings (seconds) */
+const T_IDLE = () => METEOR_FAST ? 3 : 120 + Math.random() * 120;
+const T_IDLE_NEXT = () => METEOR_FAST ? 4 : 170 + Math.random() * 140;
+const T_WARN = METEOR_FAST ? 2 : 20;
+const T_ACTIVE = METEOR_FAST ? 5 : 12;
+
+/* ---------- HTTP: serve the game ---------- */
+const INDEX_PATH = path.join(__dirname, 'index.html');
+const server = http.createServer((req, res) => {
+  const url = (req.url || '/').split('?')[0];
+  if (url === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); return; }
+  if (url === '/' || url === '/index.html') {
+    fs.readFile(INDEX_PATH, (err, data) => {
+      if (err) { res.writeHead(500); res.end('error'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+      res.end(data);
+    });
+    return;
+  }
+  res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found');
+});
+
+/* ---------- rooms ---------- */
+const rooms = new Map();
+const CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function genCode() {
+  for (let tries = 0; tries < 50; tries++) {
+    let c = '';
+    for (let i = 0; i < 5; i++) c += CODE_ALPHA[crypto.randomInt(CODE_ALPHA.length)];
+    if (!rooms.has(c)) return c;
+  }
+  return null;
+}
+function newMeteorState() {
+  const m = {};
+  for (const pl of PLANETS) m[pl] = { phase: 'idle', t: T_IDLE(), hits: 0, spawnT: 0 };
+  return m;
+}
+function makeRoom(world) {
+  const code = genCode();
+  if (!code) return null;
+  const room = {
+    code,
+    worldId: (world && typeof world.worldId === 'string' && world.worldId.length <= 24)
+      ? world.worldId : 'w' + crypto.randomBytes(6).toString('hex'),
+    nextId: 1, nextPid: 1,
+    structures: [], beacon: false,
+    players: new Map(),                 // pid -> {ws,name,slot,pos,yaw,pitch,mode,pl}
+    nodeDead: new Map(),                // "pl:i" -> respawnAt(ms epoch)
+    meteor: newMeteorState(),
+    emptySince: 0,
+  };
+  if (world && Array.isArray(world.structures)) {
+    for (const s of world.structures) {
+      if (room.structures.length >= MAX_STRUCT) break;
+      if (!s || !SCAT[s.t] || !PLANETS.includes(s.pl)) continue;
+      const x = +s.x, y = +s.y, z = +s.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+      const hp = Math.min(Math.max(1, (+s.hp || SCAT[s.t])), SCAT[s.t]);
+      const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp };
+      room.structures.push(st);
+      if (s.t === 'beacon') room.beacon = true;
+    }
+  }
+  rooms.set(code, room);
+  return room;
+}
+function bcast(room, obj, exceptPid) {
+  const msg = JSON.stringify(obj);
+  for (const [pid, p] of room.players) {
+    if (pid === exceptPid) continue;
+    if (p.ws.readyState === 1) { try { p.ws.send(msg); } catch (e) {} }
+  }
+}
+function sendTo(ws, obj) { if (ws.readyState === 1) { try { ws.send(JSON.stringify(obj)); } catch (e) {} } }
+function deadNodesByPlanet(room) {
+  const out = {};
+  for (const key of room.nodeDead.keys()) {
+    const [pl, i] = key.split(':');
+    (out[pl] = out[pl] || []).push(+i);
+  }
+  return out;
+}
+function meteorSnapshot(room) {
+  const out = {};
+  for (const pl of PLANETS) {
+    const m = room.meteor[pl];
+    if (m.phase !== 'idle') out[pl] = { phase: m.phase, secs: Math.max(0, Math.ceil(m.t)) };
+  }
+  return out;
+}
+function welcomeMsg(room, pid) {
+  return {
+    t: 'welcome', pid, code: room.code, worldId: room.worldId,
+    players: [...room.players.entries()].map(([id, p]) => ({ pid: id, name: p.name, slot: p.slot })),
+    world: {
+      structures: room.structures,
+      beacon: room.beacon,
+      deadNodes: deadNodesByPlanet(room),
+      meteor: meteorSnapshot(room),
+    },
+  };
+}
+
+/* ---------- websocket ---------- */
+const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
+
+wss.on('connection', ws => {
+  ws.isAlive = true;
+  ws.room = null; ws.pid = null;
+  ws.on('pong', () => { ws.isAlive = true; });
+  ws.on('error', () => {});
+  ws.on('message', raw => {
+    let m;
+    try { m = JSON.parse(raw.toString()); } catch (e) { return; }
+    if (!m || typeof m.t !== 'string') return;
+    try { handle(ws, m); } catch (e) { /* never crash on a bad message */ }
+  });
+  ws.on('close', () => {
+    const room = ws.room;
+    if (!room || ws.pid === null) return;
+    const p = room.players.get(ws.pid);
+    if (p && p.ws === ws) {
+      room.players.delete(ws.pid);
+      bcast(room, { t: 'pleave', pid: ws.pid });
+      if (room.players.size === 0) room.emptySince = Date.now();
+    }
+  });
+});
+
+function joinRoom(ws, room, name) {
+  if (room.players.size >= MAX_PLAYERS) { sendTo(ws, { t: 'err', msg: 'Room is full (4 players max)', fatal: true }); return; }
+  name = String(name || '').trim().slice(0, 16) || 'PLAYER';
+  for (const p of room.players.values()) {
+    if (p.name.toLowerCase() === name.toLowerCase()) { sendTo(ws, { t: 'err', msg: 'That name is taken in this room', fatal: true }); return; }
+  }
+  const used = new Set([...room.players.values()].map(p => p.slot));
+  let slot = 0; while (used.has(slot)) slot++;
+  const pid = room.nextPid++;
+  const player = { ws, name, slot, pos: [0, 0, 0], yaw: 0, pitch: 0, mode: 'space', pl: 'rust' };
+  room.players.set(pid, player);
+  room.emptySince = 0;
+  ws.room = room; ws.pid = pid;
+  sendTo(ws, welcomeMsg(room, pid));
+  bcast(room, { t: 'pjoin', pid, name, slot }, pid);
+}
+
+function handle(ws, m) {
+  switch (m.t) {
+    case 'host': {
+      if (ws.room) return;
+      if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
+      const room = makeRoom(m.world);
+      if (!room) { sendTo(ws, { t: 'err', msg: 'Could not create room', fatal: true }); return; }
+      joinRoom(ws, room, m.name);
+      if (room.players.size === 0) rooms.delete(room.code); // join failed somehow
+      return;
+    }
+    case 'join': {
+      if (ws.room) return;
+      const code = String(m.code || '').trim().toUpperCase();
+      const room = rooms.get(code);
+      if (!room) { sendTo(ws, { t: 'err', msg: 'No room with that code', fatal: true }); return; }
+      joinRoom(ws, room, m.name);
+      return;
+    }
+  }
+  const room = ws.room;
+  if (!room || ws.pid === null) return;
+  const me = room.players.get(ws.pid);
+  if (!me) return;
+
+  switch (m.t) {
+    case 'pu': {
+      if (!Array.isArray(m.pos) || m.pos.length !== 3) return;
+      me.pos = m.pos.map(Number); me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
+      me.mode = m.mode === 'surface' ? 'surface' : 'space';
+      me.pl = PLANETS.includes(m.pl) ? m.pl : me.pl;
+      bcast(room, { t: 'pu', pid: ws.pid, pos: me.pos, yaw: me.yaw, pitch: me.pitch, mode: me.mode, pl: me.pl }, ws.pid);
+      return;
+    }
+    case 'place': {
+      const s = m.st;
+      if (!s || !SCAT[s.t] || !PLANETS.includes(s.pl)) return;
+      const x = +s.x, y = +s.y, z = +s.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+      if (room.structures.length >= MAX_STRUCT) { sendTo(ws, { t: 'err', msg: 'Construction limit reached (' + MAX_STRUCT + ' pieces)' }); return; }
+      if (s.t === 'beacon' && room.beacon) { sendTo(ws, { t: 'err', msg: 'The Beacon is already placed' }); return; }
+      const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: SCAT[s.t] };
+      room.structures.push(st);
+      if (st.t === 'beacon') room.beacon = true;
+      bcast(room, { t: 'placed', by: ws.pid, st });
+      return;
+    }
+    case 'remove': {
+      const st = room.structures.find(s => s.id === m.id);
+      if (!st) return;
+      if (st.t === 'beacon') { sendTo(ws, { t: 'err', msg: 'The Beacon cannot be removed' }); return; }
+      room.structures.splice(room.structures.indexOf(st), 1);
+      bcast(room, { t: 'removed', id: st.id, by: ws.pid });
+      return;
+    }
+    case 'repair': {
+      const st = room.structures.find(s => s.id === m.id);
+      if (!st) return;
+      st.hp = SCAT[st.t];
+      bcast(room, { t: 'hp', id: st.id, hp: st.hp });
+      return;
+    }
+    case 'mine': {
+      if (!PLANETS.includes(m.pl)) return;
+      const i = m.i | 0;
+      if (i < 0 || i > 45) return;
+      const key = m.pl + ':' + i;
+      if (room.nodeDead.has(key)) return;     // race loser
+      room.nodeDead.set(key, Date.now() + RESPAWN_MS);
+      bcast(room, { t: 'nodeDead', pl: m.pl, i, by: ws.pid });
+      return;
+    }
+  }
+}
+
+/* ---------- meteor + respawn + GC tick ---------- */
+function structCentroid(room, pl) {
+  let n = 0, x = 0, z = 0;
+  for (const st of room.structures) { if (st.pl === pl) { x += st.x; z += st.z; n++; } }
+  if (n) return { x: x / n, z: z / n };
+  for (const p of room.players.values()) {
+    if (p.mode === 'surface' && p.pl === pl) return { x: p.pos[0], z: p.pos[2] };
+  }
+  return { x: 0, z: 0 };
+}
+function resolveImpact(room, pl, tx, tz) {
+  const ms = room.meteor[pl];
+  if (ms.hits >= HITS_PER_SHOWER) return;
+  /* impact shielded? (live shield generator dome on that planet) */
+  for (const g of room.structures) {
+    if (g.pl !== pl || g.t !== 'shieldgen' || g.hp <= 0) continue;
+    const dx = tx - g.x, dz = tz - g.z;
+    if (dx * dx + dz * dz < SHIELD_R * SHIELD_R) return;
+  }
+  for (const st of room.structures.slice()) {
+    if (st.pl !== pl || st.t === 'beacon') continue;
+    const dx = st.x - tx, dz = st.z - tz;
+    if (dx * dx + dz * dz > 49) continue;
+    ms.hits++;
+    st.hp -= METEOR_DMG;
+    if (st.hp <= 0) {
+      if (NOKILL.has(st.t)) { st.hp = 10; bcast(room, { t: 'hp', id: st.id, hp: st.hp }); }
+      else {
+        room.structures.splice(room.structures.indexOf(st), 1);
+        bcast(room, { t: 'destroyed', id: st.id });
+      }
+    } else {
+      bcast(room, { t: 'hp', id: st.id, hp: st.hp });
+    }
+    if (ms.hits >= HITS_PER_SHOWER) break;
+  }
+}
+let lastTick = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const dt = Math.min(2, (now - lastTick) / 1000);
+  lastTick = now;
+  for (const [code, room] of rooms) {
+    /* GC */
+    if (room.players.size === 0) {
+      if (room.emptySince && now - room.emptySince > ROOM_GC_MS) rooms.delete(code);
+      continue;
+    }
+    /* node respawns */
+    for (const [key, at] of room.nodeDead) {
+      if (now >= at) {
+        room.nodeDead.delete(key);
+        const [pl, i] = key.split(':');
+        bcast(room, { t: 'nodeAlive', pl, i: +i });
+      }
+    }
+    /* meteors: per planet, clock advances only while someone is on that surface */
+    for (const pl of PLANETS) {
+      let occupied = false;
+      for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
+      if (!occupied) continue;
+      const ms = room.meteor[pl];
+      ms.t -= dt;
+      if (ms.phase === 'idle') {
+        if (ms.t <= 0) { ms.phase = 'warning'; ms.t = T_WARN; ms.hits = 0; bcast(room, { t: 'meteorWarn', pl, secs: T_WARN }); }
+      } else if (ms.phase === 'warning') {
+        if (ms.t <= 0) { ms.phase = 'active'; ms.t = T_ACTIVE; ms.spawnT = 0; bcast(room, { t: 'meteorActive', pl, secs: T_ACTIVE }); }
+      } else if (ms.phase === 'active') {
+        ms.spawnT -= dt;
+        if (ms.spawnT <= 0) {
+          ms.spawnT = 0.55 + Math.random() * 0.6;
+          const c = structCentroid(room, pl);
+          const tx = c.x + (Math.random() - 0.5) * 90, tz = c.z + (Math.random() - 0.5) * 90;
+          const ang = Math.random() * Math.PI * 2;
+          const sx = tx + Math.cos(ang) * 56, sz = tz + Math.sin(ang) * 56;
+          bcast(room, { t: 'meteor', pl, tx: +tx.toFixed(1), tz: +tz.toFixed(1), sx: +sx.toFixed(1), sz: +sz.toFixed(1) });
+          setTimeout(() => { if (rooms.has(code)) resolveImpact(room, pl, tx, tz); }, 2200);
+        }
+        if (ms.t <= 0) { ms.phase = 'idle'; ms.t = T_IDLE_NEXT(); bcast(room, { t: 'meteorEnd', pl }); }
+      }
+    }
+  }
+}, 250);
+
+/* heartbeat */
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { try { ws.terminate(); } catch (e) {} continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (e) {}
+  }
+}, 15000);
+
+server.listen(PORT, () => console.log('Starfall server on :' + PORT + (METEOR_FAST ? ' (METEOR_FAST)' : '')));

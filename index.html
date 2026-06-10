@@ -111,6 +111,19 @@
   #victory h1 { font-size:clamp(30px,7vw,64px); letter-spacing:0.25em; font-weight:200; color:#bdfce0; text-shadow:0 0 30px #2fdf9f; margin-bottom:14px; }
   #victory p { color:#9fdcf5; font-size:16px; max-width:560px; line-height:1.7; margin-bottom:26px; padding:0 16px; }
 
+  /* ---------- Co-op ---------- */
+  .mpInput { width:100%; padding:11px 12px; margin:7px 0; background:#06141f; color:#cfeefe; border:1px solid #2e8fb8;
+    font-size:16px; letter-spacing:0.15em; font-family:inherit; }
+  .mpInput::placeholder { color:#4a7a94; }
+  #mpStatus { min-height:20px; color:#ff9a8a; font-size:13px; margin-top:6px; letter-spacing:0.05em; }
+  #roomBadge { position:fixed; top:64px; right:28px; background:rgba(8,28,44,0.75); border:1px solid #2e8fb8; padding:7px 12px;
+    font-size:11.5px; letter-spacing:0.15em; color:#9fdcf5; cursor:pointer; pointer-events:auto; z-index:21; }
+  #roomBadge:hover { background:rgba(30,90,130,0.8); }
+  body.touch #roomBadge { top:54px; right:16px; padding:6px 9px; font-size:10px; }
+  #netLost { position:fixed; inset:0; z-index:59; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(2,8,14,0.88); text-align:center; }
+  #netLost h2 { font-weight:300; letter-spacing:0.25em; color:#ff9a8a; margin-bottom:18px; font-size:22px; }
+
   /* ---------- Mobile ---------- */
   #mob { position:fixed; inset:0; z-index:25; pointer-events:none; display:none; }
   body.touch #mob { display:block; }
@@ -160,6 +173,7 @@
   <div id="capNote"></div>
   <button id="tierBadge">TIER 1 ▸</button>
   <button id="gearBtn">⚙</button>
+  <button id="roomBadge" class="hidden">ROOM</button>
   <div id="crosshair"></div>
   <div id="prompt"></div>
   <div id="prog" class="hidden"><div id="progFill"></div></div>
@@ -200,6 +214,22 @@
   <button class="menuBtn" id="btnQuit">Save & Quit to Title</button>
 </div>
 
+<div id="mpSetup" class="panel hidden">
+  <button class="closeX" data-close="mpSetup">✕</button>
+  <h2 id="mpTitle">Host Co-op Game</h2>
+  <input id="mpName" class="mpInput" maxlength="16" placeholder="YOUR NAME" autocomplete="off">
+  <input id="mpCode" class="mpInput hidden" maxlength="5" placeholder="ROOM CODE" autocomplete="off">
+  <button class="menuBtn" id="mpGo">Host New World</button>
+  <button class="menuBtn hidden" id="mpHostPrev">Host Previous World</button>
+  <div id="mpStatus"></div>
+</div>
+
+<div id="netLost" class="hidden">
+  <h2>CONNECTION LOST</h2>
+  <button class="menuBtn" id="btnReconnect">Reconnect</button>
+  <button class="menuBtn" id="btnNetQuit">Quit to Title</button>
+</div>
+
 <div id="victory" class="hidden">
   <h1>COLONY ESTABLISHED</h1>
   <p>The Beacon's signal reaches home. Colonists are on their way to the world you opened.
@@ -212,6 +242,8 @@
   <div class="sub">Mine &nbsp;·&nbsp; Build &nbsp;·&nbsp; Reach Further</div>
   <button class="menuBtn" id="btnContinue">Continue</button>
   <button class="menuBtn" id="btnNew">New Game</button>
+  <button class="menuBtn" id="btnHost">Host Co-op</button>
+  <button class="menuBtn" id="btnJoin">Join Co-op</button>
   <button class="menuBtn" id="btnTitleImport">Import Save</button>
   <div id="ctrlHelp">
     <span class="desktopOnly"><b>WASD</b> move · <b>Mouse</b> look · <b>E</b> interact/mine · <b>Space</b> jump (hold = jetpack T3) · <b>Shift</b> sprint<br>
@@ -363,6 +395,81 @@ const S={
   pendingVerdantCutscene:false,
 };
 const SAVE_KEY='starfall_save_v1';
+const MP_WORLD_KEY='starfall_mp_world_v1';
+
+/* ============================================================
+   NETWORK — co-op client. Every MP behavior is gated on NET.active;
+   with no connection the game is byte-identical to single-player.
+   ============================================================ */
+const RAILWAY_WS='wss://starfall-production.up.railway.app';
+function wsURL(){
+  if(location.protocol.indexOf('http')===0&&location.host&&location.host.indexOf('github.io')<0){
+    return (location.protocol==='https:'?'wss://':'ws://')+location.host;
+  }
+  return RAILWAY_WS;
+}
+const NET={
+  active:false, ws:null, pid:null, code:null, worldId:null, name:'', isHost:false,
+  players:new Map(), deadNodes:{}, meteor:{}, lastPU:0, quitting:false,
+  send(obj){ if(this.ws&&this.ws.readyState===1){ try{ this.ws.send(JSON.stringify(obj)); }catch(e){} } },
+  connect(action){
+    this.quitting=false;
+    try{ if(this.ws) this.ws.close(); }catch(e){}
+    let ws;
+    try{ ws=new WebSocket(wsURL()); }
+    catch(e){ mpStatus('Could not reach the co-op server'); return; }
+    this.ws=ws;
+    mpStatus('Connecting…');
+    ws.onopen=()=>{ mpStatus('Joining…'); this.send(action); };
+    ws.onmessage=ev=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; } try{ netHandle(m); }catch(e){} };
+    ws.onerror=()=>{};
+    ws.onclose=()=>{
+      if(this.quitting) return;
+      if(this.active) $('netLost').classList.remove('hidden');
+      else mpStatus('Could not reach the co-op server');
+    };
+  },
+};
+function mpStatus(s){ const el=$('mpStatus'); if(el) el.textContent=s; }
+function mpPlayerKey(){ return 'starfall_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
+function updateRoomBadge(){
+  const b=$('roomBadge');
+  b.classList.toggle('hidden',!NET.active);
+  if(NET.active){
+    b.textContent='ROOM '+NET.code+' · '+NET.players.size+'/4';
+    b.title='Players: '+[...NET.players.values()].map(p=>p.name).join(', ')+' — click to copy code';
+  }
+}
+function netHandle(m){
+  switch(m.t){
+    case 'welcome': NET.active?resyncFromWelcome(m):startMultiplayer(m); break;
+    case 'err':
+      if(m.fatal&&!NET.active){ mpStatus(m.msg); NET.quitting=true; try{ NET.ws.close(); }catch(e){} }
+      else { showToast(m.msg); SND.denied(); }
+      break;
+    case 'pjoin':
+      NET.players.set(m.pid,{name:m.name,slot:m.slot});
+      addRemote(m.pid,m.name,m.slot);
+      showToast(m.name+' joined the expedition'); SND.blip(); updateRoomBadge(); break;
+    case 'pleave': {
+      const p=NET.players.get(m.pid);
+      if(p) showToast(p.name+' left');
+      NET.players.delete(m.pid); removeRemote(m.pid); updateRoomBadge(); break;
+    }
+    case 'pu': remotePU(m); break;
+    case 'placed': applyPlaced(m.st,m.by===NET.pid); break;
+    case 'removed': applyRemovedById(m.id,m.by===NET.pid); break;
+    case 'hp': applyHpById(m.id,m.hp); break;
+    case 'destroyed': applyDestroyedById(m.id); break;
+    case 'nodeDead': applyNodeDead(m.pl,m.i,m.by===NET.pid); break;
+    case 'nodeAlive': applyNodeAlive(m.pl,m.i); break;
+    case 'meteorWarn': NET.meteor[m.pl]={phase:'warning',endAt:performance.now()+m.secs*1000}; break;
+    case 'meteorActive': NET.meteor[m.pl]={phase:'active',endAt:performance.now()+(m.secs||12)*1000}; break;
+    case 'meteor': if(S.mode==='surface'&&S.planet===m.pl&&surf.built) spawnMeteorAt(m.tx,m.tz,m.sx,m.sz); break;
+    case 'meteorEnd': NET.meteor[m.pl]={phase:'idle',endAt:0}; break;
+  }
+}
+
 /* ============================================================
    SAVE / LOAD — versioned, bulletproof
    ============================================================ */
@@ -377,7 +484,18 @@ function buildSaveObj(){
 }
 function saveGame(){
   if(!S.running) return;
+  if(NET.active){ saveMP(); return; }
   try{ localStorage.setItem(SAVE_KEY, JSON.stringify(buildSaveObj())); }catch(e){}
+}
+function saveMP(){
+  try{
+    localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
+      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown}));
+    if(NET.isHost){
+      localStorage.setItem(MP_WORLD_KEY,JSON.stringify({v:1,worldId:NET.worldId,savedAt:Date.now(),beacon:!!S.beacon,
+        structures:S.structures.map(s=>({t:s.t,pl:s.pl,x:+s.x.toFixed(2),y:+s.y.toFixed(2),z:+s.z.toFixed(2),r:s.r,hp:s.hp|0}))}));
+    }
+  }catch(e){}
 }
 function parseSave(json){
   try{
@@ -659,6 +777,103 @@ spaceScene.add(ship);
 ship.position.fromArray(S.spos);
 
 /* ============================================================
+   REMOTE PLAYERS — co-op avatars, ships, name tags
+   ============================================================ */
+const remotes=new Map();
+const SLOT_COLORS=[0x4fc3ff,0xffb04f,0x7fff9a,0xff7ab0];
+function makeNameTag(name){
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=64;
+  const g=cv.getContext('2d');
+  g.font='bold 30px Segoe UI, Arial, sans-serif';
+  g.textAlign='center'; g.textBaseline='middle';
+  g.shadowColor='rgba(0,0,0,0.9)'; g.shadowBlur=8;
+  g.fillStyle='#bdf0ff';
+  g.fillText(String(name).toUpperCase().slice(0,14),128,32);
+  const tex=new THREE.CanvasTexture(cv);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+  sp.scale.set(3,0.75,1);
+  return sp;
+}
+function buildAvatar(slot,name){
+  const g=new THREE.Group();
+  const tint=new THREE.MeshStandardMaterial({color:SLOT_COLORS[slot%4],emissive:SLOT_COLORS[slot%4],emissiveIntensity:0.6,roughness:0.5});
+  const suit=stdMat(0xd8dde4,{roughness:0.7});
+  const body=new THREE.Mesh(GEO.cyl,suit); body.scale.set(0.55,0.75,0.4); body.position.y=0.85; g.add(body);
+  const helmet=new THREE.Mesh(GEO.sphere,new THREE.MeshStandardMaterial({color:0x9fd8ff,roughness:0.15,metalness:0.3,emissive:0x16384a,emissiveIntensity:0.6}));
+  helmet.scale.set(0.44,0.44,0.44); helmet.position.y=1.45; g.add(helmet);
+  const pack=new THREE.Mesh(GEO.box,MAT.dark); pack.scale.set(0.42,0.55,0.22); pack.position.set(0,0.95,0.28); g.add(pack);
+  const stripe=new THREE.Mesh(GEO.box,tint); stripe.scale.set(0.58,0.1,0.44); stripe.position.y=1.16; g.add(stripe);
+  for(const sx of [-1,1]){
+    const leg=new THREE.Mesh(GEO.cyl,suit); leg.scale.set(0.16,0.5,0.16); leg.position.set(sx*0.15,0.25,0); g.add(leg);
+    const arm=new THREE.Mesh(GEO.cyl,suit); arm.scale.set(0.13,0.55,0.13); arm.position.set(sx*0.38,0.9,0); arm.rotation.z=sx*0.15; g.add(arm);
+  }
+  const tag=makeNameTag(name); tag.position.y=2.2; g.add(tag);
+  g.visible=false;
+  return g;
+}
+function addRemote(pid,name,slot){
+  if(remotes.has(pid)) removeRemote(pid);
+  const av=buildAvatar(slot,name);
+  surfScene.add(av);
+  const shp=buildShip();
+  const legs=shp.getObjectByName('legs'); if(legs) legs.visible=false;
+  const tag=makeNameTag(name); tag.position.y=4.4; shp.add(tag);
+  shp.visible=false;
+  spaceScene.add(shp);
+  remotes.set(pid,{name,slot,snaps:[],mode:'space',pl:'rust',avatar:av,ship:shp});
+}
+function removeRemote(pid){
+  const r=remotes.get(pid); if(!r) return;
+  surfScene.remove(r.avatar); spaceScene.remove(r.ship);
+  remotes.delete(pid);
+}
+function clearRemotes(){ for(const pid of [...remotes.keys()]) removeRemote(pid); }
+function remotePU(m){
+  const r=remotes.get(m.pid); if(!r) return;
+  r.mode=m.mode; r.pl=m.pl;
+  r.snaps.push({t:performance.now(),x:m.pos[0],y:m.pos[1],z:m.pos[2],yaw:m.yaw,pitch:m.pitch});
+  if(r.snaps.length>12) r.snaps.shift();
+}
+function updateRemotes(){
+  if(!NET.active) return;
+  const rt=performance.now()-120;
+  for(const r of remotes.values()){
+    const sn=r.snaps;
+    const surfVis=S.mode==='surface'&&r.mode==='surface'&&r.pl===S.planet&&sn.length>0;
+    const spaceVis=S.mode==='space'&&r.mode==='space'&&sn.length>0;
+    r.avatar.visible=surfVis;
+    r.ship.visible=spaceVis;
+    if(!sn.length||(!surfVis&&!spaceVis)) continue;
+    let a=sn[sn.length-1], b=a, k=1;
+    for(let i=sn.length-1;i>0;i--){
+      if(sn[i-1].t<=rt){ a=sn[i-1]; b=sn[i]; break; }
+    }
+    if(b.t>a.t) k=clamp((rt-a.t)/(b.t-a.t),0,1);
+    if(performance.now()-b.t>700){ a=b; k=1; }
+    let dy=b.yaw-a.yaw;
+    dy=((dy+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-Math.PI;
+    const x=lerp(a.x,b.x,k), y=lerp(a.y,b.y,k), z=lerp(a.z,b.z,k), yaw=a.yaw+dy*k;
+    if(surfVis){
+      r.avatar.position.set(x,y,z);
+      r.avatar.rotation.y=yaw;
+    } else {
+      r.ship.position.set(x,y,z);
+      r.ship.rotation.order='YXZ';
+      r.ship.rotation.set(lerp(a.pitch,b.pitch,k),yaw,0);
+    }
+  }
+}
+function sendPU(){
+  if(S.mode==='surface'){
+    NET.send({t:'pu',pos:[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)],
+      yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet});
+  } else {
+    NET.send({t:'pu',pos:[+ship.position.x.toFixed(1),+ship.position.y.toFixed(1),+ship.position.z.toFixed(1)],
+      yaw:+S.syaw.toFixed(3),pitch:+S.spitch.toFixed(3),mode:'space',pl:S.planet});
+  }
+}
+
+/* ============================================================
    SURFACE SCENE (rebuilt per landing)
    ============================================================ */
 const WORLD_R=380;
@@ -785,6 +1000,11 @@ function buildSurface(planetKey){
 
   surfScene.add(g);
   refreshStructures();
+  if(NET.active&&NET.deadNodes[planetKey]){
+    for(const i of NET.deadNodes[planetKey]){
+      if(surf.nodes[i]){ surf.nodes[i].alive=false; nodeMatrixUpdate(i); }
+    }
+  }
 }
 function nodeMatrixUpdate(i){
   const nd=surf.nodes[i], d=new THREE.Object3D();
@@ -963,7 +1183,15 @@ function updateDoors(dt){
   for(let i=0;i<list.length;i++){
     const st=list[i];
     const dx=player.x-st.x, dz=player.z-st.z;
-    const target=(dx*dx+dz*dz<7.5)?1:0;
+    let near=dx*dx+dz*dz<7.5;
+    if(!near&&NET.active){
+      for(const r of remotes.values()){
+        if(!r.avatar.visible) continue;
+        const ax=r.avatar.position.x-st.x, az=r.avatar.position.z-st.z;
+        if(ax*ax+az*az<7.5){ near=true; break; }
+      }
+    }
+    const target=near?1:0;
     const cur=st.open||0;
     if(Math.abs(target-cur)<0.005) continue;
     st.open=cur+(target-cur)*Math.min(1,dt*6);
@@ -1059,19 +1287,39 @@ function updateMining(dt,interactHeld){
   }
   if(mineProgress>=1.4){
     mineProgress=0;
-    const key=curP().res, amt=4+Math.floor(Math.random()*3);
-    const cap=carryCap();
-    if(S.res[key]>=cap){ showToast('Storage full — build more crates'); SND.denied(); return; }
-    S.res[key]=Math.min(cap,S.res[key]+amt);
-    nd.alive=false; nd.respawn=180;
-    nodeMatrixUpdate(mineTarget);
-    spawnBurst(nd.x,nd.y+nd.s,nd.z,curP().nodeCol,16,4,4,0.9,7);
+    const key=curP().res;
+    if(S.res[key]>=carryCap()){ showToast('Storage full — build more crates'); SND.denied(); return; }
+    if(NET.active){ NET.send({t:'mine',pl:S.planet,i:mineTarget}); return; }
+    applyNodeDead(S.planet,mineTarget,true);
+  }
+}
+function applyNodeDead(pl,i,byMe){
+  if(NET.active) (NET.deadNodes[pl]=NET.deadNodes[pl]||new Set()).add(i);
+  if(S.mode==='surface'&&pl===S.planet&&surf.built&&surf.nodes[i]){
+    const nd=surf.nodes[i];
+    if(nd.alive){
+      nd.alive=false; nd.respawn=180;
+      nodeMatrixUpdate(i);
+      spawnBurst(nd.x,nd.y+nd.s,nd.z,PLANETS[pl].nodeCol,16,4,4,0.9,7);
+    }
+  }
+  if(byMe){
+    const key=PLANETS[pl].res, amt=4+Math.floor(Math.random()*3);
+    S.res[key]=Math.max(S.res[key],Math.min(carryCap(),S.res[key]+amt));
     SND.collect();
     showToast('+'+amt+' '+RES_NAMES[key]);
     updateHUDRes();
   }
 }
+function applyNodeAlive(pl,i){
+  if(NET.deadNodes[pl]) NET.deadNodes[pl].delete(i);
+  if(S.mode==='surface'&&pl===S.planet&&surf.built&&surf.nodes[i]){
+    surf.nodes[i].alive=true; surf.nodes[i].respawn=0;
+    nodeMatrixUpdate(i);
+  }
+}
 function updateNodes(dt){
+  if(NET.active) return; /* respawns are server-owned in co-op */
   for(let i=0;i<surf.nodes.length;i++){
     const nd=surf.nodes[i];
     if(!nd.alive){
@@ -1089,7 +1337,7 @@ let buildSel=null, ghost=null, ghostRot=0, ghostOK=false, removeMode=false;
 const ghostPos=new THREE.Vector3();
 
 function canAfford(cost){ for(const k in cost){ if(S.res[k]<cost[k]) return false; } return true; }
-function payCost(cost){ for(const k in cost){ S.res[k]-=cost[k]; } updateHUDRes(); }
+function payCost(cost){ for(const k in cost){ S.res[k]=Math.max(0,S.res[k]-cost[k]); } updateHUDRes(); }
 function costStr(cost){ return Object.keys(cost).map(k=>cost[k]+' '+RES_NAMES[k]).join(' + '); }
 
 function selectBuild(t){
@@ -1153,15 +1401,31 @@ function placeStructure(){
   if(structCount()>=MAX_STRUCT){ showToast('Construction limit reached ('+MAX_STRUCT+' pieces) — remove something first'); SND.denied(); return; }
   if(!canAfford(def.cost)){ showToast('Need '+costStr(def.cost)); SND.denied(); return; }
   if(!ghostOK){ SND.denied(); return; }
-  payCost(def.cost);
-  const st={t:buildSel,pl:S.planet,x:ghostPos.x,y:ghostPos.y,z:ghostPos.z,r:ghostRot,hp:def.hp};
+  if(NET.active){
+    NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostRot}});
+    return;
+  }
+  applyPlaced({t:buildSel,pl:S.planet,x:ghostPos.x,y:ghostPos.y,z:ghostPos.z,r:ghostRot,hp:def.hp},true);
+}
+function applyPlaced(m,byMe){
+  const def=CAT[m.t]; if(!def) return;
+  const st={t:m.t,pl:m.pl,x:m.x,y:m.y,z:m.z,r:m.r,hp:m.hp!==undefined?m.hp:def.hp};
+  if(m.id!==undefined) st.id=m.id;
   S.structures.push(st);
-  refreshStructures();
-  spawnBurst(st.x,st.y+1,st.z,0x7fd6ff,12,3,3,0.6,5);
-  SND.place();
-  if(buildSel==='beacon'){ S.beacon=true; cancelBuild(); triggerVictory(); saveGame(); return; }
-  if(!canAfford(def.cost)){ cancelBuild(); showToast('Out of resources for '+def.name); }
-  saveGame();
+  if(S.mode==='surface'&&st.pl===S.planet){
+    refreshStructures();
+    spawnBurst(st.x,st.y+1,st.z,0x7fd6ff,12,3,3,0.6,5);
+  } else updateCapNote();
+  if(byMe){ payCost(def.cost); SND.place(); }
+  if(st.t==='beacon'){
+    S.beacon=true;
+    if(byMe) cancelBuild();
+    triggerVictory(); saveGame(); return;
+  }
+  if(byMe){
+    if(!canAfford(def.cost)){ cancelBuild(); showToast('Out of resources for '+def.name); }
+    saveGame();
+  }
 }
 function aimedStructure(){
   raycaster.setFromCamera({x:0,y:0},camera);
@@ -1178,12 +1442,44 @@ function removeStructure(){
   const st=aimedStructure();
   if(!st){ showToast('Aim at a structure to remove it'); return; }
   if(st.t==='beacon'){ showToast('The Beacon cannot be removed'); SND.denied(); return; }
+  if(NET.active){ NET.send({t:'remove',id:st.id}); return; }
+  applyRemoved(st,true);
+}
+function applyRemovedById(id,byMe){
+  const st=S.structures.find(s=>s.id===id);
+  if(st) applyRemoved(st,byMe);
+}
+function applyRemoved(st,byMe){
   const def=CAT[st.t];
-  for(const k in def.cost) S.res[k]=Math.min(carryCap(),S.res[k]+Math.floor(def.cost[k]/2));
+  if(byMe){
+    for(const k in def.cost) S.res[k]=Math.min(carryCap(),S.res[k]+Math.floor(def.cost[k]/2));
+    updateHUDRes();
+  }
   S.structures.splice(S.structures.indexOf(st),1);
-  refreshStructures(); updateHUDRes();
-  spawnBurst(st.x,st.y+1,st.z,0xff8a5a,10,3,2.5,0.6,6);
-  SND.remove(); saveGame();
+  if(S.mode==='surface'&&st.pl===S.planet){
+    refreshStructures();
+    spawnBurst(st.x,st.y+1,st.z,0xff8a5a,10,3,2.5,0.6,6);
+  } else updateCapNote();
+  if(byMe) SND.remove();
+  saveGame();
+}
+function applyHpById(id,hp){
+  const st=S.structures.find(s=>s.id===id);
+  if(st) applyHp(st,hp);
+}
+function applyHp(st,hp){
+  st.hp=hp;
+  if(S.mode==='surface'&&st.pl===S.planet) rebuildAux();
+}
+function applyDestroyedById(id){
+  const st=S.structures.find(s=>s.id===id);
+  if(!st) return;
+  S.structures.splice(S.structures.indexOf(st),1);
+  if(S.mode==='surface'&&st.pl===S.planet){
+    refreshStructures();
+    spawnBurst(st.x,st.y+1,st.z,0xff8a5a,12,4,3,0.8,6);
+    showToast(CAT[st.t].name+' destroyed by meteor!');
+  } else updateCapNote();
 }
 let repairHold=0;
 function updateRepair(dt,interactHeld,target){
@@ -1192,8 +1488,10 @@ function updateRepair(dt,interactHeld,target){
   repairHold+=dt;
   if(Math.random()<dt*10) spawnBurst(target.x,target.y+1.2,target.z,0x7fd6ff,2,1.5,2,0.4,4);
   if(repairHold>=0.8){
-    repairHold=0; S.res.fe-=2; target.hp=CAT[target.t].hp;
-    updateHUDRes(); rebuildAux(); SND.place(); showToast(CAT[target.t].name+' repaired');
+    repairHold=0; S.res.fe-=2; updateHUDRes();
+    if(NET.active) NET.send({t:'repair',id:target.id});
+    else applyHp(target,CAT[target.t].hp);
+    SND.place(); showToast(CAT[target.t].name+' repaired');
   }
   return true;
 }
@@ -1213,9 +1511,13 @@ function baseCentroid(){
 function spawnMeteor(){
   const c=baseCentroid();
   const tx=c.x+(Math.random()-0.5)*90, tz=c.z+(Math.random()-0.5)*90;
-  const ty=terrainH(tx,tz,curP());
-  const ang=Math.random()*Math.PI*2, dist=140, h=160;
+  const ang=Math.random()*Math.PI*2, dist=140;
   const sx=tx+Math.cos(ang)*dist*0.4, sz=tz+Math.sin(ang)*dist*0.4;
+  spawnMeteorAt(tx,tz,sx,sz);
+}
+function spawnMeteorAt(tx,tz,sx,sz){
+  const ty=terrainH(tx,tz,curP());
+  const h=160;
   const mesh=new THREE.Mesh(GEO.ico,METEOR_MAT);
   const sc=0.8+Math.random()*1.4; mesh.scale.set(sc,sc,sc);
   mesh.position.set(sx,h,sz);
@@ -1228,6 +1530,7 @@ function meteorImpact(m){
   spawnBurst(m.tx,m.ty+0.5,m.tz,0xffa040,26,9,8,1.1,9);
   spawnBurst(m.tx,m.ty+0.5,m.tz,0x885040,14,5,5,1.6,4);
   SND.impact();
+  if(NET.active) return; /* co-op: damage is resolved by the server (hp/destroyed messages) */
   if(meteorState.hits>=6) return; // damage cap per shower
   for(const st of S.structures.slice()){
     if(st.pl!==S.planet) continue;
@@ -1267,8 +1570,33 @@ function domeBlockCheck(m){
   }
   return false;
 }
+let netKlaxT=0, netBanner=false;
+function netMeteorTick(dt){
+  const st=NET.meteor[S.planet];
+  const now=performance.now();
+  const showing=st&&st.phase!=='idle'&&now<st.endAt+5000;
+  if(!showing){
+    if(netBanner){
+      netBanner=false;
+      $('banner').classList.add('hidden');
+      if(surfScene.fog) surfScene.fog.color.set(curP().fog);
+    }
+    return;
+  }
+  if(!netBanner){ netBanner=true; $('banner').classList.remove('hidden'); }
+  if(st.phase==='warning'){
+    const secs=Math.max(0,Math.ceil((st.endAt-now)/1000));
+    $('banner').textContent='⚠ METEOR SHOWER INBOUND — '+secs+'s ⚠';
+    netKlaxT-=dt;
+    if(netKlaxT<=0){ SND.klaxon(); netKlaxT=1.1; }
+    surfScene.fog.color.lerpColors(new THREE.Color(curP().fog),new THREE.Color(0x661a0a),0.35+0.25*Math.sin(performance.now()*0.008));
+  } else {
+    $('banner').textContent='☄ METEOR SHOWER IN PROGRESS ☄';
+  }
+}
 function updateMeteors(dt){
   if(S.mode!=='surface'){ return; }
+  if(NET.active){ netMeteorTick(dt); updateMeteorVisuals(dt); return; }
   const ms=meteorState;
   if(ms.phase==='idle'){
     ms.t-=dt;
@@ -1289,6 +1617,9 @@ function updateMeteors(dt){
       $('banner').classList.add('hidden');
       surfScene.fog.color.set(curP().fog); }
   }
+  updateMeteorVisuals(dt);
+}
+function updateMeteorVisuals(dt){
   for(let i=meteors.length-1;i>=0;i--){
     const m=meteors[i];
     m.mesh.position.x+=m.vx*dt; m.mesh.position.y+=m.vy*dt; m.mesh.position.z+=m.vz*dt;
@@ -1315,6 +1646,7 @@ function clearMeteors(){
   for(const m of meteors){ surfScene.remove(m.mesh); surfScene.remove(m.glow); }
   meteors.length=0;
   meteorState.phase='idle'; meteorState.t=120+Math.random()*120;
+  netBanner=false;
   $('banner').classList.add('hidden');
 }
 /* ============================================================
@@ -1335,7 +1667,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -1543,7 +1875,8 @@ $('gearBtn').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettin
 
 /* settings */
 function openSettings(){
-  $('btnExport').classList.toggle('hidden',!S.running);
+  $('btnExport').classList.toggle('hidden',!S.running||NET.active);
+  $('btnImportTog').classList.toggle('hidden',S.running&&NET.active);
   $('btnQuit').classList.toggle('hidden',!S.running);
   $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF');
   $('importWrap').classList.add('hidden');
@@ -1556,7 +1889,7 @@ $('btnImportGo').addEventListener('click',()=>{
   if(d){ showToast('Save imported — reloading...'); setTimeout(()=>location.reload(),800); }
 });
 $('btnSound').addEventListener('click',()=>{ SND.on=!SND.on; $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip(); });
-$('btnQuit').addEventListener('click',()=>{ saveGame(); location.reload(); });
+$('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 
 /* ============================================================
    MODE TRANSITIONS
@@ -1900,6 +2233,111 @@ function startGame(fromSave){
   if(!fromSave) showToast('Fly to the red planet RUST and press E to LAND',5000);
   saveGame();
 }
+/* ---------- co-op setup / start ---------- */
+let mpMode='host';
+function openMpSetup(mode){
+  mpMode=mode;
+  $('mpTitle').textContent=mode==='host'?'Host Co-op Game':'Join Co-op Game';
+  $('mpCode').classList.toggle('hidden',mode==='host');
+  $('mpGo').textContent=mode==='host'?'Host New World':'Join Game';
+  let snap=null;
+  try{ snap=JSON.parse(localStorage.getItem(MP_WORLD_KEY)); }catch(e){}
+  $('mpHostPrev').classList.toggle('hidden',!(mode==='host'&&snap&&snap.v===1));
+  try{ $('mpName').value=localStorage.getItem('starfall_name')||''; }catch(e){}
+  mpStatus('');
+  openPanel('mpSetup');
+}
+function mpBegin(world){
+  const name=$('mpName').value.trim().slice(0,16);
+  if(!name){ mpStatus('Enter a name first'); return; }
+  try{ localStorage.setItem('starfall_name',name); }catch(e){}
+  NET.name=name;
+  SND.ensure();
+  if(mpMode==='host'){
+    NET.isHost=true;
+    NET.connect(world?{t:'host',name,world}:{t:'host',name});
+  } else {
+    const code=$('mpCode').value.trim().toUpperCase();
+    if(code.length<4){ mpStatus('Enter the room code'); return; }
+    NET.isHost=false;
+    NET.connect({t:'join',code,name});
+  }
+}
+$('btnHost').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('host'); });
+$('btnJoin').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('join'); });
+$('mpGo').addEventListener('click',()=>mpBegin(null));
+$('mpHostPrev').addEventListener('click',()=>{
+  let snap=null;
+  try{ snap=JSON.parse(localStorage.getItem(MP_WORLD_KEY)); }catch(e){}
+  if(!snap||snap.v!==1){ mpStatus('No previous world found'); return; }
+  mpBegin(snap);
+});
+$('mpCode').addEventListener('input',()=>{ $('mpCode').value=$('mpCode').value.toUpperCase().replace(/[^A-Z0-9]/g,''); });
+$('roomBadge').addEventListener('click',()=>{
+  if(NET.code) fallbackCopy(NET.code,()=>showToast('Room code '+NET.code+' copied — send it to your friends'));
+});
+$('btnReconnect').addEventListener('click',()=>{
+  $('netLost').classList.add('hidden');
+  NET.connect({t:'join',code:NET.code,name:NET.name});
+});
+$('btnNetQuit').addEventListener('click',()=>{ NET.quitting=true; location.reload(); });
+
+function installWorld(world){
+  S.structures=world.structures.map(s=>({id:s.id,t:s.t,pl:s.pl,x:s.x,y:s.y,z:s.z,r:s.r,hp:s.hp}));
+  S.beacon=!!world.beacon;
+  NET.deadNodes={};
+  for(const pl in (world.deadNodes||{})) NET.deadNodes[pl]=new Set(world.deadNodes[pl]);
+  NET.meteor={};
+  for(const pl in (world.meteor||{})){
+    NET.meteor[pl]={phase:world.meteor[pl].phase,endAt:performance.now()+world.meteor[pl].secs*1000};
+  }
+}
+function startMultiplayer(w){
+  NET.active=true;
+  NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  resetState();
+  installWorld(w.world);
+  if(S.beacon) S.victoryShown=true;
+  try{
+    const p=JSON.parse(localStorage.getItem(mpPlayerKey()));
+    if(p){
+      S.tier=clamp(p.tier|0,1,4);
+      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0)};
+      S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
+      if(p.victoryShown) S.victoryShown=true;
+    }
+  }catch(e){}
+  clearRemotes();
+  NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
+  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
+  closeAllPanels();
+  startGame(false);
+  updateRoomBadge();
+  showToast('ROOM '+NET.code+' — click the room badge (top right) to copy the code',6000);
+}
+function resyncFromWelcome(w){
+  NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  installWorld(w.world);
+  clearRemotes();
+  NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
+  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
+  if(S.mode==='surface'&&surf.built){
+    refreshStructures();
+    const dead=NET.deadNodes[S.planet]||new Set();
+    for(let i=0;i<surf.nodes.length;i++){
+      const want=!dead.has(i);
+      if(surf.nodes[i].alive!==want){
+        surf.nodes[i].alive=want;
+        if(want) surf.nodes[i].respawn=0;
+        nodeMatrixUpdate(i);
+      }
+    }
+  }
+  $('netLost').classList.add('hidden');
+  updateRoomBadge();
+  showToast('Reconnected to room '+NET.code);
+}
+
 const existingSave=loadSavedState();
 if(!existingSave) $('btnContinue').disabled=true;
 $('btnContinue').addEventListener('click',()=>{
@@ -1933,6 +2371,11 @@ function loop(now){
     if(cs.active){ updateCutscene(dt); }
     else if(S.mode==='space') updateSpace(dt);
     else updateSurface(dt);
+    if(NET.active){
+      const nw=performance.now();
+      if(nw-NET.lastPU>100&&!transitioning){ NET.lastPU=nw; sendPU(); }
+      updateRemotes();
+    }
   } else {
     /* title backdrop: slow orbit through space */
     titleT+=dt*0.04;
@@ -1947,7 +2390,7 @@ function loop(now){
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys};
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes};
 </script>
 </body>
 </html>
