@@ -818,17 +818,23 @@ for(const t in CAT){
 const _m1=new THREE.Matrix4(), _m2=new THREE.Matrix4(), _q=new THREE.Quaternion(),
       _e=new THREE.Euler(), _v=new THREE.Vector3(), _sv=new THREE.Vector3();
 
-function structMatrix(st,part,out){
+function structMatrix(st,part,out,slideX){
   _e.set(0,st.r*Math.PI/2,0); _q.setFromEuler(_e);
   _m1.compose(_v.set(st.x,st.y,st.z),_q,_sv.set(1,1,1));
   const pr=part.r||[0,0,0];
   _e.set(pr[0],pr[1],pr[2]);
-  _m2.compose(_v.set(part.o[0],part.o[1],part.o[2]),_q.setFromEuler(_e),_sv.set(part.s[0],part.s[1],part.s[2]));
+  _m2.compose(_v.set(part.o[0]+(slideX||0),part.o[1],part.o[2]),_q.setFromEuler(_e),_sv.set(part.s[0],part.s[1],part.s[2]));
   out.multiplyMatrices(_m1,_m2);
+}
+/* world->local for a structure rotated by r*90° (matches three.js R_y) */
+function toLocal(st,wx,wz,out){
+  const a=st.r*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
+  const dx=wx-st.x, dz=wz-st.z;
+  out.lx=dx*c-dz*s; out.lz=dx*s+dz*c; out.c=c; out.s=s;
 }
 function refreshStructures(){
   for(const t in CAT) placedByType[t]=[];
-  for(const st of S.structures){ if(st.pl===S.planet) placedByType[st.t].push(st); }
+  for(const st of S.structures){ if(st.pl===S.planet) placedByType[st.t].push(st); if(st.t==='door') st.open=0; }
   const M=new THREE.Matrix4();
   for(const t in CAT){
     const list=placedByType[t], def=CAT[t];
@@ -869,6 +875,107 @@ function crateCount(){ return S.structures.filter(s=>s.t==='crate'&&s.hp>0).leng
 function carryCap(){ return 300+150*crateCount(); }
 function updateCapNote(){ $('capNote').textContent='CARRY CAP '+carryCap()+' / RESOURCE · PIECES '+structCount()+'/'+MAX_STRUCT; }
 
+/* ---------- player collision vs structures ---------- */
+const PR=0.35;           // player body radius
+const _loc={lx:0,lz:0,c:1,s:0};
+const COLLIDERS={
+  wall:   {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
+  window: {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
+  door:   {door:true,h:3,step:0.3},
+  crate:  {boxes:[{cx:0,hx:0.8,hz:0.8}],h:1.2,step:0.55},
+  ramp:   {ramp:true},
+  shieldgen:{r:1.55,h:1.7},
+  beacon: {r:1.4,h:5},
+  lightpole:{r:0.22,h:3},
+  relay:  {r:0.35,h:2.4},
+  flag:   {r:0.14,h:2.5},
+  planter:{r:0.5,h:1.0},
+  holosign:{r:0.18,h:1.9},
+  lampR:  {r:0.18,h:1.25},
+  lampG:  {r:0.18,h:1.25},
+  lampB:  {r:0.18,h:1.25},
+  table:  {r:0.8,h:1.0},
+  antenna:{r:0.15,h:3.2},
+};
+function doorBoxes(st){
+  const b=[{cx:1.45,hx:0.56,hz:0.16},{cx:-1.45,hx:0.56,hz:0.16}];
+  if((st.open||0)<0.5) b.push({cx:0,hx:0.9,hz:0.12});
+  return b;
+}
+function collidePlayer(){
+  /* landed ship hull */
+  if(surf.built){
+    const dsx=player.x-surf.shipPos.x, dsz=player.z-surf.shipPos.z;
+    const d=Math.hypot(dsx,dsz);
+    if(d<3.1&&player.y<surf.shipPos.y+1.6){
+      const f=d<0.001?3.1:3.1/d;
+      player.x=surf.shipPos.x+dsx*f; player.z=surf.shipPos.z+dsz*f;
+    }
+  }
+  for(let it=0;it<2;it++){
+    for(const t in COLLIDERS){
+      const col=COLLIDERS[t], list=placedByType[t]||[];
+      for(const st of list){
+        const dx=player.x-st.x, dz=player.z-st.z;
+        if(dx*dx+dz*dz>49) continue;
+        const head=player.y+1.7;
+        if(col.r!==undefined){          /* cylinder props */
+          if(player.y>=st.y+col.h-0.4||head<=st.y) continue;
+          const d=Math.hypot(dx,dz), rr=col.r+PR;
+          if(d<rr){ const f=d<0.001?rr:rr/d; player.x=st.x+dx*f; player.z=st.z+dz*f; }
+          continue;
+        }
+        toLocal(st,player.x,player.z,_loc);
+        let lx=_loc.lx, lz=_loc.lz;
+        const c=_loc.c, s=_loc.s;
+        if(col.ramp){                   /* solid wedge, walkable on top */
+          if(Math.abs(lx)>2+PR||Math.abs(lz)>2+PR) continue;
+          const sy2=st.y+0.31+clamp((2-lz)/4,0,1)*3;
+          if(player.y>=sy2-0.65||head<=st.y) continue;
+          const px=(2+PR)-Math.abs(lx), pzl=(2+PR)-lz, pzh=lz+(2+PR);
+          let ox=0,oz=0;
+          if(px<=pzl&&px<=pzh) ox=(lx>=0?1:-1)*px;
+          else if(pzl<=pzh) oz=pzl; else oz=-pzh;
+          player.x+=ox*c+oz*s; player.z+=-ox*s+oz*c;
+          continue;
+        }
+        if(player.y>=st.y+col.h-col.step||head<=st.y) continue;
+        const boxes=col.door?doorBoxes(st):col.boxes;
+        for(const b of boxes){
+          const bx=lx-b.cx;
+          const hx=b.hx+PR, hz=b.hz+PR;
+          if(Math.abs(bx)>=hx||Math.abs(lz)>=hz) continue;
+          const px=hx-Math.abs(bx), pz=hz-Math.abs(lz);
+          let ox=0,oz=0;
+          if(px<pz) ox=(bx>=0?1:-1)*px; else oz=(lz>=0?1:-1)*pz;
+          player.x+=ox*c+oz*s; player.z+=-ox*s+oz*c;
+          lx+=ox; lz+=oz;
+        }
+      }
+    }
+  }
+}
+/* doors slide open when the player is near */
+const _doorM=new THREE.Matrix4();
+function updateDoors(dt){
+  const list=placedByType.door||[];
+  const def=CAT.door;
+  for(let i=0;i<list.length;i++){
+    const st=list[i];
+    const dx=player.x-st.x, dz=player.z-st.z;
+    const target=(dx*dx+dz*dz<7.5)?1:0;
+    const cur=st.open||0;
+    if(Math.abs(target-cur)<0.005) continue;
+    st.open=cur+(target-cur)*Math.min(1,dt*6);
+    const slide=st.open*1.55;
+    for(const pi of [3,4]){
+      structMatrix(st,def.parts[pi],_doorM,slide);
+      structMeshes.door[pi].setMatrixAt(i,_doorM);
+      structMeshes.door[pi].instanceMatrix.needsUpdate=true;
+    }
+  }
+}
+
 /* walkable height: terrain + floors/ramps/crates */
 function groundYAt(x,z,curY){
   const p=curP();
@@ -876,9 +983,8 @@ function groundYAt(x,z,curY){
   for(const t of ['floor','ramp','crate']){
     const list=placedByType[t]||[];
     for(const st of list){
-      const a=-st.r*Math.PI/2, ca=Math.cos(a), sa=Math.sin(a);
-      const dx=x-st.x, dz=z-st.z;
-      const lx=dx*ca-dz*sa, lz=dx*sa+dz*ca;
+      toLocal(st,x,z,_loc);
+      const lx=_loc.lx, lz=_loc.lz;
       let top=null;
       if(t==='floor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
       else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
@@ -1679,6 +1785,9 @@ function updateSurface(dt){
   /* bounds */
   const pr=Math.hypot(player.x,player.z);
   if(pr>WORLD_R){ player.x*=WORLD_R/pr; player.z*=WORLD_R/pr; if(Math.random()<dt*2) showToast('Suit warning: leaving survey zone'); }
+  /* structure collision + doors */
+  updateDoors(dt);
+  collidePlayer();
   /* gravity / jump / jetpack */
   const gy=groundYAt(player.x,player.z,player.y);
   player.grounded=player.y<=gy+0.02;
