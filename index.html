@@ -430,6 +430,7 @@ const CAT={
            {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
            {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisC',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
     glow:{y:1.6,c:'#ffb070',s:3}},
+  rover:  {name:'Rover', ic:'⛟', tier:2, cost:{fe:60,cy:10}, hp:160, dynamic:true, parts:[], desc:'Drive — E to enter'},
   turret: {name:'Sentry Turret', ic:'⌖', tier:3, cost:{fe:40,cy:20}, hp:110, owned:true, headParts:[2,3,4],
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[1.2,0.6,1.2]},{g:'cyl',m:'metal',o:[0,0.85,0],s:[0.5,0.7,0.5]},
            {g:'box',m:'dark',o:[0,1.35,0],s:[0.9,0.5,0.7]},{g:'cyl',m:'metal',o:[0,1.35,-0.55],s:[0.12,0.7,0.12],r:[Math.PI/2,0,0]},
@@ -549,7 +550,7 @@ function netHandle(m){
     case 'welcome': NET.active?resyncFromWelcome(m):startMultiplayer(m); break;
     case 'err':
       if(m.fatal&&!NET.active){ mpStatus(m.msg); NET.quitting=true; try{ NET.ws.close(); }catch(e){} }
-      else { showToast(m.msg); SND.denied(); }
+      else { showToast(m.msg); SND.denied(); if(/Rover is occupied/.test(m.msg)&&driving){ driving=null; updateViewmodel(); } }
       break;
     case 'pjoin':
       NET.players.set(m.pid,{name:m.name,slot:m.slot});
@@ -609,8 +610,16 @@ $('chatInput').addEventListener('keydown',e=>{
   else if(e.code==='Escape'){ closeChat(); }
 });
 function toggleMap(){ /* defined fully in Phase 5 */ }
-function onRoverSeat(id,pid){ /* defined fully in Phase 4 */ }
-function onRoverMove(m){ /* defined fully in Phase 4 */ }
+function onRoverSeat(id,pid){
+  if(pid===0||pid===undefined) NET.seats.delete(id);
+  else NET.seats.set(id,pid);
+  /* if someone else claimed the rover we're driving, eject us */
+  if(driving&&driving.id===id&&pid&&pid!==myPid()) { driving=null; updateViewmodel(); showToast('Rover taken by another driver'); }
+}
+function onRoverMove(m){
+  const st=S.structures.find(s=>s.id===m.id&&s.t==='rover');
+  if(st) st._t={x:+m.x,y:+m.y,z:+m.z,ry:+m.ry};
+}
 
 /* ============================================================
    SAVE / LOAD — versioned, bulletproof
@@ -1252,6 +1261,7 @@ surfScene.add(auxGroup);
 
 for(const t in CAT){
   const def=CAT[t];
+  if(def.dynamic){ structMeshes[t]=[]; continue; }   // rovers render as their own groups
   structMeshes[t]=def.parts.map(part=>{
     const im=new THREE.InstancedMesh(GEO[part.g],MAT[part.m],MAX_STRUCT);
     im.count=0; im.userData.stype=t; im.frustumCulled=false;
@@ -1281,7 +1291,9 @@ function refreshStructures(){
   for(const st of S.structures){ if(st.pl===S.planet) placedByType[st.t].push(st); if(st.t==='door') st.open=0; }
   const M=new THREE.Matrix4();
   for(const t in CAT){
-    const list=placedByType[t], def=CAT[t];
+    const def=CAT[t];
+    if(def.dynamic) continue;
+    const list=placedByType[t];
     def.parts.forEach((part,pi)=>{
       const im=structMeshes[t][pi];
       im.count=list.length;
@@ -1290,6 +1302,7 @@ function refreshStructures(){
     });
   }
   rebuildAux();
+  syncRovers();
   updateCapNote();
 }
 let shieldDomes=[];   // {x,y,z,r,mesh,st}
@@ -1580,12 +1593,16 @@ function selectBuild(t){
   buildSel=t; removeMode=false;
   if(ghost){ surfScene.remove(ghost); ghost=null; }
   ghost=new THREE.Group();
-  for(const part of def.parts){
-    const m=new THREE.Mesh(GEO[part.g],MAT.ghostOk);
-    m.position.fromArray(part.o);
-    if(part.r) m.rotation.set(part.r[0],part.r[1],part.r[2]);
-    m.scale.fromArray(part.s);
-    ghost.add(m);
+  if(def.parts.length){
+    for(const part of def.parts){
+      const m=new THREE.Mesh(GEO[part.g],MAT.ghostOk);
+      m.position.fromArray(part.o);
+      if(part.r) m.rotation.set(part.r[0],part.r[1],part.r[2]);
+      m.scale.fromArray(part.s);
+      ghost.add(m);
+    }
+  } else {  /* dynamic (rover): simple footprint box */
+    const m=new THREE.Mesh(GEO.box,MAT.ghostOk); m.scale.set(2.6,1.5,3.8); m.position.y=0.9; ghost.add(m);
   }
   surfScene.add(ghost);
   closePanel('buildMenu');
@@ -1670,11 +1687,14 @@ function aimedStructure(){
   raycaster.far=14;
   const targets=[];
   for(const t in structMeshes) for(const im of structMeshes[t]) if(im.count>0) targets.push(im);
-  const hits=raycaster.intersectObjects(targets,false);
-  if(!hits.length) return null;
-  const im=hits[0].object, t=im.userData.stype, id=hits[0].instanceId;
-  const st=(placedByType[t]||[])[id];
-  return st||null;
+  for(const m of roverMeshes.values()) targets.push(m);
+  const hits=raycaster.intersectObjects(targets,true);
+  for(const h of hits){
+    const o=h.object;
+    if(o.isInstancedMesh){ const st=(placedByType[o.userData.stype]||[])[h.instanceId]; if(st) return st; }
+    else { let p=o; while(p&&!p.userData.st) p=p.parent; if(p&&p.userData.st) return p.userData.st; }
+  }
+  return null;
 }
 function removeStructure(){
   const st=aimedStructure();
@@ -1872,11 +1892,127 @@ function onRemoteFire(m){
   if(m.target===NET.pid&&m.dmg){ NET.lastHitBy=m.by; applyDamageToSelf(m.dmg); }
 }
 function openCraftMenu(){ renderCraftGrid(); openPanel('craftMenu'); }
-/* rover stubs — replaced in Phase 4 */
-function nearRover(){ return null; }
-function enterRover(){}
-function exitRover(){ driving=null; }
-function updateRover(){}
+
+/* ============================================================
+   ROVER — drivable buggy (Phase 4)
+   ============================================================ */
+let localStructId=1;
+const roverMeshes=new Map();
+function buildRover(){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(GEO.box,stdMat(0xc9923a,{roughness:0.6,metalness:0.4})); body.scale.set(2.4,0.7,3.6); body.position.y=0.95; g.add(body);
+  const nose=new THREE.Mesh(GEO.box,stdMat(0xa9772a,{roughness:0.6,metalness:0.4})); nose.scale.set(2.2,0.4,0.8); nose.position.set(0,0.75,-1.9); g.add(nose);
+  const cab=new THREE.Mesh(GEO.box,new THREE.MeshStandardMaterial({color:0x4adfff,transparent:true,opacity:0.4,roughness:0.1,emissive:0x0a4a66,emissiveIntensity:0.6}));
+  cab.scale.set(1.8,0.7,1.4); cab.position.set(0,1.5,-0.3); g.add(cab);
+  const bar=new THREE.Mesh(GEO.box,MAT.dark); bar.scale.set(1.9,0.12,0.12); bar.position.set(0,1.95,0.5); g.add(bar);
+  for(const [wx,wz] of [[-1.25,1.25],[1.25,1.25],[-1.25,-1.25],[1.25,-1.25]]){
+    const w=new THREE.Mesh(GEO.cyl,MAT.dark); w.scale.set(0.85,0.55,0.85); w.rotation.z=Math.PI/2; w.position.set(wx,0.55,wz); g.add(w);
+  }
+  for(const hx of [-0.7,0.7]){
+    const beam=new THREE.Mesh(GEO.cone,new THREE.MeshBasicMaterial({color:0xfff4cc,transparent:true,opacity:0.16,blending:THREE.AdditiveBlending,depthWrite:false}));
+    beam.scale.set(1.5,4.2,1.5); beam.rotation.x=-Math.PI/2; beam.position.set(hx,0.85,-3.4); g.add(beam);
+    const lamp=new THREE.Mesh(GEO.sphere,MAT.emisW); lamp.scale.set(0.2,0.2,0.2); lamp.position.set(hx,0.85,-2.0); g.add(lamp);
+  }
+  return g;
+}
+function syncRovers(){
+  const want=new Set();
+  for(const st of S.structures){
+    if(st.t!=='rover'||st.pl!==S.planet) continue;
+    if(st.id===undefined) st.id=myPid()+'_r'+(localStructId++);
+    if(st.ry===undefined) st.ry=st.r*Math.PI/2;
+    want.add(st.id);
+    if(!roverMeshes.has(st.id)){ const m=buildRover(); m.userData.st=st; surfScene.add(m); roverMeshes.set(st.id,m); }
+    else roverMeshes.get(st.id).userData.st=st;
+  }
+  for(const [id,m] of roverMeshes){ if(!want.has(id)){ surfScene.remove(m); roverMeshes.delete(id); } }
+}
+function updateRoverMeshes(dt){
+  for(const [id,m] of roverMeshes){
+    const st=m.userData.st;
+    if(st._t&&!(driving&&driving.id===id)){
+      const k=Math.min(1,dt*10);
+      st.x=lerp(st.x,st._t.x,k); st.y=lerp(st.y,st._t.y,k); st.z=lerp(st.z,st._t.z,k);
+      let d=st._t.ry-(st.ry||0); d=((d+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-Math.PI; st.ry=(st.ry||0)+d*k;
+    }
+    m.position.set(st.x,st.y,st.z); m.rotation.y=st.ry||0;
+  }
+}
+function nearRover(){
+  for(const st of placedByType.rover||[]){
+    if(NET.active){ const seat=NET.seats.get(st.id); if(seat&&seat!==myPid()) continue; }
+    const dx=player.x-st.x, dz=player.z-st.z;
+    if(dx*dx+dz*dz<16) return st;
+  }
+  return null;
+}
+function enterRover(st){
+  if(NET.active){
+    const seat=NET.seats.get(st.id);
+    if(seat&&seat!==myPid()){ showToast('Rover is occupied'); SND.denied(); return; }
+    NET.seats.set(st.id,myPid()); NET.send({t:'roverSeat',id:st.id});
+  }
+  driving=st; st._t=null;
+  cancelBuild(); updateViewmodel();
+  showToast('Driving — W/S accelerate, A/D steer, E to exit');
+  SND.place();
+}
+function exitRover(){
+  const st=driving; if(!st){ return; }
+  if(NET.active){ NET.seats.delete(st.id); NET.send({t:'roverSeatClear',id:st.id}); }
+  driving=null;
+  /* place player just beside the rover on the ground */
+  const fx=-Math.sin(st.ry||0), fz=-Math.cos(st.ry||0);
+  player.x=st.x+fz*2.2; player.z=st.z-fx*2.2;     // step out to the side
+  player.y=groundYAt(player.x,player.z,1e9); player.vy=0; player.yaw=st.ry||0;
+  updateViewmodel();
+  saveGame();
+}
+function updateRover(dt){
+  const st=driving;
+  /* input */
+  let thr=0, steer=0;
+  if(keys.KeyW||keys.ArrowUp) thr+=1; if(keys.KeyS||keys.ArrowDown) thr-=1;
+  if(keys.KeyA||keys.ArrowLeft) steer-=1; if(keys.KeyD||keys.ArrowRight) steer+=1;
+  if(joy.active){ thr+=-joy.y; steer+=joy.x; }
+  const maxSp=15;
+  st._sp=(st._sp||0)+thr*22*dt;
+  if(thr===0) st._sp*=Math.pow(0.25,dt);
+  st._sp=clamp(st._sp,-maxSp*0.45,maxSp);
+  st.ry=(st.ry||0)-steer*1.5*dt*clamp(Math.abs(st._sp)/4,0.2,1)*(st._sp<0?-1:1);
+  const fx=-Math.sin(st.ry), fz=-Math.cos(st.ry);
+  st.x+=fx*st._sp*dt; st.z+=fz*st._sp*dt;
+  /* terrain follow + suspension */
+  const pr=Math.hypot(st.x,st.z); if(pr>WORLD_R-4){ st.x*=(WORLD_R-4)/pr; st.z*=(WORLD_R-4)/pr; st._sp*=0.3; }
+  const gy=terrainH(st.x,st.z,curP())+0.7;
+  st.y=lerp(st.y===undefined?gy:st.y,gy,Math.min(1,dt*8));
+  /* driver shares rover location for O2/turret/meteor systems */
+  player.x=st.x; player.z=st.z; player.y=st.y;
+  /* O2 (open-top cockpit) */
+  const safe=inO2Range();
+  if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt); else S.o2=Math.max(0,S.o2-1.15*dt);
+  if(S.o2<=0){ exitRover(); doBlackout(); return; }
+  /* HUD */
+  $('o2bar').style.width=(S.o2/o2Max()*100)+'%';
+  $('o2bar').classList.toggle('low',S.o2/o2Max()<0.25&&!safe);
+  $('hpbar').style.width=(player.hp/HP_MAX*100)+'%';
+  setPrompt('<span class="key">E</span>EXIT ROVER · W/S drive · A/D steer'); setMAct('EXIT'); mFire=false;
+  $('prog').classList.add('hidden');
+  /* sync */
+  if(NET.active){ const nw=performance.now(); if(nw-(NET.lastRover||0)>90){ NET.lastRover=nw;
+    NET.send({t:'roverMove',id:st.id,x:+st.x.toFixed(2),y:+st.y.toFixed(2),z:+st.z.toFixed(2),ry:+st.ry.toFixed(3)}); } }
+  /* exit */
+  if(justE){ exitRover(); justE=false; }
+  /* world timers still run while driving */
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt);
+  S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
+  renderRoverCam();
+}
+function renderRoverCam(){
+  const st=driving; const fx=-Math.sin(st.ry||0), fz=-Math.cos(st.ry||0);
+  camera.position.set(st.x-fx*7.5,st.y+4.2,st.z-fz*7.5);
+  camera.lookAt(st.x+fx*5,st.y+1.0,st.z+fz*5);
+}
 function dmgFlashFx(){
   const f=$('dmgFlash'); f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0.7)';
   setTimeout(()=>{ f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0)'; },120);
@@ -2267,7 +2403,7 @@ function renderBuildGrid(){
     grid.appendChild(d);
   };
   addSection('Structures');
-  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','turret','window','door','dome','beacon']) addItem(k);
+  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','turret','rover','window','door','dome','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
 }
@@ -2531,6 +2667,7 @@ function enterSurface(planetKey,fromSave){
   refreshMobileUI();
 }
 function enterSpace(fromPlanetKey,fromSave){
+  if(driving){ driving=null; }
   S.mode='space';
   activeScene=spaceScene;
   spaceScene.add(particles);
@@ -2763,10 +2900,10 @@ function updateSurface(dt){
   /* --- interactions --- */
   const dxs=player.x-surf.shipPos.x, dzs=player.z-surf.shipPos.z;
   const nearShip=dxs*dxs+dzs*dzs<60;
+  const roverHere=(!buildSel&&!nearShip)?nearRover():null;
+  const arm=(!buildSel&&!nearShip&&!roverHere)?nearArmory():null;
   const aimed=buildSel?null:aimedStructure();
-  const damaged=aimed&&aimed.hp<CAT[aimed.t].hp?aimed:null;
-  const arm=(!buildSel&&!nearShip&&!damaged)?nearArmory():null;
-  const roverHere=(!buildSel&&!nearShip&&!damaged&&!arm)?nearRover():null;
+  const damaged=(aimed&&aimed.hp<CAT[aimed.t].hp&&!roverHere&&!arm)?aimed:null;
   let prompted=false; mFire=false;
   if(buildSel){
     updateGhost();
@@ -2778,20 +2915,20 @@ function updateSurface(dt){
     setPrompt('<span class="key">E</span>LAUNCH'); setMAct('LAUNCH'); prompted=true;
     if(justE){ doLaunch(); justE=false; return; }
     updateMining(0,false);
+  } else if(roverHere){
+    setPrompt('<span class="key">E</span>DRIVE ROVER'); setMAct('DRIVE'); prompted=true;
+    if(justE){ enterRover(roverHere); justE=false; return; }
+    updateMining(0,false);
+  } else if(arm){
+    setPrompt('<span class="key">E</span>OPEN ARMORY'); setMAct('USE'); prompted=true;
+    if(justE){ openCraftMenu(); justE=false; return; }
+    updateMining(0,false);
   } else if(damaged){
     const busy=updateRepair(dt,!!keys.KeyE,damaged);
     setPrompt('<span class="key">E</span>HOLD TO REPAIR '+CAT[damaged.t].name+' (2 Ferrite) — HP '+Math.max(0,damaged.hp|0)+'/'+CAT[damaged.t].hp);
     setMAct('REPAIR'); prompted=true;
     $('prog').classList.toggle('hidden',!busy);
     $('progFill').style.width=(repairHold/0.8*100)+'%';
-    updateMining(0,false);
-  } else if(arm){
-    setPrompt('<span class="key">E</span>OPEN ARMORY'); setMAct('USE'); prompted=true;
-    if(justE){ openCraftMenu(); justE=false; return; }
-    updateMining(0,false);
-  } else if(roverHere){
-    setPrompt('<span class="key">E</span>DRIVE ROVER'); setMAct('DRIVE'); prompted=true;
-    if(justE){ enterRover(roverHere); justE=false; return; }
     updateMining(0,false);
   } else {
     updateRepair(0,false,null);
@@ -2828,6 +2965,7 @@ function updateSurface(dt){
   updateMeteors(dt);
   updateLoot(dt);
   updateTurrets(dt);
+  updateRoverMeshes(dt);
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
 }
