@@ -798,6 +798,9 @@ function renderCompass(dt){
   if(surf.built) mk(surf.shipPos.x,surf.shipPos.z,'⌂','#7fd6f5');
   const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
   if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
+  /* nearest critter — points the way to the hunt */
+  if(critters.length){ let best=null,bd=1e9; for(const c of critters){ const dx=c.x-px,dz=c.z-pz,d=dx*dx+dz*dz; if(d<bd){bd=d;best=c;} }
+    if(best) mk(best.x,best.z,'❖','#d8b878'); }
   if(NET.active) for(const r of remotes.values()){ if(r.avatar.visible) mk(r.avatar.position.x,r.avatar.position.z,'◆','#'+new THREE.Color(SLOT_COLORS[r.slot%4]).getHexString()); }
   strip.innerHTML=html;
 }
@@ -825,6 +828,8 @@ function drawMinimap(){
   // structures
   for(const s of S.structures){ if(s.pl!==S.planet) continue;
     dot(s.x,s.z, s.t==='beacon'?'#aef9c8':(s.t==='turret'?'#ff7a6a':(s.t==='rover'?'#ffd060':'#8fb6cc')), s.t==='beacon'?3:2); }
+  // wildlife (critters — hunt for Chitin)
+  for(const c of critters) dot(c.x,c.z,'#d8b878',1.8);
   // ship
   if(surf.built) dot(surf.shipPos.x,surf.shipPos.z,'#7fd6f5',3);
   // active meteor zone
@@ -3672,6 +3677,9 @@ function enterSurface(planetKey,fromSave){
   }
   player.vy=0; player.pitch=0;
   refreshMobileUI();
+  /* one-time hint: wildlife is the Chitin source (it isn't mined) */
+  try{ if(!localStorage.getItem('sf_huntHint')){ localStorage.setItem('sf_huntHint','1');
+    setTimeout(()=>{ if(S.running&&S.mode==='surface') showToast('Wildlife roams here — track the tan dots on your map (M) and defeat them with a weapon to harvest Chitin',5500); },3000); } }catch(e){}
 }
 function enterSpace(fromPlanetKey,fromSave){
   if(driving){ driving=null; }
