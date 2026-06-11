@@ -27,55 +27,23 @@ import { WebSocketServer } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
+import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX } from './shared/constants.js';
+import { CAT, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
+import { PLANET_KEYS as PLANETS } from './shared/world.js';
+import { stationComplete, todOf } from './shared/rules.js';
+
 const PORT = process.env.PORT || 3000;
 const METEOR_FAST = !!process.env.METEOR_FAST;     // test knob: rapid showers
 const RESPAWN_MS = +process.env.RESPAWN_MS || 180000;
 const MAX_ROOMS = 200;
 const MAX_PLAYERS = 4;
-const MAX_STRUCT = 400;
 const ROOM_GC_MS = 10 * 60 * 1000;
 
-/* mini structure catalog — hp + protection rules (mirrors CAT in index.html) */
-const SCAT = {
-  floor: 100, wall: 100, ramp: 100, lightpole: 60, crate: 120, relay: 80,
-  shieldgen: 150, armory: 120, window: 80, door: 100, dome: 90, beacon: 500,
-  turret: 110, rover: 160,
-  foundation: 140, pillar: 90, pillar2: 90, pillar3: 90, halfwall: 60, halffloor: 70,
-  roof45: 90, roofcorner: 90, flatroof: 100, beam: 60,
-  flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
-  table: 50, antenna: 40,
-  bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
-};
-const OWNED = new Set(['turret']);   // structures that record their placer
-const DYNAMIC = new Set(['rover']);  // movable structures (skipped by meteor centroid jitter is fine)
-const NOKILL = new Set(['crate', 'beacon']);
-const SHIELD_R = 18;
-const METEOR_DMG = 35;
-const HITS_PER_SHOWER = 6;
-const PLANETS = ['rust', 'glacius', 'verdant', 'pelagos'];
-const SAFE_CR = 32;               // PvP-free / critter-free radius around a Colony Beacon
-/* ---- critters (Phase 4): server owns spawns + positions, coarse sync ---- */
-const SCRIT = {
-  skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
-  grazer: { hp: 14, speed: 2.6, flee: 11, ch: [2, 4] },
-  floater: { hp: 6, speed: 3.2, flee: 10, ch: [1, 2] },
-  hopper: { hp: 10, speed: 4.2, flee: 9, ch: [1, 3] },
-  skimmer: { hp: 7, speed: 5.5, flee: 10, ch: [1, 2] },
-};
-const PLANET_CRIT = {
-  rust: ['skitterer', 'grazer', 'hopper'],
-  glacius: ['skitterer', 'floater'],
-  verdant: ['grazer', 'floater', 'hopper'],
-  pelagos: ['skimmer', 'floater'],
-};
-const CRIT_CAP = 12;
-/* ---- orbital station (Phase 7): server-owned shared pieces, one core/room ---- */
-const STATION_TYPES = new Set(['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms']);
-const STATION_MAX = 60, STATION_MIN = 10;
-function serverStationComplete(room) { const t = new Set(room.station.map(p => p.t)); return room.station.length >= STATION_MIN && t.size >= 6; }
-const DAY_CYCLE = 600;            // seconds for a full day/night cycle
+const SHIELD_R = CAT.shieldgen.shieldR;            // meteor-shield dome radius
+const STATION_TYPES = new Set(STATION_KEYS);
 let worldClock = 300;             // shared time-of-day (seconds)
-function worldTod() { return ((worldClock % DAY_CYCLE) + DAY_CYCLE) % DAY_CYCLE / DAY_CYCLE; }
+function worldTod() { return todOf(worldClock); }
 
 /* meteor phase timings (seconds) */
 const T_IDLE = () => METEOR_FAST ? 3 : 120 + Math.random() * 120;
@@ -137,10 +105,10 @@ function makeRoom(world) {
   if (world && Array.isArray(world.structures)) {
     for (const s of world.structures) {
       if (room.structures.length >= MAX_STRUCT) break;
-      if (!s || !SCAT[s.t] || !PLANETS.includes(s.pl)) continue;
+      if (!s || !CAT[s.t] || !PLANETS.includes(s.pl)) continue;
       const x = +s.x, y = +s.y, z = +s.z;
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
-      const hp = Math.min(Math.max(1, (+s.hp || SCAT[s.t])), SCAT[s.t]);
+      const hp = Math.min(Math.max(1, (+s.hp || CAT[s.t].hp)), CAT[s.t].hp);
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp };
       if (s.owner !== undefined && s.owner !== null) st.owner = s.owner;
       if (isFinite(+s.ry)) st.ry = +s.ry;
@@ -157,7 +125,7 @@ function makeRoom(world) {
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
       room.station.push({ id: room.nextStation++, t: p.t, x, y, z, qx: +p.qx || 0, qy: +p.qy || 0, qz: +p.qz || 0, qw: isFinite(+p.qw) ? +p.qw : 1, r: (p.r | 0) % 4 });
     }
-    room.stationOnline = serverStationComplete(room) || !!world.stationOnline;
+    room.stationOnline = stationComplete(room.station) || !!world.stationOnline;
   }
   rooms.set(code, room);
   return room;
@@ -285,7 +253,7 @@ function handle(ws, m) {
     }
     case 'place': {
       const s = m.st;
-      if (!s || !SCAT[s.t] || !PLANETS.includes(s.pl)) return;
+      if (!s || !CAT[s.t] || !PLANETS.includes(s.pl)) return;
       const x = +s.x, y = +s.y, z = +s.z;
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       if (room.structures.length >= MAX_STRUCT) { sendTo(ws, { t: 'err', msg: 'Construction limit reached (' + MAX_STRUCT + ' pieces)' }); return; }
@@ -294,7 +262,7 @@ function handle(ws, m) {
         let mine = 0; for (const o of room.structures) if (o.t === 'turret' && o.owner === ws.pid) mine++;
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
       }
-      const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: SCAT[s.t] };
+      const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: CAT[s.t].hp };
       if (OWNED.has(s.t)) st.owner = ws.pid;
       if (DYNAMIC.has(s.t)) st.ry = isFinite(+s.ry) ? +s.ry : 0;
       if (isFinite(+s.col)) st.col = +s.col | 0;
@@ -314,7 +282,7 @@ function handle(ws, m) {
     case 'repair': {
       const st = room.structures.find(s => s.id === m.id);
       if (!st) return;
-      st.hp = SCAT[st.t];
+      st.hp = CAT[st.t].hp;
       bcast(room, { t: 'hp', id: st.id, hp: st.hp });
       return;
     }
@@ -352,7 +320,7 @@ function handle(ws, m) {
       if (room.station.length >= STATION_MAX) { sendTo(ws, { t: 'err', msg: 'Station piece limit reached (' + STATION_MAX + ')' }); return; }
       const pc = { id: room.nextStation++, t: s.t, x, y, z, qx: +s.qx || 0, qy: +s.qy || 0, qz: +s.qz || 0, qw: isFinite(+s.qw) ? +s.qw : 1, r: (s.r | 0) % 4 };
       room.station.push(pc);
-      if (!room.stationOnline && serverStationComplete(room)) room.stationOnline = true;
+      if (!room.stationOnline && stationComplete(room.station)) room.stationOnline = true;
       bcast(room, { t: 'stationPlaced', by: ws.pid, st: pc });
       return;
     }
@@ -374,7 +342,7 @@ function handle(ws, m) {
       c.st = 1; c.idle = 0; c.hd = Math.atan2(c.z - me.pos[2], c.x - me.pos[0]);   // flee the shooter
       if (c.hp <= 0) {
         arr.splice(arr.indexOf(c), 1);
-        const r = SCRIT[c.type].ch;
+        const r = CRITTERS[c.type].ch;
         const ch = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
         bcast(room, { t: 'critDead', id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), by: ws.pid, ch });
       }
@@ -479,22 +447,22 @@ function simCritters(room, pl, dt) {
   room.critT[pl] -= dt;
   if (arr.length < CRIT_CAP && room.critT[pl] <= 0) {
     room.critT[pl] = 4 + Math.random() * 6;
-    const types = PLANET_CRIT[pl];
+    const types = CRIT_BY_PLANET[pl];
     const type = types[Math.floor(Math.random() * types.length)];
     for (let tries = 0; tries < 10; tries++) {
       const ang = Math.random() * Math.PI * 2, rad = 50 + Math.random() * 260;
       const x = Math.cos(ang) * rad, z = Math.sin(ang) * rad;
-      if (beacon) { const dx = x - beacon.x, dz = z - beacon.z; if (dx * dx + dz * dz < (SAFE_CR + 4) * (SAFE_CR + 4)) continue; }
-      arr.push({ id: 'c' + (room.nextCrit++), type, x, z, hp: SCRIT[type].hp, hd: Math.random() * 6.283, wt: 1 + Math.random() * 3, idle: 0, st: 0 });
+      if (beacon) { const dx = x - beacon.x, dz = z - beacon.z; if (dx * dx + dz * dz < (SAFE_R + 4) * (SAFE_R + 4)) continue; }
+      arr.push({ id: 'c' + (room.nextCrit++), type, x, z, hp: CRITTERS[type].hp, hd: Math.random() * 6.283, wt: 1 + Math.random() * 3, idle: 0, st: 0 });
       break;
     }
   }
   for (const c of arr) {
-    const def = SCRIT[c.type];
+    const def = CRITTERS[c.type];
     let near = null, nd = 1e9;
     for (const p of ps) { const dx = c.x - p.pos[0], dz = c.z - p.pos[2], d = dx * dx + dz * dz; if (d < nd) { nd = d; near = p; } }
     let sp;
-    if (near && nd < def.flee * def.flee) {
+    if (near && nd < def.fleeR * def.fleeR) {
       c.hd = Math.atan2(c.z - near.pos[2], c.x - near.pos[0]); c.st = 1; c.idle = 0; sp = def.speed * 1.4;
     } else {
       c.st = 0; c.wt -= dt;
@@ -504,7 +472,7 @@ function simCritters(room, pl, dt) {
     c.x += Math.cos(c.hd) * sp * dt; c.z += Math.sin(c.hd) * sp * dt;
     const r = Math.hypot(c.x, c.z);
     if (r > 360) { c.x *= 360 / r; c.z *= 360 / r; c.hd += Math.PI; }
-    if (beacon) { const dx = c.x - beacon.x, dz = c.z - beacon.z, d = Math.hypot(dx, dz); if (d < SAFE_CR + 2) { const f = (SAFE_CR + 2) / (d || 1); c.x = beacon.x + dx * f; c.z = beacon.z + dz * f; c.hd = Math.atan2(dz, dx); } }
+    if (beacon) { const dx = c.x - beacon.x, dz = c.z - beacon.z, d = Math.hypot(dx, dz); if (d < SAFE_R + 2) { const f = (SAFE_R + 2) / (d || 1); c.x = beacon.x + dx * f; c.z = beacon.z + dz * f; c.hd = Math.atan2(dz, dx); } }
   }
 }
 
