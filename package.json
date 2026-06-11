@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "pg": "^8.21.0",
+    "three": "0.158.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

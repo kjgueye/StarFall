@@ -2,7 +2,12 @@
 /* ============================================================
    ASTRAVOX (formerly Starfall) — client. Game data/rules live in
    ../shared/ and are imported by BOTH this client and the Node server.
+   THREE is npm-bundled (pinned 0.158.0 — same source as the old CDN
+   UMD r158). The window assignment keeps the test harness/console
+   hook; in-module bare `THREE` refs resolve to the import binding.
    ============================================================ */
+import * as THREE from 'three';
+window.THREE=THREE;
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
   WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
