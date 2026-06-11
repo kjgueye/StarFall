@@ -107,5 +107,42 @@ ok(Object.keys(T.CRAFT).length === 14, 'CRAFT count is 14, got ' + Object.keys(T
 ok(T.WEAPONS.lance.ammoUse === 3 && T.WEAPONS.inferno.coneCos === 0.86, 'WEAPONS values');
 ok(T.SLOT_KEYS.length === 8 && T.WEP_KEYS.length === 7 && T.AMMO_KEYS.length === 4, 'key arrays');
 
+/* --- 11. Phase 2 shared geometry + validators --- */
+const L1 = W.surfaceLayout(W.PLANETS.rust), L2 = W.surfaceLayout(W.PLANETS.rust);
+ok(L1.nodes.length === W.NODE_COUNT && L1.rocks.length === 140 && L1.flora.length === 110, 'surfaceLayout counts');
+ok(JSON.stringify(L1) === JSON.stringify(L2), 'surfaceLayout deterministic');
+ok(W.surfaceLayout(W.PLANETS.pelagos).nodes.every(n => isFinite(n.x) && isFinite(n.y)), 'pelagos node layout finite');
+const floorAt = [{t:'floor',pl:'rust',x:0,y:5,z:0,r:0,hp:100}];
+ok(R.groundYAt(floorAt,'rust',0,0,10) === 5.31, 'groundYAt floor top');
+ok(R.groundYAt([],'rust',0,0,10) === W.terrainH(0,0,W.PLANETS.rust), 'groundYAt bare terrain');
+const snap = R.findSnap(floorAt,'rust','wall',2,0,3.2);
+ok(snap && snap.x === 2 && snap.y === 5 && snap.rots[0] === 1, 'findSnap floor edge socket');
+ok(R.findSnap(floorAt,'rust','wall',20,20,3.2) === null, 'findSnap out of range');
+ok(R.occupiedAt(floorAt,'rust','floor',0,5,0) === true && R.occupiedAt(floorAt,'rust','floor',4,5,0) === false, 'occupiedAt');
+const wallHit = R.shotBlocked([{x:0,y:0,z:5,yaw:0,hw:2.5,h:3.2}], [0,1,0], [0,1,10]);
+ok(Array.isArray(wallHit) && Math.abs(wallHit[2]-5) < 1e-9, 'shotBlocked hit');
+ok(R.shotBlocked([{x:50,y:0,z:5,yaw:0,hw:2.5,h:3.2}], [0,1,0], [0,1,10]) === null, 'shotBlocked miss');
+const gy = W.terrainH(0,0,W.PLANETS.rust);
+ok(R.placeError({structures:[],st:{t:'floor',pl:'rust',x:0,y:gy,z:0,r:0},tier:1,res:{fe:10},px:0,pz:0}) === null, 'placeError legal');
+ok(/resources/i.test(R.placeError({structures:[],st:{t:'floor',pl:'rust',x:0,y:gy,z:0,r:0},tier:1,res:{fe:0},px:0,pz:0})), 'placeError rejects broke');
+ok(/Tier/.test(R.placeError({structures:[],st:{t:'turret',pl:'rust',x:0,y:gy,z:0,r:0},tier:1,res:{fe:999,cy:999},px:0,pz:0})), 'placeError rejects tier');
+ok(/far/i.test(R.placeError({structures:[],st:{t:'floor',pl:'rust',x:200,y:W.terrainH(200,0,W.PLANETS.rust),z:0,r:0},tier:1,res:{fe:10},px:0,pz:0})), 'placeError rejects range');
+ok(/height/i.test(R.placeError({structures:[],st:{t:'floor',pl:'rust',x:0,y:gy+200,z:0,r:0},tier:1,res:{fe:10},px:0,pz:0})), 'placeError rejects sky-base');
+ok(R.craftCheck('blade',1,{fe:15},{}).cost.fe === 15, 'craftCheck ok');
+ok(R.craftCheck('blade',1,{fe:15},{blade:true}).err, 'craftCheck already crafted');
+ok(R.craftCheck('rifle',1,{fe:999,cy:999},{}).err, 'craftCheck tier gate');
+ok(R.craftCheck('medpack',3,{cy:6,bio:3},{}).cost.bio === 3, 'craftCheck medpack T3 cost');
+ok(R.tierUpCheck(1,2,{fe:50,cy:25}).cost.fe === 50, 'tierUpCheck ok');
+ok(R.tierUpCheck(1,3,{fe:9999,cy:9999}).err && R.tierUpCheck(1,2,{fe:0,cy:0}).err, 'tierUpCheck rejects skip/broke');
+ok(R.fireCheck({pistol:true},{light:5},2).ammoKey === 'light', 'fireCheck pistol');
+ok(R.fireCheck({},{light:5},2).err && R.fireCheck({pistol:true},{light:0},2).err, 'fireCheck rejects unowned/no-ammo');
+ok(R.fireCheck({lance:true},{heavy:2},4).err && !R.fireCheck({lance:true},{heavy:3},4).err, 'fireCheck lance ammoUse=3');
+ok(R.stationSocketPoints([]).length === 6, 'station core sockets');
+const corePt = R.stationSocketPoints([])[0];
+ok(R.stationPlaceValid([], corePt[0], corePt[1], corePt[2]) === true, 'stationPlaceValid on core socket');
+ok(R.stationPlaceValid([], corePt[0]+5, corePt[1], corePt[2]) === false, 'stationPlaceValid off socket');
+const corridor = {t:'corridor',x:corePt[0],y:corePt[1],z:corePt[2],qx:0,qy:0,qz:0,qw:1};
+ok(R.stationSocketPoints([corridor]).some(s=>Math.abs(s[2]-(corridor.z+5))<1e-6), 'corridor exposes far socket');
+
 console.log(fails === 0 ? '\nALL CHECKS PASS (' + new Date().toISOString() + ')' : '\n' + fails + ' FAILURES');
 process.exitCode = fails ? 1 : 0;

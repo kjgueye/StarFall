@@ -1,10 +1,14 @@
-# STARFALL — Technical & Design Brief
+# ASTRAVOX (formerly Starfall) — Technical & Design Brief
 
 *A complete handoff document for working with an AI assistant to extend the game.*
 
 ---
 
-## 1. What Starfall is
+## 1. What Astravox is
+
+> Renamed from "Starfall" (display name + `astravox_*` localStorage keys only).
+> Infrastructure identifiers — the GitHub repo, Railway service, and
+> `starfall-production` deploy URLs — intentionally keep the old name.
 
 A first-person 3D sci-fi **build & explore** game. You mine resources on alien planets,
 unlock tiers of upgrades, extend how far you can travel (oxygen, jetpack, ship speed),
@@ -27,6 +31,37 @@ Live versions:
 ---
 
 ## 2. Tech stack & how it's written
+
+> **⚠ FOUNDATION MIGRATION (branch `server-migration`) — supersedes parts of this brief.**
+> The game is being converted to a Tier-A persistent online architecture. Done so far:
+> - **Phase 1:** Vite build step. The client now lives in `src/game.js` (ES modules), built to
+>   `dist/`; `index.html` is the Vite entry. All gameplay rules/data live in **`shared/`**
+>   (`constants/catalog/tiers/world/rules.js`) imported by BOTH client and server.
+>   The "single self-contained index.html" constraint below is obsolete.
+> - **Phase 2:** **Server-authoritative simulation.** In co-op the server owns per-player
+>   resources/tier/weapons/ammo/medkits/HP/O2/fuel and validates every intent (build costs,
+>   tier gates, mining range vs the shared node layout, weapon ownership/ammo/cooldowns/range,
+>   safe zones, spawn protection, turrets, grenade AoE, deaths/loot). Clients send intents and
+>   render; grants arrive as `prog` snapshots. Solo offline play is unchanged (`NET.active`
+>   gates everything). See the protocol comment atop `server.js` and `test/authority.mjs`.
+> - **Phase 3:** **Persistence + guest identity** (`store.js`). Worlds are persistent: "host"
+>   creates a `worlds` row with a stable 5-char invite code; "join" rehydrates the world from
+>   the store if it isn't live, so worlds survive server restarts and everyone leaving. The
+>   store is Postgres when `DATABASE_URL` is set (Railway plugin), else a JSON file in
+>   `DATA_DIR` (default `./data`, gitignored) for local dev/tests. Guests: the server mints
+>   `{id, tok}` on first contact (token sha256-hashed at rest), the client keeps it in
+>   localStorage (`astravox_guest_v1`) and sends `auth{id,tok}` on host/join. Per-player-
+>   per-world progress (res/tier/weapons/ammo/medkits/O2/fuel + last position) autosaves
+>   every 25s, on disconnect, on room-empty and on SIGTERM; rejoin restores it (`welcome`
+>   carries `fresh:false` + `loc`). `progRestore` is now ONLY accepted on a player's
+>   first-ever join to a world — it is the one-time legacy localStorage import path (solo
+>   save → "Import Solo Save → New World" button, old MP blobs likewise). Per-world
+>   day/night clock persists. `test/persistence.mjs` proves the full restart cycle.
+>   ⚠ Railway still needs the Postgres plugin attached + `DATABASE_URL` wired; without it
+>   the prod store is an ephemeral file (wiped per deploy).
+> - **Next:** Phase 4 owner moderation (kick/ban/PvP toggle/safe zones/chat safety);
+>   Phase 5 hardening.
+
 
 - **Language:** Plain JavaScript (ES2020), no TypeScript, **no build step**, no framework.
 - **3D engine:** [Three.js](https://threejs.org) **r158**, loaded from cdnjs as a UMD `<script>` (global `THREE`). No imports/modules.
@@ -158,7 +193,7 @@ A large multi-phase expansion. Save is now **v6**; `parseSave` migrates v1–v5 
 - **P4 — Critters & hunting.** Passive fauna from primitives (skitterer/grazer/floater/hopper/skimmer — `CRITTERS`/`CRIT_BY_PLANET`), wander + flee, never attack. Defeating them drops **Chitin** (`S.res.ch`), used in cheaper Med-Pack + ammo recipes. Solo simulates locally; server owns spawns/positions (`critSnap` snapshots, `critHit` → `critDead`). Cap 12/planet, excluded from the Beacon safe zone.
 - **P5 — Heavy weapons** (Armory, tier-gated): **Plasma Grenade** (throw-arc + 3s-fuse AoE, no structure damage), **Deployable Shield** (thrown energy wall that blocks ranged shots 20s — `shieldWalls`/`shotBlocked`), **Lance Beam** (T4 hitscan sniper, scope FOV zoom, 3 Heavy Cells/shot), **Inferno Thrower** (T5 flame cone, burns new Fuel ammo). Hotbar scaled to 8 slots (keys 1-8, `Q` cycle, wraps on mobile). `nade`/`shield` relayed; lance/inferno reuse `fire` (wp 4/5).
 - **P6 — Ocean world Pelagos + Tier 5.** 4th planet (`PLANETS.pelagos`, `water:true`): `terrainHWater` archipelago above an animated water plane (`updateWater`), `SEA_Y=0`. New resource **Abyssal Pearl** (`pe`), nodes on outer islands. Water mechanics: wading slows, deep water sinks + drains O₂ 4× + vignette. **Tier 5** unlocks Pelagos (signal-shield cutscene like Verdant — now generalized to `SHIELDED`/`shieldGroups`/`startShieldCutscene`), the **Rover Hover Module** (skim water at T5), O₂ tank 160→240, and the Inferno recipe. `skimmer` water-critter.
-- **P7 — Orbital Station endgame.** A **Station Core** appears in orbit near Rust at Tier 5 (`STATION_POS`, `stationCore`). Flying near → **DOCK** → **EVA mode** (`S.mode='eva'`): jetpack 6DOF flight around the core, O₂ drains away from the parked ship. **Station pieces** (`STATION`: corridor/habitat/solar/dome/dock/comms) snap to a 3D socket graph (`stationSockets`, quaternion-aligned via `socketQuat`, `R` rolls). Placing all 6 types + ≥10 pieces powers it: **STARFALL STATION ONLINE** celebration (once) + persistent glow. Server stores pieces (`stationPlace`/`stationRemove` → `stationPlaced`/`stationRemoved`) and the online flag, both in welcome.
+- **P7 — Orbital Station endgame.** A **Station Core** appears in orbit near Rust at Tier 5 (`STATION_POS`, `stationCore`). Flying near → **DOCK** → **EVA mode** (`S.mode='eva'`): jetpack 6DOF flight around the core, O₂ drains away from the parked ship. **Station pieces** (`STATION`: corridor/habitat/solar/dome/dock/comms) snap to a 3D socket graph (`stationSockets`, quaternion-aligned via `socketQuat`, `R` rolls). Placing all 6 types + ≥10 pieces powers it: **ASTRAVOX STATION ONLINE** celebration (once) + persistent glow. Server stores pieces (`stationPlace`/`stationRemove` → `stationPlaced`/`stationRemoved`) and the online flag, both in welcome.
 
 **Net messages added across Horizon** (full list lives in the protocol comment atop `server.js`):
 `paint`, `clock`, `critSnap`/`critHit`/`critDead`, `nade`, `shield`, `stationPlace`/`stationRemove`/`stationPlaced`/`stationRemoved`. Damage stays client-authoritative (each victim self-applies); critters/station/nodes/clock are server-authoritative.

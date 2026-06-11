@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared world — planets + the deterministic terrain
+   ASTRAVOX shared world — planets + the deterministic terrain
    stack. Imported by BOTH the browser client and the Node
    server: given the same (x, z, planet) both sides compute the
    exact same height, so the server can validate positions and
@@ -57,3 +57,50 @@ export function terrainHWater(x,z,p){
   return h;
 }
 export function isDeepWaterAt(x,z,p){ return !!p.water && terrainH(x,z,p) < SEA_Y-1.6; }
+
+/* ---------- deterministic surface layout ----------
+   Rocks, flora and the 46 resource nodes for a planet, computed from the
+   planet seed alone. The client renders from this; the server imports the
+   SAME function to learn node positions, so mining can be validated
+   (range, liveness) with zero client trust. The rng call order below is
+   frozen — it reproduces the original buildSurface() sequence exactly. */
+export const NODE_COUNT=46;
+export function surfaceLayout(p){
+  const rng=mulberry32(p.seed*101);
+  const rocks=[];
+  for(let i=0;i<140;i++){
+    const r=30+rng()*330, th=rng()*Math.PI*2;
+    const x=Math.cos(th)*r, z=Math.sin(th)*r;
+    const rx=rng()*6, ry=rng()*6, rz=rng()*6;
+    const s=0.7+rng()*3.4, sy=s*(0.6+rng()*0.8);
+    rocks.push({x,z,rx,ry,rz,s,sy});
+  }
+  const flora=[];
+  for(let i=0;i<110;i++){
+    const r=26+rng()*320, th=rng()*Math.PI*2;
+    const x=Math.cos(th)*r, z=Math.sin(th)*r;
+    const s=0.5+rng()*1.8, ry=rng()*6;
+    flora.push({x,z,s,ry});
+  }
+  const nodes=[];
+  for(let i=0;i<NODE_COUNT;i++){
+    let x,z,y;
+    if(p.water){                     // Pelagos: pearls sit on outer islands across the water
+      for(let tr=0;tr<24;tr++){
+        const ring=70+rng()*230, th=rng()*Math.PI*2;
+        x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
+        if(y>SEA_Y+0.5) break;
+      }
+      if(y<=SEA_Y+0.5) y=SEA_Y+0.5;  // fallback: a shallow shoal
+    } else {
+      const ring=i<10? (14+rng()*40) : (40+rng()*300);
+      const th=rng()*Math.PI*2;
+      x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
+    }
+    const s=0.8+rng()*0.9;
+    const rot=rng()*6;
+    const tx=rng()*0.6, ty=rng()*6, tz=rng()*0.6;   // initial visual tilt
+    nodes.push({x,y,z,s,rot,tx,ty,tz});
+  }
+  return {rocks,flora,nodes};
+}

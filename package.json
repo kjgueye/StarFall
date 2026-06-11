@@ -2,7 +2,7 @@
   "name": "starfall",
   "version": "1.0.0",
   "private": true,
-  "description": "Starfall — sci-fi build & explore game with 1-4 player co-op",
+  "description": "Astravox (formerly Starfall) — sci-fi build & explore game with 1-4 player co-op",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -10,9 +10,14 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "test": "node test/check_shared.mjs"
+    "test": "node test/check_shared.mjs",
+    "test:mp": "node test/with_server.mjs test/mp_smoke.cjs 3997",
+    "test:authority": "node test/with_server.mjs test/authority.mjs 3996",
+    "test:persist": "node test/persistence.mjs 3994",
+    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist"
   },
   "dependencies": {
+    "pg": "^8.21.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

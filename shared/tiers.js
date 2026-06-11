@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared progression — tiers, weapons, ammo, recipes.
+   ASTRAVOX shared progression — tiers, weapons, ammo, recipes.
    Imported by BOTH the browser client and the Node server.
    Pure data, no side effects.
    ============================================================ */

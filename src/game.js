@@ -1,7 +1,7 @@
 "use strict";
 /* ============================================================
-   STARFALL — client. Game data/rules live in ../shared/ and are
-   imported by BOTH this client and the Node server.
+   ASTRAVOX (formerly Starfall) — client. Game data/rules live in
+   ../shared/ and are imported by BOTH this client and the Node server.
    ============================================================ */
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
@@ -11,7 +11,7 @@ import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LI
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
   CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
-import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater } from '../shared/world.js';
+import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout } from '../shared/world.js';
 import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
@@ -81,9 +81,22 @@ function readWeapons(w){ w=w||{}; const o={}; for(const k of WEP_KEYS) o[k]=!!w[
 function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.max(0,a[k]|0); return o; }
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
-const SAVE_KEY='starfall_save_v1';
+const SAVE_KEY='astravox_save_v1';
 const SAVE_VER=6;
-const MP_WORLD_KEY='starfall_mp_world_v1';
+const MP_WORLD_KEY='astravox_mp_world_v1';
+/* Phase 3 — guest identity + persistent worlds */
+const GUEST_KEY='astravox_guest_v1';            // server-minted {id,tok}; our passwordless identity
+const WORLDS_KEY='astravox_worlds_v1';          // recent world codes for quick rejoin
+const SOLO_IMPORTED_KEY='astravox_solo_imported_v1';  // one-time solo-save import done
+function guestAuth(){ try{ const g=JSON.parse(localStorage.getItem(GUEST_KEY)); if(g&&g.id&&g.tok) return {id:g.id,tok:g.tok}; }catch(e){} return undefined; }
+function recentWorlds(){ try{ return JSON.parse(localStorage.getItem(WORLDS_KEY))||[]; }catch(e){ return []; } }
+function recordWorld(code){
+  try{
+    const l=recentWorlds().filter(w=>w&&w.code!==code);
+    l.unshift({code,at:Date.now()});
+    localStorage.setItem(WORLDS_KEY,JSON.stringify(l.slice(0,8)));
+  }catch(e){}
+}
 
 /* ============================================================
    NETWORK — co-op client. Every MP behavior is gated on NET.active;
@@ -123,7 +136,7 @@ const NET={
 };
 function mpStatus(s){ const el=$('mpStatus'); if(el) el.textContent=s; }
 function myPid(){ return NET.active?NET.pid:'self'; }
-function mpPlayerKey(){ return 'starfall_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
+function mpPlayerKey(){ return 'astravox_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
 function updateRoomBadge(){
   const b=$('roomBadge');
   b.classList.toggle('hidden',!NET.active);
@@ -175,7 +188,88 @@ function netHandle(m){
     case 'shield': onRemoteShield(m); break;
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
     case 'stationRemoved': applyStationRemovedById(m.id,m.by===NET.pid); break;
+    case 'prog': applyProg(m); break;
+    case 'vitals':
+      if(typeof m.o2==='number'&&Math.abs(S.o2-m.o2)>8) S.o2=clamp(m.o2,0,o2Max());
+      if(typeof m.fuel==='number'&&Math.abs(S.fuel-m.fuel)>12) S.fuel=clamp(m.fuel,0,100);
+      break;
+    case 'blackout':
+      if(S.running&&S.o2<10){ if(S.mode==='eva') evaEmergency(); else if(S.mode==='surface') doBlackout(); }
+      break;
+    case 'hurt': onHurt(m); break;
+    case 'pdeath': onPDeath(m); break;
+    case 'tfire': onTurretFire(m); break;
   }
+}
+/* ---- server-authoritative damage/death (Phase 2.3) ---- */
+function onHurt(m){
+  player.hp=Math.max(0,Math.min(HP_MAX,+m.hp||0));
+  NET.lastHitBy=m.by;
+  if(S.mode==='surface'){
+    dmgFlashFx(); SND.hurt();
+    spawnBurst(player.x,player.y+1.2,player.z,0xff4040,8,2,2,0.4,3);
+  }
+}
+function onPDeath(m){
+  NET.lastHitBy=m.by;
+  S.res.fe=0; S.res.cy=0; S.res.bio=0; updateHUDRes();   // server dropped the cache; prog confirms
+  if(S.mode==='surface'){
+    spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
+    spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
+  }
+  SND.impact();
+  if(S.mode==='surface'&&surf.built) respawnPlayer();
+  else { player.hp=HP_MAX; player.invuln=SPAWN_PROT; }
+}
+function onTurretFire(m){
+  if(S.mode!=='surface') return;
+  const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
+  if(!st||st.pl!==S.planet||!Array.isArray(m.p)) return;
+  tracerFx([st.x,st.y+1.35,st.z],m.p,0xff6a4a);
+  const dxs=player.x-st.x,dzs=player.z-st.z;
+  if(dxs*dxs+dzs*dzs<1600) SND.shoot();
+}
+/* ---- server-authoritative progress (Phase 2) ----
+   In co-op the server owns resources/tier/weapons/ammo/medkits; every grant
+   or payment arrives as a `prog` snapshot. The client only predicts. */
+function mpProgBlob(){
+  return {tier:S.tier,res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},
+    weapons:saveWeapons(),ammo:saveAmmo(),medkits:S.medkits|0,o2:S.o2|0,fuel:S.fuel|0};
+}
+function applyProg(m){
+  if(!m||!m.res) return;
+  S.res={fe:m.res.fe|0,cy:m.res.cy|0,bio:m.res.bio|0,ch:m.res.ch|0,pe:m.res.pe|0};
+  const newTier=clamp(m.tier|0,1,TIERS.length);
+  const tierRose=newTier>S.tier;
+  S.tier=newTier;
+  S.weapons=readWeapons(m.weapons);
+  S.ammo=readAmmo(m.ammo);
+  S.medkits=Math.max(0,m.medkits|0);
+  if(typeof m.hp==='number') player.hp=clamp(m.hp,0,HP_MAX);
+  if(!ownsSlot(S.slot)){ S.slot=0; updateViewmodel(); }
+  updateHUDRes(); updateTierBadge(); renderHotbar();
+  if(m.ev) progEvent(m.ev);
+  else if(tierRose) renderTierList();   // restore from blob: refresh menus, no fanfare
+  saveGame();
+}
+function progEvent(ev){
+  if(ev.type==='gain'&&ev.amt>0){ SND.collect(); showToast('+'+ev.amt+' '+RES_NAMES[ev.k]); }
+  else if(ev.type==='craft'){
+    const c=CRAFT[ev.key];
+    if(c){ SND.craft();
+      if(c.kind==='ammo') showToast('+'+c.give+' '+AMMO_NAMES[c.ammo]);
+      else if(c.kind==='throwable') showToast('+'+c.give+' '+c.name.replace(/ ×\d+$/,'')+'s');
+      else if(c.kind==='med') showToast('Med-Pack crafted ('+S.medkits+')');
+      else showToast(c.name+' crafted — equip from hotbar');
+    }
+    if(!$('craftMenu').classList.contains('hidden')) renderCraftGrid();
+  }
+  else if(ev.type==='med'){
+    /* hp itself arrived in this prog snapshot */
+    SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
+    showToast('+50 HP');
+  }
+  else if(ev.type==='tier') applyTierUp(ev.n);
 }
 /* chat / system message overlay (also used by Phase 5) */
 const chatMsgs=[];
@@ -423,7 +517,7 @@ try{
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
   renderer.setSize(window.innerWidth,window.innerHeight);
 }catch(e){
-  document.body.innerHTML='<div style="color:#9fdcf5;padding:40px;font-size:18px">Starfall requires WebGL, which this browser does not support.</div>';
+  document.body.innerHTML='<div style="color:#9fdcf5;padding:40px;font-size:18px">Astravox requires WebGL, which this browser does not support.</div>';
   throw e;
 }
 camera=new THREE.PerspectiveCamera(74,window.innerWidth/window.innerHeight,0.1,3000);
@@ -809,10 +903,11 @@ function sendPU(){
   if(S.mode==='surface'){
     NET.send({t:'pu',pos:[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)],
       yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet,
-      wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0});
+      wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0,
+      sp:puSprint?1:0, jt:puJet?1:0});
   } else if(S.mode==='eva'){
     NET.send({t:'pu',pos:[+evaPos.x.toFixed(1),+evaPos.y.toFixed(1),+evaPos.z.toFixed(1)],
-      yaw:+evaYaw.toFixed(3),pitch:+evaPitch.toFixed(3),mode:'space',pl:S.planet});
+      yaw:+evaYaw.toFixed(3),pitch:+evaPitch.toFixed(3),mode:'space',pl:S.planet,ev:1});
   } else {
     NET.send({t:'pu',pos:[+ship.position.x.toFixed(1),+ship.position.y.toFixed(1),+ship.position.z.toFixed(1)],
       yaw:+S.syaw.toFixed(3),pitch:+S.spitch.toFixed(3),mode:'space',pl:S.planet});
@@ -894,19 +989,18 @@ function buildSurface(planetKey){
     surf.water={mesh:water,geo:wg,base:wg.attributes.position.array.slice()};
   }
 
-  /* rocks (instanced) */
-  const rng=mulberry32(p.seed*101);
+  /* rocks / flora / resource nodes — deterministic shared layout
+     (the server validates mining against the SAME node data) */
+  const layout=surfaceLayout(p);
   {
-    const im=new THREE.InstancedMesh(GEO.dodec,stdMat(p.rockCol,{roughness:0.95,metalness:0.05}),140);
+    const im=new THREE.InstancedMesh(GEO.dodec,stdMat(p.rockCol,{roughness:0.95,metalness:0.05}),layout.rocks.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<140;i++){
-      const r=30+rng()*330, th=rng()*Math.PI*2;
-      const x=Math.cos(th)*r, z=Math.sin(th)*r;
-      d.position.set(x,terrainH(x,z,p)+0.1,z);
-      d.rotation.set(rng()*6,rng()*6,rng()*6);
-      const s=0.7+rng()*3.4; d.scale.set(s,s*(0.6+rng()*0.8),s);
+    layout.rocks.forEach((rk,i)=>{
+      d.position.set(rk.x,terrainH(rk.x,rk.z,p)+0.1,rk.z);
+      d.rotation.set(rk.rx,rk.ry,rk.rz);
+      d.scale.set(rk.s,rk.sy,rk.s);
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; g.add(im);
   }
   /* flora / planet-specific props (instanced) */
@@ -914,46 +1008,28 @@ function buildSurface(planetKey){
     const isV=planetKey==='verdant';
     const mat=isV? emisMat(p.floraCol,0x5a1a8a,0.8) : stdMat(p.floraCol,{roughness:0.85});
     const geo=isV? GEO.sphere : GEO.cone;
-    const im=new THREE.InstancedMesh(geo,mat,110);
+    const im=new THREE.InstancedMesh(geo,mat,layout.flora.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<110;i++){
-      const r=26+rng()*320, th=rng()*Math.PI*2;
-      const x=Math.cos(th)*r, z=Math.sin(th)*r;
-      const s=0.5+rng()*1.8;
-      d.position.set(x,terrainH(x,z,p)+(isV? s*0.8 : s*0.5),z);
-      d.rotation.set(0,rng()*6,0);
-      d.scale.set(s*(isV?1:0.7),s*(isV?1.6:1.6),s*(isV?1:0.7));
+    layout.flora.forEach((f,i)=>{
+      d.position.set(f.x,terrainH(f.x,f.z,p)+(isV? f.s*0.8 : f.s*0.5),f.z);
+      d.rotation.set(0,f.ry,0);
+      d.scale.set(f.s*(isV?1:0.7),f.s*1.6,f.s*(isV?1:0.7));
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; g.add(im);
   }
   /* resource nodes (instanced crystals) */
   {
     surf.nodes=[];
-    const NN=46;
-    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),NN);
+    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),layout.nodes.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<NN;i++){
-      let x,z,y;
-      if(p.water){                     // Pelagos: pearls sit on outer islands across the water
-        for(let tr=0;tr<24;tr++){
-          const ring=70+rng()*230, th=rng()*Math.PI*2;
-          x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
-          if(y>SEA_Y+0.5) break;
-        }
-        if(y<=SEA_Y+0.5) y=SEA_Y+0.5;  // fallback: a shallow shoal
-      } else {
-        const ring=i<10? (14+rng()*40) : (40+rng()*300);
-        const th=rng()*Math.PI*2;
-        x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
-      }
-      const s=0.8+rng()*0.9;
-      surf.nodes.push({x,y,z,s,alive:true,respawn:0,rot:rng()*6});
-      d.position.set(x,y+s*0.45,z);
-      d.rotation.set(rng()*0.6,rng()*6,rng()*0.6);
-      d.scale.set(s,s*1.7,s);
+    layout.nodes.forEach((nd,i)=>{
+      surf.nodes.push({x:nd.x,y:nd.y,z:nd.z,s:nd.s,alive:true,respawn:0,rot:nd.rot});
+      d.position.set(nd.x,nd.y+nd.s*0.45,nd.z);
+      d.rotation.set(nd.tx,nd.ty,nd.tz);
+      d.scale.set(nd.s,nd.s*1.7,nd.s);
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; surf.nodeMesh=im; g.add(im);
     const glows=new THREE.Group();
     for(const nd of surf.nodes){
@@ -1172,28 +1248,8 @@ function updateDoors(dt){
   }
 }
 
-/* walkable height: terrain + floors/ramps/crates */
-function groundYAt(x,z,curY){
-  const p=curP();
-  let g=terrainH(x,z,p);
-  for(const t of ['floor','ramp','crate','foundation','halffloor','flatroof']){
-    const list=placedByType[t]||[];
-    for(const st of list){
-      toLocal(st,x,z,_loc);
-      const lx=_loc.lx, lz=_loc.lz;
-      let top=null;
-      if((t==='floor'||t==='flatroof')&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
-      else if(t==='halffloor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=1.05) top=st.y+0.31;
-      else if(t==='foundation'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+1.01;
-      else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
-      else if(t==='ramp'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.1){
-        const tt=clamp((2-lz)/4,0,1); top=st.y+0.31+tt*3;
-      }
-      if(top!==null&&curY>=top-0.7&&top>g) g=top;
-    }
-  }
-  return g;
-}
+/* walkable height: terrain + floors/ramps/crates — shared logic, S.* state */
+function groundYAt(x,z,curY){ return R.groundYAt(S.structures,S.planet,x,z,curY); }
 
 /* ============================================================
    PLAYER (surface) + first-person tool
@@ -1273,7 +1329,7 @@ function applyNodeDead(pl,i,byMe){
       spawnBurst(nd.x,nd.y+nd.s,nd.z,PLANETS[pl].nodeCol,16,4,4,0.9,7);
     }
   }
-  if(byMe){
+  if(byMe&&!NET.active){   // co-op: the server grants and confirms via prog
     const key=PLANETS[pl].res, amt=4+Math.floor(Math.random()*3);
     S.res[key]=Math.max(S.res[key],Math.min(carryCap(),S.res[key]+amt));
     SND.collect();
@@ -1346,29 +1402,9 @@ function cancelBuild(){
   $('mPlace').classList.add('hidden');
   $('mFree').classList.add('hidden');
 }
-/* nearest valid socket to the aim point, or null */
-function findSnap(ax,az){
-  let best=null, bestD=SNAP_R*SNAP_R;
-  for(const st of S.structures){
-    if(st.pl!==S.planet) continue;
-    const hdef=CAT[st.t]; if(!hdef.sockets) continue;
-    const a=st.r*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
-    for(const sk of hdef.sockets){
-      if(sk.accept.indexOf(buildSel)<0) continue;
-      const wx=st.x+sk.p[0]*c+sk.p[2]*s, wz=st.z-sk.p[0]*s+sk.p[2]*c;
-      const d=(wx-ax)*(wx-ax)+(wz-az)*(wz-az);
-      if(d<bestD){ bestD=d; best={x:wx,y:st.y+sk.p[1],z:wz,rots:sk.rots.map(r=>(r+st.r)%4)}; }
-    }
-  }
-  return best;
-}
-function occupiedAt(x,y,z){
-  for(const st of S.structures){
-    if(st.pl!==S.planet||st.t!==buildSel) continue;
-    if(Math.abs(st.x-x)<0.25&&Math.abs(st.y-y)<0.25&&Math.abs(st.z-z)<0.25) return true;
-  }
-  return false;
-}
+/* nearest valid socket to the aim point, or null — shared logic, S.* state */
+function findSnap(ax,az){ return R.findSnap(S.structures,S.planet,buildSel,ax,az,SNAP_R); }
+function occupiedAt(x,y,z){ return R.occupiedAt(S.structures,S.planet,buildSel,x,y,z); }
 function updateGhost(){
   if(!buildSel||!ghost) return;
   const def=CAT[buildSel];
@@ -1436,7 +1472,7 @@ function applyPlaced(m,byMe){
     refreshStructures();
     spawnBurst(st.x,st.y+1,st.z,0x7fd6ff,12,3,3,0.6,5);
   } else updateCapNote();
-  if(byMe){ payCost(def.cost); SND.place(); }
+  if(byMe){ if(!NET.active) payCost(def.cost); SND.place(); }   // co-op: server pays, prog confirms
   if(st.t==='beacon'){
     S.beacon=true;
     if(byMe) cancelBuild();
@@ -1474,7 +1510,7 @@ function applyRemovedById(id,byMe){
 }
 function applyRemoved(st,byMe){
   const def=CAT[st.t];
-  if(byMe){
+  if(byMe&&!NET.active){   // co-op: the server refunds and confirms via prog
     const rf=R.refundFor(def.cost); for(const k in rf) S.res[k]=Math.min(carryCap(),S.res[k]+rf[k]);
     updateHUDRes();
   }
@@ -1511,9 +1547,9 @@ function updateRepair(dt,interactHeld,target){
   repairHold+=dt;
   if(Math.random()<dt*10) spawnBurst(target.x,target.y+1.2,target.z,0x7fd6ff,2,1.5,2,0.4,4);
   if(repairHold>=0.8){
-    repairHold=0; S.res.fe-=2; updateHUDRes();
-    if(NET.active) NET.send({t:'repair',id:target.id});
-    else applyHp(target,CAT[target.t].hp);
+    repairHold=0;
+    if(NET.active) NET.send({t:'repair',id:target.id});   // server pays the 2 Ferrite + confirms
+    else { S.res.fe-=2; updateHUDRes(); applyHp(target,CAT[target.t].hp); }
     SND.place(); showToast(CAT[target.t].name+' repaired');
   }
   return true;
@@ -1553,7 +1589,7 @@ function applyPaint(st,col){
 function applyPaintById(id,col){ const st=S.structures.find(s=>s.id===id); if(st) applyPaint(st,col); }
 
 /* ---------- blueprints ---------- */
-const BP_KEY='starfall_blueprints_v1';   /* BP_MAX imported from shared/constants.js */
+const BP_KEY='astravox_blueprints_v1';   /* BP_MAX imported from shared/constants.js */
 let bpSelecting=false, bpDrag=null;   // {x0,y0}
 function loadBlueprints(){ try{ return JSON.parse(localStorage.getItem(BP_KEY))||{}; }catch(e){ return {}; } }
 function saveBlueprints(b){ try{ localStorage.setItem(BP_KEY,JSON.stringify(b)); }catch(e){} }
@@ -1656,7 +1692,7 @@ function placeStamp(){
   const cost=bpCost(bpStamp);
   if(!bpStamp._ok){ if(!canAfford(cost)) showToast('Need '+costStr(cost)); else showToast('Cannot stamp here'); SND.denied(); return; }
   if(structCount()+bpStamp.pieces.length>MAX_STRUCT){ showToast('Would exceed the '+MAX_STRUCT+'-piece limit'); SND.denied(); return; }
-  payCost(cost);
+  if(!NET.active) payCost(cost);   // co-op: server pays per accepted piece
   const at=bpStamp._at, a=bpStampRot*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
   for(const q of bpStamp.pieces){
     const wx=at.x+q.dx*c+q.dz*s, wz=at.z-q.dx*s+q.dz*c, wy=at.y+q.dy, wr=((q.r+bpStampRot)%4+4)%4;
@@ -1843,9 +1879,9 @@ function doAttack(w,wp,kind){
   if(hitPid!==null) spawnBurst(end[0],end[1],end[2],0xffd0a0,9,2,2,0.4,3);
   if(NET.active){
     NET.send({t:'fire',wp,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+end[0].toFixed(2),+end[1].toFixed(2),+end[2].toFixed(2)],
-      target:hitPid!==null?hitPid:undefined,dmg:hitPid!==null?w.dmg:undefined});
+      target:hitPid!==null?hitPid:undefined});   // damage is computed server-side
   }
-  if(critTarget) hitCritter(critTarget,w.dmg,end);
+  if(critTarget) hitCritter(critTarget,w.dmg,end,wp);
 }
 function muzzleAt(pos,col){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW_TEX,color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -1862,7 +1898,7 @@ function onRemoteFire(m){
       const col=m.wp===2?0xffd060:0x7fff9a; if(m.o){ tracerFx(m.o,m.p,col); muzzleAt(m.o,col); }
     } else { spawnBurst(m.p[0],m.p[1],m.p[2],0x9feaff,5,2,2,0.3,1); const r=remotes.get(m.by); if(r) r.swingT=0.26; }
   }
-  if(m.target===NET.pid&&m.dmg){ NET.lastHitBy=m.by; applyDamageToSelf(m.dmg); }
+  /* damage no longer rides the fire relay — the server sends 'hurt'/'pdeath' */
 }
 function openCraftMenu(){ renderCraftGrid(); openPanel('craftMenu'); }
 
@@ -1966,6 +2002,7 @@ function updateRover(dt){
   /* driver shares rover location for O2/turret/meteor systems */
   player.x=st.x; player.z=st.z; player.y=st.y;
   /* O2 (open-top cockpit) */
+  puSprint=false; puJet=false;
   const safe=inO2Range();
   if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt); else S.o2=Math.max(0,S.o2-1.15*dt);
   if(S.o2<=0){ exitRover(); doBlackout(); return; }
@@ -1996,6 +2033,7 @@ function dmgFlashFx(){
   setTimeout(()=>{ f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0)'; },120);
 }
 function applyDamageToSelf(dmg){
+  if(NET.active) return;   // co-op damage arrives only via server 'hurt'/'pdeath'
   if(!S.running||S.mode!=='surface') return;
   if(player.invuln>0||inSafeZone(player.x,player.z)) return;
   player.hp=Math.max(0,player.hp-dmg);
@@ -2005,14 +2043,14 @@ function applyDamageToSelf(dmg){
 }
 let soloLootId=1;
 function die(){
+  /* solo only — in co-op the server decides deaths and sends 'pdeath' */
   const loot={fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0};
   S.res={fe:0,cy:0,bio:0,ch:S.res.ch|0,pe:S.res.pe|0}; updateHUDRes();   // Chitin & Pearls kept through death
   spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
   spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
   SND.impact();
   const pos=[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)];
-  if(NET.active) NET.send({t:'died',by:NET.lastHitBy||0,pos,loot});
-  else if(loot.fe||loot.cy||loot.bio) spawnLootBox('Lsolo'+(soloLootId++),S.planet,pos,loot);
+  if(loot.fe||loot.cy||loot.bio) spawnLootBox('Lsolo'+(soloLootId++),S.planet,pos,loot);
   respawnPlayer();
 }
 function respawnPlayer(){
@@ -2040,11 +2078,14 @@ function spawnLootBox(id,pl,pos,loot){
 function removeLootBox(id){ const c=lootBoxes.get(id); if(c){ surfScene.remove(c.mesh); lootBoxes.delete(id); } }
 function clearLoot(){ for(const id of [...lootBoxes.keys()]) removeLootBox(id); }
 function addLoot(loot){
-  const cap=carryCap();
-  S.res.fe=Math.min(cap,S.res.fe+(loot.fe|0));
-  S.res.cy=Math.min(cap,S.res.cy+(loot.cy|0));
-  S.res.bio=Math.min(cap,S.res.bio+(loot.bio|0));
-  updateHUDRes(); SND.collect(); showToast('Recovered cache');
+  if(!NET.active){   // co-op: the server grants on lootClaim and confirms via prog
+    const cap=carryCap();
+    S.res.fe=Math.min(cap,S.res.fe+(loot.fe|0));
+    S.res.cy=Math.min(cap,S.res.cy+(loot.cy|0));
+    S.res.bio=Math.min(cap,S.res.bio+(loot.bio|0));
+    updateHUDRes();
+  }
+  SND.collect(); showToast('Recovered cache');
 }
 function updateLoot(dt){
   for(const [id,c] of lootBoxes){
@@ -2092,6 +2133,7 @@ function craft(key){
   if((c.kind==='weapon'||c.kind==='gadget')&&S.weapons[c.own||key]){ showToast('Already crafted'); return; }
   const cost=key==='medpack'?medCost():c.cost;
   if(!canAfford(cost)){ SND.denied(); showToast('Need '+costStr(cost)); return; }
+  if(NET.active){ NET.send({t:'craft',key}); return; }   // server validates, pays & confirms
   payCost(cost);
   if(c.kind==='weapon'){ S.weapons[key]=true; showToast(c.name+' crafted — equip from hotbar'); }
   else if(c.kind==='ammo'){ S.ammo[c.ammo]+=c.give; showToast('+'+c.give+' '+AMMO_NAMES[c.ammo]); }
@@ -2104,6 +2146,7 @@ function craft(key){
 function useMed(){
   if(S.medkits<=0){ showToast('No Med-Packs — craft at an Armory'); SND.denied(); return; }
   if(player.hp>=HP_MAX){ showToast('Health already full'); return; }
+  if(NET.active){ NET.send({t:'useMed'}); return; }   // server spends the kit; heal lands via prog ev
   S.medkits--; player.hp=Math.min(HP_MAX,player.hp+50);
   SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
   showToast('+50 HP'); renderHotbar(); saveGame();
@@ -2179,7 +2222,7 @@ function updateTurrets(dt){
     let dy=desired-st._tyaw; dy=((dy+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-Math.PI;
     st._tyaw+=dy*Math.min(1,dt*6);
     for(const pi of def.headParts){ structMatrixHead(st,def.parts[pi],_doorM,st._tyaw); structMeshes.turret[pi].setMatrixAt(i,_doorM); }
-    if(tg&&st.hp>0){
+    if(tg&&st.hp>0&&!NET.active){   // co-op: the SERVER simulates turret fire ('tfire')
       st._tfire=(st._tfire||0)-dt;
       if(st._tfire<=0&&Math.abs(dy)<0.5){ st._tfire=TURRET_CD; turretFire(st,tg); }
     } else st._tfire=0.4;
@@ -2276,9 +2319,10 @@ function startleCritters(x,z,r){
   if(NET.active) return; const r2=r*r;
   for(const c of critters){ const dx=c.x-x,dz=c.z-z; if(dx*dx+dz*dz<r2){ c.startle=Math.max(c.startle,1.8); c.state='flee'; } }
 }
-/* apply damage to a critter (server-authoritative in MP) — shared by gun/grenade/flame */
-function damageCritter(c,dmg){
-  if(NET.active){ NET.send({t:'critHit',id:c.id,dmg}); c.startle=2; c.st=1; c.state='flee'; return; }
+/* apply damage to a critter (server-authoritative in MP) — shared by gun/grenade/flame.
+   In co-op we send the WEAPON used; the server computes damage itself. */
+function damageCritter(c,dmg,wp){
+  if(NET.active){ NET.send({t:'critHit',id:c.id,wp:wp===undefined?S.slot:wp}); c.startle=2; c.st=1; c.state='flee'; return; }
   c.hp-=dmg; c.startle=2.5; c.state='flee';
   if(c.hp<=0){
     const n=c.def.ch[0]+Math.floor(Math.random()*(c.def.ch[1]-c.def.ch[0]+1));
@@ -2286,9 +2330,9 @@ function damageCritter(c,dmg){
   }
 }
 /* called by doAttack when a critter is the aim target */
-function hitCritter(c,dmg,pos){
+function hitCritter(c,dmg,pos,wp){
   spawnBurst(pos[0],pos[1],pos[2],c.poofCol||0xffd0a0,6,1.6,1.6,0.3,2);
-  damageCritter(c,dmg);
+  damageCritter(c,dmg,wp);
 }
 /* ground level a critter rides at — water creatures stay on the sea surface */
 function critGroundY(x,z){ const p=curP(); const g=terrainH(x,z,p); return p.water?Math.max(g,SEA_Y):g; }
@@ -2382,7 +2426,7 @@ function onCritDead(m){
   const x=c?c.x:m.x, z=c?c.z:m.z, y=c?c.y:terrainH(m.x,m.z,curP())+0.4;
   critterPoof(x,y,z,c?c.poofCol:0xcfe0d8);
   if(c) removeCritterEntity(m.id);
-  if(m.by===NET.pid&&m.ch) addChitin(m.ch);
+  /* the Chitin grant arrives via the server's prog snapshot */
 }
 function updateCritters(dt){ if(NET.active) updateCrittersMP(dt); else updateCrittersSolo(dt); }
 function soloSpawnInitial(){
@@ -2462,11 +2506,11 @@ function explodeGrenade(t){
   /* players: each client applies blast to ITSELF (safe zone / invuln respected) */
   const dx=player.x-t.x, dy=(player.y+1)-t.y, dz=player.z-t.z, d=Math.hypot(dx,dy,dz);
   if(d<GREN_R){ const dmg=Math.round(GREN_DMG*(1-d/GREN_R)); if(dmg>0) applyDamageToSelf(dmg); }
-  /* critters: only the owner's grenade deals damage (avoids double in MP) */
-  if(t.owned){
+  /* critters: solo only — in co-op the server resolves the blast on its own sim */
+  if(t.owned&&!NET.active){
     for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
       const cd=Math.hypot(c.x-t.x,(c.y+0.4)-t.y,c.z-t.z);
-      if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)));
+      if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)),6);
     }
   }
   /* grenades do NOT damage structures (by design) */
@@ -2495,21 +2539,8 @@ function updateShieldWalls(dt){
     w.panel.material.opacity=0.12+0.12*Math.abs(Math.sin(performance.now()*0.004))*(w.t<3?w.t/3:1);
   }
 }
-/* segment(o->e) vs shield-wall rectangles; returns the hit point or null */
-function shotBlocked(o,e){
-  for(const w of shieldWalls){
-    const nx=Math.sin(w.yaw), nz=Math.cos(w.yaw);
-    const denom=(e[0]-o[0])*nx+(e[2]-o[2])*nz;
-    if(Math.abs(denom)<1e-6) continue;
-    const t=((w.x-o[0])*nx+(w.z-o[2])*nz)/denom;
-    if(t<=0.02||t>=1) continue;
-    const hx=o[0]+(e[0]-o[0])*t, hy=o[1]+(e[1]-o[1])*t, hz=o[2]+(e[2]-o[2])*t;
-    const tx=Math.cos(w.yaw), tz=-Math.sin(w.yaw);
-    const u=(hx-w.x)*tx+(hz-w.z)*tz, v=hy-w.y;
-    if(Math.abs(u)<=w.hw&&v>=-0.2&&v<=w.h) return [hx,hy,hz];
-  }
-  return null;
-}
+/* segment(o->e) vs shield-wall rectangles — shared logic over local walls */
+function shotBlocked(o,e){ return R.shotBlocked(shieldWalls,o,e); }
 /* ---- throwing ---- */
 function throwGadget(w){
   if(w.thrown==='grenade'){
@@ -2561,7 +2592,7 @@ function fireInferno(w){
       const dx=c.x-_cw.x, dy=(c.y+0.4)-_cw.y, dz=c.z-_cw.z, d=Math.hypot(dx,dy,dz);
       if(d>w.range||d<0.1) continue;
       if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
-      damageCritter(c,w.dmg);
+      damageCritter(c,w.dmg,5);
     }
     if(NET.active){
       const tip=aimPoint(w.range);
@@ -2571,7 +2602,7 @@ function fireInferno(w){
         if(d>w.range||d<0.1) continue;
         if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
         if(inSafeZone(r.avatar.position.x,r.avatar.position.z)) continue;
-        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+ctr[0].toFixed(2),+ctr[1].toFixed(2),+ctr[2].toFixed(2)],target:pid,dmg:w.dmg}); sent=true;
+        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+ctr[0].toFixed(2),+ctr[1].toFixed(2),+ctr[2].toFixed(2)],target:pid}); sent=true;
       }
       const nw=performance.now();
       if(!sent&&nw-infNetT>150){ infNetT=nw;
@@ -2895,7 +2926,12 @@ function renderTierList(){
 function unlockTier(n){
   const td=TIERS[n-1];
   if(n!==S.tier+1||!canAfford(td.cost)){ SND.denied(); return; }
+  if(NET.active){ NET.send({t:'tierUp'}); return; }   // server validates, pays & confirms
   payCost(td.cost);
+  applyTierUp(n);
+}
+function applyTierUp(n){
+  const td=TIERS[n-1];
   S.tier=n;
   SND.tierUp(); flashFx();
   spawnBurst(player.x,player.y+1.5,player.z,0x9feaff,30,5,6,1.3,4);
@@ -3334,7 +3370,7 @@ function checkStationComplete(){
   updateStationVisibility();
 }
 function stationOnlineCelebration(){
-  SND.victory(); showToast('★ STARFALL STATION ONLINE ★',6000); flashFx();
+  SND.victory(); showToast('★ ASTRAVOX STATION ONLINE ★',6000); flashFx();
   for(let i=0;i<18;i++) setTimeout(()=>{
     if(!S.running) return;
     const a=Math.random()*6.28, b=Math.random()*6.28, r=14+Math.random()*18;
@@ -3382,7 +3418,7 @@ function applyStationPlaced(m,byMe){
   if(!STATION[m.t]) return;
   const pc={t:m.t,x:m.x,y:m.y,z:m.z,qx:m.qx,qy:m.qy,qz:m.qz,qw:m.qw,r:m.r|0}; if(m.id!==undefined) pc.id=m.id;
   S.station.push(pc); refreshStation();
-  if(byMe){ payCost(STATION[m.t].cost); SND.place(); spawnBurst(m.x,m.y,m.z,0x7fd6ff,16,4,4,0.8,0);
+  if(byMe){ if(!NET.active) payCost(STATION[m.t].cost); SND.place(); spawnBurst(m.x,m.y,m.z,0x7fd6ff,16,4,4,0.8,0);
     if(!canAfford(STATION[m.t].cost)) cancelStation(); saveGame(); }
   checkStationComplete();
 }
@@ -3398,7 +3434,7 @@ function applyStationRemovedById(id,byMe){ const i=S.station.findIndex(p=>p.id==
 function applyStationRemoved(pc,byMe){
   const i=S.station.indexOf(pc); if(i<0) return;
   S.station.splice(i,1); refreshStation();
-  if(byMe){ for(const k in STATION[pc.t].cost) S.res[k]=Math.min(carryCap?carryCap():99999,(S.res[k]||0)+Math.floor(STATION[pc.t].cost[k]/2)); updateHUDRes(); SND.remove(); saveGame(); }
+  if(byMe){ if(!NET.active){ for(const k in STATION[pc.t].cost) S.res[k]=Math.min(carryCap(),(S.res[k]||0)+Math.floor(STATION[pc.t].cost[k]/2)); updateHUDRes(); } SND.remove(); saveGame(); }
   updateStationVisibility();
 }
 /* ---------- EVA mode ---------- */
@@ -3558,7 +3594,7 @@ function updateSpaceHUD(){
 /* ============================================================
    SURFACE UPDATE
    ============================================================ */
-let o2BeepT=0, footT=0;
+let o2BeepT=0, footT=0, puSprint=false, puJet=false;   // activity flags reported to the server
 function updateSurface(dt){
   if(anyPanelOpen()||transitioning){ justE=false; renderSurfaceCam(); return; }
   const p=curP();
@@ -3616,6 +3652,7 @@ function updateSurface(dt){
   /* head bob */
   footT+=im*dt*(sprinting?11:7);
   /* --- O2 --- */
+  puSprint=sprinting; puJet=jetting;
   const safe=inO2Range();
   if(submerged) S.o2=Math.max(0,S.o2-4.6*dt);            // deep water: ~4x drain, no air
   else if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt);
@@ -3770,32 +3807,59 @@ function startGame(fromSave){
 let mpMode='host';
 function openMpSetup(mode){
   mpMode=mode;
-  $('mpTitle').textContent=mode==='host'?'Host Co-op Game':'Join Co-op Game';
+  $('mpTitle').textContent=mode==='host'?'Create Online World':'Join World by Code';
   $('mpCode').classList.toggle('hidden',mode==='host');
-  $('mpGo').textContent=mode==='host'?'Host New World':'Join Game';
+  $('mpGo').textContent=mode==='host'?'Create New World':'Join World';
   let snap=null;
   try{ snap=JSON.parse(localStorage.getItem(MP_WORLD_KEY)); }catch(e){}
   $('mpHostPrev').classList.toggle('hidden',!(mode==='host'&&snap&&snap.v===1));
-  try{ $('mpName').value=localStorage.getItem('starfall_name')||''; }catch(e){}
+  /* one-time solo-save import (Phase 3) */
+  let solo=false;
+  try{ solo=!!localStorage.getItem(SAVE_KEY)&&!localStorage.getItem(SOLO_IMPORTED_KEY); }catch(e){}
+  $('mpImportSolo').classList.toggle('hidden',!(mode==='host'&&solo));
+  /* recent worlds: tap to fill the code box */
+  const rec=mode==='join'?recentWorlds():[];
+  $('mpRecent').innerHTML=rec.length
+    ?'<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">RECENT WORLDS</div>'
+      +rec.map(w=>'<button class="menuBtn" data-code="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
+    :'';
+  try{ $('mpName').value=localStorage.getItem('astravox_name')||''; }catch(e){}
   mpStatus('');
   openPanel('mpSetup');
 }
 function mpBegin(world){
   const name=$('mpName').value.trim().slice(0,16);
   if(!name){ mpStatus('Enter a name first'); return; }
-  try{ localStorage.setItem('starfall_name',name); }catch(e){}
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
   NET.name=name;
   SND.ensure();
   if(mpMode==='host'){
     NET.isHost=true;
-    NET.connect(world?{t:'host',name,world}:{t:'host',name});
+    NET.connect(world?{t:'host',name,world,auth:guestAuth()}:{t:'host',name,auth:guestAuth()});
   } else {
     const code=$('mpCode').value.trim().toUpperCase();
-    if(code.length<4){ mpStatus('Enter the room code'); return; }
+    if(code.length<4){ mpStatus('Enter the world code'); return; }
     NET.isHost=false;
-    NET.connect({t:'join',code,name});
+    NET.connect({t:'join',code,name,auth:guestAuth()});
   }
 }
+/* import the legacy solo save into a brand-new persistent world we own */
+$('mpImportSolo').addEventListener('click',()=>{
+  const d=loadSavedState();
+  if(!d){ mpStatus('No solo save found'); return; }
+  const name=$('mpName').value.trim().slice(0,16);
+  if(!name){ mpStatus('Enter a name first'); return; }
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
+  NET.name=name; NET.isHost=true;
+  SND.ensure();
+  pendingImportProg={tier:d.tier,res:d.res,weapons:d.weapons,ammo:d.ammo,medkits:d.medkits,o2:d.o2,fuel:d.fuel};
+  NET.connect({t:'host',name,auth:guestAuth(),
+    world:{structures:d.structures,station:d.station,stationOnline:d.stationOnline}});
+});
+$('mpRecent').addEventListener('click',e=>{
+  const b=e.target&&e.target.closest('[data-code]');
+  if(b){ $('mpCode').value=b.dataset.code; SND.blip(); }
+});
 $('btnHost').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('host'); });
 $('btnJoin').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('join'); });
 $('mpGo').addEventListener('click',()=>mpBegin(null));
@@ -3811,7 +3875,7 @@ $('roomBadge').addEventListener('click',()=>{
 });
 $('btnReconnect').addEventListener('click',()=>{
   $('netLost').classList.add('hidden');
-  NET.connect({t:'join',code:NET.code,name:NET.name});
+  NET.connect({t:'join',code:NET.code,name:NET.name,auth:guestAuth()});
 });
 $('btnNetQuit').addEventListener('click',()=>{ NET.quitting=true; location.reload(); });
 
@@ -3838,36 +3902,71 @@ function installWorld(world){
   NET.seats=new Map(world.seats||[]);
   if(typeof world.tod==='number') dayClock=world.tod*CYCLE_S;
 }
+let pendingImportProg=null;   // solo-save progress riding along with an import-host
 function startMultiplayer(w){
   NET.active=true;
   NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  if(w.guest){ try{ localStorage.setItem(GUEST_KEY,JSON.stringify(w.guest)); }catch(e){} }   // server minted us an identity
+  recordWorld(w.code);
   resetState();
   installWorld(w.world);
   if(S.beacon) S.victoryShown=true;
-  try{
-    const p=JSON.parse(localStorage.getItem(mpPlayerKey()));
-    if(p){
-      S.tier=clamp(p.tier|0,1,5);
-      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0),ch:Math.max(0,p.res&&p.res.ch|0||0),pe:Math.max(0,p.res&&p.res.pe|0||0)};
-      S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
-      if(p.victoryShown) S.victoryShown=true;
-      S.weapons=readWeapons(p.weapons);
-      S.ammo=readAmmo(p.ammo);
-      S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
+  let fromSave=false;
+  if(w.fresh){
+    /* first-ever join to this world: the one-time legacy import seam — a solo
+       save being imported, or the old per-world localStorage blob; the server
+       adopts it once (sanitized) and the store owns it from then on */
+    let blob=pendingImportProg;
+    if(!blob){ try{ blob=JSON.parse(localStorage.getItem(mpPlayerKey())); }catch(e){} }
+    if(blob){
+      S.tier=clamp(blob.tier|0,1,5);
+      S.res={fe:Math.max(0,blob.res&&blob.res.fe|0||0),cy:Math.max(0,blob.res&&blob.res.cy|0||0),bio:Math.max(0,blob.res&&blob.res.bio|0||0),ch:Math.max(0,blob.res&&blob.res.ch|0||0),pe:Math.max(0,blob.res&&blob.res.pe|0||0)};
+      S.o2=clamp(+blob.o2||100,5,200); S.fuel=clamp(+blob.fuel||100,0,100);
+      if(blob.victoryShown) S.victoryShown=true;
+      S.weapons=readWeapons(blob.weapons);
+      S.ammo=readAmmo(blob.ammo);
+      S.medkits=Math.max(0,blob.medkits|0); S.headbob=blob.headbob!==false;
+      NET.send({t:'progRestore',prog:mpProgBlob()});
+    } else if(w.prog) applyProg(w.prog);   // brand-new player (or Commander host): adopt server state
+    if(pendingImportProg){
+      try{ localStorage.setItem(SOLO_IMPORTED_KEY,'1'); }catch(e){}
+      pendingImportProg=null;
+      showToast('Solo save imported — this world now lives on the server',6000);
     }
-  }catch(e){}
-  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999,ch:99999,pe:99999}; cheatMax=false; }
+  } else {
+    /* returning player: server-stored progress + last position are the truth */
+    if(w.prog){
+      applyProg(w.prog);
+      if(typeof w.prog.o2==='number') S.o2=clamp(w.prog.o2,5,o2Max());
+      if(typeof w.prog.fuel==='number') S.fuel=clamp(w.prog.fuel,0,100);
+    }
+    if(w.loc&&Array.isArray(w.loc.pos)&&w.loc.pos.length===3&&w.loc.pos.every(v=>isFinite(+v))){
+      if(w.loc.mode==='surface'&&PLANETS[w.loc.pl]){
+        S.mode='surface'; S.planet=w.loc.pl;
+        S.ppos=w.loc.pos.map(Number); S.pyaw=+w.loc.yaw||0;
+        fromSave=true;
+      } else if(w.loc.mode==='space'&&Math.hypot(w.loc.pos[0],w.loc.pos[1],w.loc.pos[2])>10){
+        S.mode='space'; S.spos=w.loc.pos.map(Number); S.syaw=+w.loc.yaw||0;
+        fromSave=true;
+      }
+    }
+  }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
   closeAllPanels();
-  startGame(false);
+  startGame(fromSave);
   updateRoomBadge();
-  showToast('ROOM '+NET.code+' — click the room badge (top right) to copy the code',6000);
+  showToast('WORLD '+NET.code+' — click the badge (top right) to copy the invite code',6000);
 }
 function resyncFromWelcome(w){
   NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  if(w.guest){ try{ localStorage.setItem(GUEST_KEY,JSON.stringify(w.guest)); }catch(e){} }
   installWorld(w.world);
+  /* reconnect: the server restored us from its store; only a fresh row
+     (store lost us somehow) still needs the legacy hand-back */
+  if(w.fresh) NET.send({t:'progRestore',prog:mpProgBlob()});
+  else if(w.prog) applyProg(w.prog);
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -3904,16 +4003,16 @@ $('btnNew').addEventListener('click',()=>{
 });
 $('btnTitleImport').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); $('importWrap').classList.remove('hidden'); });
 
-/* ---------- secret "Commander" host: maxed resources ---------- */
-let cheatMax=false, secretTaps=0, secretT=0;
+/* ---------- secret "Commander" host: maxed resources (granted server-side) ---------- */
+let secretTaps=0, secretT=0;
 function secretHost(){
   if(S.running) return;
-  cheatMax=true; NET.isHost=true;
-  let name=''; try{ name=localStorage.getItem('starfall_name')||''; }catch(e){}
+  NET.isHost=true;
+  let name=''; try{ name=localStorage.getItem('astravox_name')||''; }catch(e){}
   NET.name=name||'COMMANDER';
   SND.ensure(); SND.tierUp();
   showToast('⚡ COMMANDER MODE — hosting a new world with maxed resources');
-  NET.connect({t:'host',name:NET.name});
+  NET.connect({t:'host',name:NET.name,cmd:1,auth:guestAuth()});
 }
 function secretTap(){
   if(S.running) return;
