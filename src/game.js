@@ -11,7 +11,7 @@ import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LI
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
   CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
-import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater } from '../shared/world.js';
+import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout } from '../shared/world.js';
 import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
@@ -894,19 +894,18 @@ function buildSurface(planetKey){
     surf.water={mesh:water,geo:wg,base:wg.attributes.position.array.slice()};
   }
 
-  /* rocks (instanced) */
-  const rng=mulberry32(p.seed*101);
+  /* rocks / flora / resource nodes — deterministic shared layout
+     (the server validates mining against the SAME node data) */
+  const layout=surfaceLayout(p);
   {
-    const im=new THREE.InstancedMesh(GEO.dodec,stdMat(p.rockCol,{roughness:0.95,metalness:0.05}),140);
+    const im=new THREE.InstancedMesh(GEO.dodec,stdMat(p.rockCol,{roughness:0.95,metalness:0.05}),layout.rocks.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<140;i++){
-      const r=30+rng()*330, th=rng()*Math.PI*2;
-      const x=Math.cos(th)*r, z=Math.sin(th)*r;
-      d.position.set(x,terrainH(x,z,p)+0.1,z);
-      d.rotation.set(rng()*6,rng()*6,rng()*6);
-      const s=0.7+rng()*3.4; d.scale.set(s,s*(0.6+rng()*0.8),s);
+    layout.rocks.forEach((rk,i)=>{
+      d.position.set(rk.x,terrainH(rk.x,rk.z,p)+0.1,rk.z);
+      d.rotation.set(rk.rx,rk.ry,rk.rz);
+      d.scale.set(rk.s,rk.sy,rk.s);
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; g.add(im);
   }
   /* flora / planet-specific props (instanced) */
@@ -914,46 +913,28 @@ function buildSurface(planetKey){
     const isV=planetKey==='verdant';
     const mat=isV? emisMat(p.floraCol,0x5a1a8a,0.8) : stdMat(p.floraCol,{roughness:0.85});
     const geo=isV? GEO.sphere : GEO.cone;
-    const im=new THREE.InstancedMesh(geo,mat,110);
+    const im=new THREE.InstancedMesh(geo,mat,layout.flora.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<110;i++){
-      const r=26+rng()*320, th=rng()*Math.PI*2;
-      const x=Math.cos(th)*r, z=Math.sin(th)*r;
-      const s=0.5+rng()*1.8;
-      d.position.set(x,terrainH(x,z,p)+(isV? s*0.8 : s*0.5),z);
-      d.rotation.set(0,rng()*6,0);
-      d.scale.set(s*(isV?1:0.7),s*(isV?1.6:1.6),s*(isV?1:0.7));
+    layout.flora.forEach((f,i)=>{
+      d.position.set(f.x,terrainH(f.x,f.z,p)+(isV? f.s*0.8 : f.s*0.5),f.z);
+      d.rotation.set(0,f.ry,0);
+      d.scale.set(f.s*(isV?1:0.7),f.s*1.6,f.s*(isV?1:0.7));
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; g.add(im);
   }
   /* resource nodes (instanced crystals) */
   {
     surf.nodes=[];
-    const NN=46;
-    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),NN);
+    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),layout.nodes.length);
     const d=new THREE.Object3D();
-    for(let i=0;i<NN;i++){
-      let x,z,y;
-      if(p.water){                     // Pelagos: pearls sit on outer islands across the water
-        for(let tr=0;tr<24;tr++){
-          const ring=70+rng()*230, th=rng()*Math.PI*2;
-          x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
-          if(y>SEA_Y+0.5) break;
-        }
-        if(y<=SEA_Y+0.5) y=SEA_Y+0.5;  // fallback: a shallow shoal
-      } else {
-        const ring=i<10? (14+rng()*40) : (40+rng()*300);
-        const th=rng()*Math.PI*2;
-        x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
-      }
-      const s=0.8+rng()*0.9;
-      surf.nodes.push({x,y,z,s,alive:true,respawn:0,rot:rng()*6});
-      d.position.set(x,y+s*0.45,z);
-      d.rotation.set(rng()*0.6,rng()*6,rng()*0.6);
-      d.scale.set(s,s*1.7,s);
+    layout.nodes.forEach((nd,i)=>{
+      surf.nodes.push({x:nd.x,y:nd.y,z:nd.z,s:nd.s,alive:true,respawn:0,rot:nd.rot});
+      d.position.set(nd.x,nd.y+nd.s*0.45,nd.z);
+      d.rotation.set(nd.tx,nd.ty,nd.tz);
+      d.scale.set(nd.s,nd.s*1.7,nd.s);
       d.updateMatrix(); im.setMatrixAt(i,d.matrix);
-    }
+    });
     im.instanceMatrix.needsUpdate=true; surf.nodeMesh=im; g.add(im);
     const glows=new THREE.Group();
     for(const nd of surf.nodes){
@@ -1172,28 +1153,8 @@ function updateDoors(dt){
   }
 }
 
-/* walkable height: terrain + floors/ramps/crates */
-function groundYAt(x,z,curY){
-  const p=curP();
-  let g=terrainH(x,z,p);
-  for(const t of ['floor','ramp','crate','foundation','halffloor','flatroof']){
-    const list=placedByType[t]||[];
-    for(const st of list){
-      toLocal(st,x,z,_loc);
-      const lx=_loc.lx, lz=_loc.lz;
-      let top=null;
-      if((t==='floor'||t==='flatroof')&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
-      else if(t==='halffloor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=1.05) top=st.y+0.31;
-      else if(t==='foundation'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+1.01;
-      else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
-      else if(t==='ramp'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.1){
-        const tt=clamp((2-lz)/4,0,1); top=st.y+0.31+tt*3;
-      }
-      if(top!==null&&curY>=top-0.7&&top>g) g=top;
-    }
-  }
-  return g;
-}
+/* walkable height: terrain + floors/ramps/crates — shared logic, S.* state */
+function groundYAt(x,z,curY){ return R.groundYAt(S.structures,S.planet,x,z,curY); }
 
 /* ============================================================
    PLAYER (surface) + first-person tool
@@ -1346,29 +1307,9 @@ function cancelBuild(){
   $('mPlace').classList.add('hidden');
   $('mFree').classList.add('hidden');
 }
-/* nearest valid socket to the aim point, or null */
-function findSnap(ax,az){
-  let best=null, bestD=SNAP_R*SNAP_R;
-  for(const st of S.structures){
-    if(st.pl!==S.planet) continue;
-    const hdef=CAT[st.t]; if(!hdef.sockets) continue;
-    const a=st.r*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
-    for(const sk of hdef.sockets){
-      if(sk.accept.indexOf(buildSel)<0) continue;
-      const wx=st.x+sk.p[0]*c+sk.p[2]*s, wz=st.z-sk.p[0]*s+sk.p[2]*c;
-      const d=(wx-ax)*(wx-ax)+(wz-az)*(wz-az);
-      if(d<bestD){ bestD=d; best={x:wx,y:st.y+sk.p[1],z:wz,rots:sk.rots.map(r=>(r+st.r)%4)}; }
-    }
-  }
-  return best;
-}
-function occupiedAt(x,y,z){
-  for(const st of S.structures){
-    if(st.pl!==S.planet||st.t!==buildSel) continue;
-    if(Math.abs(st.x-x)<0.25&&Math.abs(st.y-y)<0.25&&Math.abs(st.z-z)<0.25) return true;
-  }
-  return false;
-}
+/* nearest valid socket to the aim point, or null — shared logic, S.* state */
+function findSnap(ax,az){ return R.findSnap(S.structures,S.planet,buildSel,ax,az,SNAP_R); }
+function occupiedAt(x,y,z){ return R.occupiedAt(S.structures,S.planet,buildSel,x,y,z); }
 function updateGhost(){
   if(!buildSel||!ghost) return;
   const def=CAT[buildSel];
@@ -2495,21 +2436,8 @@ function updateShieldWalls(dt){
     w.panel.material.opacity=0.12+0.12*Math.abs(Math.sin(performance.now()*0.004))*(w.t<3?w.t/3:1);
   }
 }
-/* segment(o->e) vs shield-wall rectangles; returns the hit point or null */
-function shotBlocked(o,e){
-  for(const w of shieldWalls){
-    const nx=Math.sin(w.yaw), nz=Math.cos(w.yaw);
-    const denom=(e[0]-o[0])*nx+(e[2]-o[2])*nz;
-    if(Math.abs(denom)<1e-6) continue;
-    const t=((w.x-o[0])*nx+(w.z-o[2])*nz)/denom;
-    if(t<=0.02||t>=1) continue;
-    const hx=o[0]+(e[0]-o[0])*t, hy=o[1]+(e[1]-o[1])*t, hz=o[2]+(e[2]-o[2])*t;
-    const tx=Math.cos(w.yaw), tz=-Math.sin(w.yaw);
-    const u=(hx-w.x)*tx+(hz-w.z)*tz, v=hy-w.y;
-    if(Math.abs(u)<=w.hw&&v>=-0.2&&v<=w.h) return [hx,hy,hz];
-  }
-  return null;
-}
+/* segment(o->e) vs shield-wall rectangles — shared logic over local walls */
+function shotBlocked(o,e){ return R.shotBlocked(shieldWalls,o,e); }
 /* ---- throwing ---- */
 function throwGadget(w){
   if(w.thrown==='grenade'){
