@@ -1,15 +1,32 @@
 /* ============================================================
-   ASTRAVOX (formerly Starfall) co-op server — SERVER-AUTHORITATIVE simulation (Phase 2)
+   ASTRAVOX (formerly Starfall) co-op server — SERVER-AUTHORITATIVE + PERSISTENT (Phase 3)
    Serves the built client (dist/) over HTTP and the game protocol
    over WS. Clients send INTENTS; the server validates them against
    the shared rule modules (shared/) and broadcasts results. Nothing
    a client reports about resources, tier, ammo, HP, O2 or damage is
    trusted.
 
+   Phase 3 adds persistence (store.js: Postgres on Railway, JSON file
+   locally) and guest identity:
+   - host = CREATE WORLD: a worlds row + stable invite code, owned by
+     the creating guest. join = by code; if the world isn't live in
+     memory it is rehydrated from the store, so worlds survive server
+     restarts and everyone leaving.
+   - Guests: the server mints {id, token} on first contact; the client
+     stores it and sends auth{id,tok} on host/join. Tokens are stored
+     hashed. "Upgrade guest to real auth" is a future seam.
+   - Per-player-per-world progress lives in the store and is loaded on
+     join (welcome carries fresh:false + loc). progRestore is accepted
+     only on a player's FIRST EVER join to a world (fresh:true) — it is
+     now purely the legacy localStorage import path.
+   - Autosave: every AUTOSAVE_MS for occupied worlds, on disconnect,
+     when a room empties, and on SIGTERM/SIGINT.
+
    PROTOCOL (JSON frames):
    client->server (intents):
-     host{name,world?,cmd?}, join{code,name},
-     progRestore{prog}                — one-shot localStorage import (Phase-3 seam),
+     host{name,auth?,world?,cmd?}     — create (or re-import) a persistent world,
+     join{code,name,auth?},
+     progRestore{prog}                — one-shot legacy import, first-ever join only,
      pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw,sp,jt,ev},
      place{st}, remove{id}, repair{id}, paint{id,col}, mine{pl,i},
      craft{key}, tierUp{}, useMed{},
@@ -17,7 +34,7 @@
      stationPlace{st}, stationRemove{id}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
    server->client (authoritative results):
-     welcome{...,prog,world{structures,beacon,deadNodes,meteor,loot,seats,tod,station,stationOnline}},
+     welcome{...,guest?{id,tok},fresh,loc?,prog,world{structures,beacon,deadNodes,meteor,loot,seats,tod,station,stationOnline}},
      prog{res,tier,weapons,ammo,medkits,hp,ev?}   — per-player progress snapshot,
      vitals{o2,fuel}, blackout, hurt{hp,dmg,by}, pdeath{by}, tfire{id,tp,p},
      err, pjoin, pleave, pu, placed, removed, paint, hp, destroyed, clock{tod},
@@ -26,14 +43,14 @@
      stationPlaced{by,st}, stationRemoved{id,by},
      lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
 
-   Known Phase-2 trust limits (closed in later phases):
-   - progRestore accepts a clamped localStorage blob at join; Phase 3
-     replaces it with Postgres-backed per-guest progress.
+   Known trust limits (closed in later phases):
    - Movement is client-predicted; pu positions are bounds/finite
      checked but not speed-validated. Aim (which target a shot claims)
      is client-chosen within server-checked range/zones.
    - Anyone may remove structures (refund to remover) — Phase 4 adds
      ownership/moderation.
+   - The same guest may be connected to a world from several tabs (each
+     under a distinct name); their shared progress row is last-write-wins.
    ============================================================ */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -56,6 +73,10 @@ import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
   inSafeZone, groundYAt, shotBlocked } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
+import { openStore } from './store.js';
+
+const store = await openStore();
+console.log('Astravox store: ' + store.kind);
 
 /* deterministic resource-node layout per planet — same data the client renders */
 const NODES = {};
@@ -66,12 +87,12 @@ const METEOR_FAST = !!process.env.METEOR_FAST;     // test knob: rapid showers
 const RESPAWN_MS = +process.env.RESPAWN_MS || 180000;
 const MAX_ROOMS = 200;
 const MAX_PLAYERS = 4;
-const ROOM_GC_MS = 10 * 60 * 1000;
+const ROOM_GC_MS = 10 * 60 * 1000;                 // unload (not delete) idle worlds from memory
+const AUTOSAVE_MS = +process.env.AUTOSAVE_MS || 25000;
+const MAX_WORLDS_PER_GUEST = 20;
 
 const SHIELD_R = CAT.shieldgen.shieldR;            // meteor-shield dome radius
 const STATION_TYPES = new Set(STATION_KEYS);
-let worldClock = 300;             // shared time-of-day (seconds)
-function worldTod() { return todOf(worldClock); }
 
 /* meteor phase timings (seconds) */
 const T_IDLE = () => METEOR_FAST ? 3 : 120 + Math.random() * 120;
@@ -99,14 +120,14 @@ const server = http.createServer((req, res) => {
   });
 });
 
-/* ---------- rooms ---------- */
+/* ---------- rooms (live, in-memory views of persistent worlds) ---------- */
 const rooms = new Map();
 const CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-function genCode() {
+async function genCode() {
   for (let tries = 0; tries < 50; tries++) {
     let c = '';
     for (let i = 0; i < 5; i++) c += CODE_ALPHA[crypto.randomInt(CODE_ALPHA.length)];
-    if (!rooms.has(c)) return c;
+    if (!rooms.has(c) && !(await store.getWorldByCode(c))) return c;
   }
   return null;
 }
@@ -115,13 +136,16 @@ function newMeteorState() {
   for (const pl of PLANETS) m[pl] = { phase: 'idle', t: T_IDLE(), hits: 0, spawnT: 0 };
   return m;
 }
-function makeRoom(world) {
-  const code = genCode();
-  if (!code) return null;
+/* Build a live room from a world snapshot (a fresh host payload, a legacy
+   localStorage snapshot, or a store rehydrate). Caller registers it in
+   `rooms` and persists it. */
+function makeRoom(world, code) {
   const room = {
     code,
     worldId: (world && typeof world.worldId === 'string' && world.worldId.length <= 24)
       ? world.worldId : 'w' + crypto.randomBytes(6).toString('hex'),
+    ownerId: null,                      // guest id of the world creator
+    clock: (world && isFinite(+world.clock)) ? +world.clock : 300,   // per-world time-of-day seconds
     nextId: 1, nextPid: 1, nextLoot: 1,
     structures: [], beacon: false,
     players: new Map(),                 // pid -> {ws,name,slot,pos,yaw,pitch,mode,pl}
@@ -160,8 +184,36 @@ function makeRoom(world) {
     }
     room.stationOnline = stationComplete(room.station) || !!world.stationOnline;
   }
-  rooms.set(code, room);
   return room;
+}
+
+/* ---------- persistence (Phase 3) ---------- */
+function serializeRoom(room) {
+  return {
+    v: 1, worldId: room.worldId, clock: room.clock,
+    beacon: room.beacon, stationOnline: room.stationOnline,
+    structures: room.structures.map(s => {
+      const o = { t: s.t, pl: s.pl, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), r: s.r, hp: s.hp | 0 };
+      if (s.owner !== undefined && s.owner !== null) o.owner = s.owner;
+      if (s.ry !== undefined) o.ry = +(+s.ry).toFixed(3);
+      if (s.col !== undefined && s.col !== null) o.col = s.col;
+      return o;
+    }),
+    station: room.station.map(p => ({ t: p.t, x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2),
+      qx: +(+p.qx).toFixed(4), qy: +(+p.qy).toFixed(4), qz: +(+p.qz).toFixed(4), qw: +(+p.qw).toFixed(4), r: p.r | 0 })),
+  };
+}
+function progRow(p) {
+  return { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo },
+    medkits: p.medkits, o2: Math.round(p.o2), fuel: Math.round(p.fuel),
+    loc: { mode: p.mode, pl: p.pl, pos: p.pos.map(v => +(+v).toFixed(1)), yaw: +(+p.yaw).toFixed(2) } };
+}
+function saveProgressOf(room, p) {
+  if (p.gone || !p.guestId) return;     // `gone`: replaced by a newer session — never overwrite it
+  store.saveProgress(p.guestId, room.worldId, progRow(p)).catch(() => {});
+}
+function saveWorld(room) {
+  store.saveWorldState(room.worldId, serializeRoom(room)).catch(() => {});
 }
 /* ---------- per-player progress (server-authoritative as of Phase 2) ----------
    The server owns resources/tier/weapons/ammo/medkits for the whole session.
@@ -290,7 +342,7 @@ function welcomeMsg(room, pid) {
   const self = room.players.get(pid);
   return {
     t: 'welcome', pid, code: room.code, worldId: room.worldId,
-    prog: self ? progOf(self) : undefined,
+    prog: self ? Object.assign(progOf(self), { o2: Math.round(self.o2), fuel: Math.round(self.fuel) }) : undefined,
     players: [...room.players.entries()].map(([id, p]) => ({ pid: id, name: p.name, slot: p.slot })),
     world: {
       structures: room.structures,
@@ -299,7 +351,7 @@ function welcomeMsg(room, pid) {
       meteor: meteorSnapshot(room),
       loot: [...room.loot.values()].map(c => ({ id: c.id, pl: c.pl, pos: c.pos, loot: c.loot })),
       seats: [...room.seats.entries()],
-      tod: worldTod(),
+      tod: todOf(room.clock),
       station: room.station,
       stationOnline: room.stationOnline,
     },
@@ -312,67 +364,155 @@ const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 wss.on('connection', ws => {
   ws.isAlive = true;
   ws.room = null; ws.pid = null;
+  ws.q = Promise.resolve();             // per-socket queue: messages handled strictly in order
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => {});
   ws.on('message', raw => {
     let m;
     try { m = JSON.parse(raw.toString()); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;
-    try { handle(ws, m); } catch (e) { /* never crash on a bad message */ }
+    ws.q = ws.q.then(() => handle(ws, m)).catch(e => { /* never crash on a bad message */ });
   });
   ws.on('close', () => {
     const room = ws.room;
     if (!room || ws.pid === null) return;
     const p = room.players.get(ws.pid);
     if (p && p.ws === ws) {
+      saveProgressOf(room, p);
       room.players.delete(ws.pid);
       for (const [rid, dpid] of room.seats) if (dpid === ws.pid) { room.seats.delete(rid); bcast(room, { t: 'roverSeat', id: rid, pid: 0 }); }
       bcast(room, { t: 'pleave', pid: ws.pid });
-      if (room.players.size === 0) room.emptySince = Date.now();
+      if (room.players.size === 0) { room.emptySince = Date.now(); saveWorld(room); }
     }
   });
 });
 
-function joinRoom(ws, room, name, opts) {
-  if (room.players.size >= MAX_PLAYERS) { sendTo(ws, { t: 'err', msg: 'Room is full (4 players max)', fatal: true }); return; }
-  name = String(name || '').trim().slice(0, 16) || 'PLAYER';
-  for (const p of room.players.values()) {
-    if (p.name.toLowerCase() === name.toLowerCase()) { sendTo(ws, { t: 'err', msg: 'That name is taken in this room', fatal: true }); return; }
+/* ---------- guest identity (Phase 3) ---------- */
+const hashTok = t => crypto.createHash('sha256').update(String(t)).digest('hex');
+async function resolveGuest(m, name) {
+  const a = m.auth;
+  if (a && typeof a.id === 'string' && a.id.length <= 32 && typeof a.tok === 'string' && a.tok.length <= 64) {
+    const row = await store.authPlayer(a.id, hashTok(a.tok));
+    if (row) return { id: row.id, tok: null };      // known guest; token never re-sent
   }
+  const id = 'g' + crypto.randomBytes(8).toString('hex');
+  const tok = crypto.randomBytes(16).toString('hex');
+  await store.createPlayer({ id, tokenHash: hashTok(tok), name });
+  return { id, tok };                               // fresh guest; token goes back in welcome
+}
+
+async function joinRoom(ws, room, name, opts) {
+  name = String(name || '').trim().slice(0, 16) || 'PLAYER';
+  const guest = (opts && opts.guest) || null;
+  for (const [pid, p] of room.players) {
+    if (p.name.toLowerCase() !== name.toLowerCase()) continue;
+    if (guest && p.guestId === guest.id) {
+      /* same guest, same name = a reconnect racing its own ghost session: replace it */
+      p.gone = true;
+      try { p.ws.terminate(); } catch (e) {}
+      room.players.delete(pid);
+      for (const [rid, dpid] of room.seats) if (dpid === pid) { room.seats.delete(rid); bcast(room, { t: 'roverSeat', id: rid, pid: 0 }); }
+      bcast(room, { t: 'pleave', pid });
+    } else {
+      sendTo(ws, { t: 'err', msg: 'That name is taken in this world', fatal: true }); return;
+    }
+  }
+  if (room.players.size >= MAX_PLAYERS) { sendTo(ws, { t: 'err', msg: 'World is full (4 players max)', fatal: true }); return; }
   const used = new Set([...room.players.values()].map(p => p.slot));
   let slot = 0; while (used.has(slot)) slot++;
   const pid = room.nextPid++;
   const player = Object.assign(
     { ws, name, slot, pos: [0, 0, 0], yaw: 0, pitch: 0, mode: 'space', pl: 'rust',
       hp: HP_MAX, o2: 100, fuel: 100, invulnUntil: Date.now() + SPAWN_PROT * 1000,
-      joinedAt: Date.now(), restored: false, lastMine: 0, lastRepair: 0, fireAt: {} },
+      joinedAt: Date.now(), restored: false, fresh: true, guestId: guest ? guest.id : null,
+      lastMine: 0, lastRepair: 0, fireAt: {} },
     freshProg());
+  /* stored progress (per player, per world) is the source of truth on rejoin */
+  let loc = null;
+  if (guest) {
+    const saved = await store.getProgress(guest.id, room.worldId).catch(() => null);
+    if (saved) {
+      player.fresh = false; player.restored = true;
+      const s = sanitizeProg(saved);
+      player.res = s.res; player.tier = s.tier; player.weapons = s.weapons; player.ammo = s.ammo; player.medkits = s.medkits;
+      player.o2 = Math.max(5, Math.min(o2Max(s.tier), +saved.o2 || 100));
+      player.fuel = Math.max(0, Math.min(100, +saved.fuel || 100));
+      if (saved.loc && Array.isArray(saved.loc.pos) && saved.loc.pos.length === 3 && saved.loc.pos.every(v => isFinite(+v))) {
+        loc = { mode: saved.loc.mode === 'surface' ? 'surface' : 'space',
+          pl: PLANETS.includes(saved.loc.pl) ? saved.loc.pl : 'rust',
+          pos: saved.loc.pos.map(Number), yaw: +saved.loc.yaw || 0 };
+        player.mode = loc.mode; player.pl = loc.pl; player.pos = loc.pos.slice(); player.yaw = loc.yaw;
+      }
+    }
+    store.touchPlayer(guest.id, name).catch(() => {});
+  }
   /* secret "Commander" host: maxed resources in your own fresh world */
-  if (opts && opts.commander) for (const k in player.res) player.res[k] = 99999;
+  if (opts && opts.commander && player.fresh) for (const k in player.res) player.res[k] = 99999;
   room.players.set(pid, player);
   room.emptySince = 0;
   ws.room = room; ws.pid = pid;
-  sendTo(ws, welcomeMsg(room, pid));
+  const w = welcomeMsg(room, pid);
+  w.fresh = player.fresh;
+  if (loc) w.loc = loc;
+  if (guest && guest.tok) w.guest = { id: guest.id, tok: guest.tok };
+  sendTo(ws, w);
   bcast(room, { t: 'pjoin', pid, name, slot }, pid);
 }
 
-function handle(ws, m) {
+/* bring a stored world back to life (or join its already-live room) */
+async function joinPersisted(ws, w, name, opts) {
+  let room = rooms.get(w.code);
+  if (!room) {                          // no awaits between get and set — no double-rehydrate race
+    if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
+    room = makeRoom(w.state || {}, w.code);
+    room.worldId = w.id;
+    room.ownerId = w.ownerId || null;
+    rooms.set(w.code, room);
+  }
+  await joinRoom(ws, room, name, opts);
+}
+
+async function handle(ws, m) {
   switch (m.t) {
     case 'host': {
       if (ws.room) return;
       if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
-      const room = makeRoom(m.world);
-      if (!room) { sendTo(ws, { t: 'err', msg: 'Could not create room', fatal: true }); return; }
-      joinRoom(ws, room, m.name, { commander: !!m.cmd });
+      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      /* a legacy snapshot whose worldId we already persist = that world, not a copy */
+      if (m.world && typeof m.world.worldId === 'string') {
+        let existing = null;
+        for (const r of rooms.values()) if (r.worldId === m.world.worldId) { existing = r; break; }
+        if (existing) { await joinRoom(ws, existing, m.name, { guest }); return; }
+        const w = await store.getWorldById(m.world.worldId).catch(() => null);
+        if (w) { await joinPersisted(ws, w, m.name, { guest }); return; }
+      }
+      if (await store.countWorldsByOwner(guest.id).catch(() => 0) >= MAX_WORLDS_PER_GUEST) {
+        sendTo(ws, { t: 'err', msg: 'World limit reached (' + MAX_WORLDS_PER_GUEST + ' per player)', fatal: true }); return;
+      }
+      const code = await genCode();
+      if (!code) { sendTo(ws, { t: 'err', msg: 'Could not create world', fatal: true }); return; }
+      const room = makeRoom(m.world, code);
+      room.ownerId = guest.id;
+      try {
+        await store.createWorld({ id: room.worldId, code, ownerId: guest.id, state: serializeRoom(room) });
+      } catch (e) { sendTo(ws, { t: 'err', msg: 'Could not create world', fatal: true }); return; }
+      rooms.set(code, room);
+      await joinRoom(ws, room, m.name, { commander: !!m.cmd, guest });
       if (room.players.size === 0) rooms.delete(room.code); // join failed somehow
       return;
     }
     case 'join': {
       if (ws.room) return;
       const code = String(m.code || '').trim().toUpperCase();
-      const room = rooms.get(code);
-      if (!room) { sendTo(ws, { t: 'err', msg: 'No room with that code', fatal: true }); return; }
-      joinRoom(ws, room, m.name);
+      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      let room = rooms.get(code);
+      if (!room) {
+        const w = await store.getWorldByCode(code).catch(() => null);
+        if (!w) { sendTo(ws, { t: 'err', msg: 'No world with that code', fatal: true }); return; }
+        await joinPersisted(ws, w, m.name, { guest });
+        return;
+      }
+      await joinRoom(ws, room, m.name, { guest });
       return;
     }
   }
@@ -395,13 +535,16 @@ function handle(ws, m) {
       return;
     }
     case 'progRestore': {
-      /* one-shot localStorage progress import, right after join (Phase-3 seam) */
-      if (me.restored || Date.now() - me.joinedAt > 20000) return;
-      me.restored = true;
+      /* one-shot LEGACY localStorage import — only on a player's first-ever
+         join to this world (no stored progress row); thereafter the store
+         is the source of truth and this intent is dead */
+      if (!me.fresh || me.restored || Date.now() - me.joinedAt > 20000) return;
+      me.restored = true; me.fresh = false;
       const s = sanitizeProg(m.prog);
       me.res = s.res; me.tier = s.tier; me.weapons = s.weapons; me.ammo = s.ammo; me.medkits = s.medkits;
       me.o2 = Math.max(5, Math.min(o2Max(me.tier), +((m.prog || {}).o2) || 100));
       me.fuel = Math.max(0, Math.min(100, +((m.prog || {}).fuel) || 100));
+      saveProgressOf(room, me);
       sendProg(room, ws.pid);
       return;
     }
@@ -841,14 +984,17 @@ setInterval(() => {
   const now = Date.now();
   const dt = Math.min(2, (now - lastTick) / 1000);
   lastTick = now;
-  worldClock += dt;
-  if (now - lastClockBcast > 20000) { lastClockBcast = now; const tod = worldTod(); for (const room of rooms.values()) bcast(room, { t: 'clock', tod }); }
+  const bcastClock = now - lastClockBcast > 20000;
+  if (bcastClock) lastClockBcast = now;
   for (const [code, room] of rooms) {
-    /* GC */
+    /* unload idle worlds from memory (they stay in the store; join rehydrates) */
     if (room.players.size === 0) {
       if (room.emptySince && now - room.emptySince > ROOM_GC_MS) rooms.delete(code);
       continue;
     }
+    /* per-world day/night clock advances only while the world is occupied */
+    room.clock += dt;
+    if (bcastClock) bcast(room, { t: 'clock', tod: todOf(room.clock) });
     /* node respawns */
     for (const [key, at] of room.nodeDead) {
       if (now >= at) {
@@ -913,5 +1059,37 @@ setInterval(() => {
     try { ws.ping(); } catch (e) {}
   }
 }, 15000);
+
+/* ---------- autosave (Phase 3): occupied worlds + their players ---------- */
+setInterval(() => {
+  for (const room of rooms.values()) {
+    if (room.players.size === 0) continue;
+    saveWorld(room);
+    for (const p of room.players.values()) saveProgressOf(room, p);
+  }
+}, AUTOSAVE_MS);
+
+/* flush everything on shutdown so a deploy/restart never eats progress */
+let shuttingDown = false;
+async function shutdown(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('Astravox: ' + sig + ' — saving all worlds');
+  try {
+    const jobs = [];
+    for (const room of rooms.values()) {
+      jobs.push(store.saveWorldState(room.worldId, serializeRoom(room)).catch(() => {}));
+      for (const p of room.players.values()) {
+        if (!p.gone && p.guestId) jobs.push(store.saveProgress(p.guestId, room.worldId, progRow(p)).catch(() => {}));
+      }
+    }
+    await Promise.all(jobs);
+    await store.flush();
+    await store.close();
+  } catch (e) {}
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 server.listen(PORT, () => console.log('Astravox server on :' + PORT + (METEOR_FAST ? ' (METEOR_FAST)' : '')));

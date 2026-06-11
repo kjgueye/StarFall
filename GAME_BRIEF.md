@@ -44,7 +44,22 @@ Live versions:
 >   safe zones, spawn protection, turrets, grenade AoE, deaths/loot). Clients send intents and
 >   render; grants arrive as `prog` snapshots. Solo offline play is unchanged (`NET.active`
 >   gates everything). See the protocol comment atop `server.js` and `test/authority.mjs`.
-> - **Next:** Phase 3 Postgres persistence + guest identity; Phase 4 owner moderation;
+> - **Phase 3:** **Persistence + guest identity** (`store.js`). Worlds are persistent: "host"
+>   creates a `worlds` row with a stable 5-char invite code; "join" rehydrates the world from
+>   the store if it isn't live, so worlds survive server restarts and everyone leaving. The
+>   store is Postgres when `DATABASE_URL` is set (Railway plugin), else a JSON file in
+>   `DATA_DIR` (default `./data`, gitignored) for local dev/tests. Guests: the server mints
+>   `{id, tok}` on first contact (token sha256-hashed at rest), the client keeps it in
+>   localStorage (`astravox_guest_v1`) and sends `auth{id,tok}` on host/join. Per-player-
+>   per-world progress (res/tier/weapons/ammo/medkits/O2/fuel + last position) autosaves
+>   every 25s, on disconnect, on room-empty and on SIGTERM; rejoin restores it (`welcome`
+>   carries `fresh:false` + `loc`). `progRestore` is now ONLY accepted on a player's
+>   first-ever join to a world — it is the one-time legacy localStorage import path (solo
+>   save → "Import Solo Save → New World" button, old MP blobs likewise). Per-world
+>   day/night clock persists. `test/persistence.mjs` proves the full restart cycle.
+>   ⚠ Railway still needs the Postgres plugin attached + `DATABASE_URL` wired; without it
+>   the prod store is an ephemeral file (wiped per deploy).
+> - **Next:** Phase 4 owner moderation (kick/ban/PvP toggle/safe zones/chat safety);
 >   Phase 5 hardening.
 
 

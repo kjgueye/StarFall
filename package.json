@@ -13,9 +13,11 @@
     "test": "node test/check_shared.mjs",
     "test:mp": "node test/with_server.mjs test/mp_smoke.cjs 3997",
     "test:authority": "node test/with_server.mjs test/authority.mjs 3996",
-    "test:all": "npm test && npm run test:mp && npm run test:authority"
+    "test:persist": "node test/persistence.mjs 3994",
+    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist"
   },
   "dependencies": {
+    "pg": "^8.21.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

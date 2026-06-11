@@ -329,11 +329,13 @@
 
 <div id="mpSetup" class="panel hidden">
   <button class="closeX" data-close="mpSetup">✕</button>
-  <h2 id="mpTitle">Host Co-op Game</h2>
+  <h2 id="mpTitle">Create Online World</h2>
   <input id="mpName" class="mpInput" maxlength="16" placeholder="YOUR NAME" autocomplete="off">
-  <input id="mpCode" class="mpInput hidden" maxlength="5" placeholder="ROOM CODE" autocomplete="off">
-  <button class="menuBtn" id="mpGo">Host New World</button>
-  <button class="menuBtn hidden" id="mpHostPrev">Host Previous World</button>
+  <input id="mpCode" class="mpInput hidden" maxlength="5" placeholder="WORLD CODE" autocomplete="off">
+  <button class="menuBtn" id="mpGo">Create New World</button>
+  <button class="menuBtn hidden" id="mpHostPrev">Host Previous World (pre-update)</button>
+  <button class="menuBtn hidden" id="mpImportSolo">Import Solo Save → New World</button>
+  <div id="mpRecent"></div>
   <div id="mpStatus"></div>
 </div>
 
@@ -355,8 +357,8 @@
   <div class="sub">Mine &nbsp;·&nbsp; Build &nbsp;·&nbsp; Reach Further</div>
   <button class="menuBtn" id="btnContinue">Continue</button>
   <button class="menuBtn" id="btnNew">New Game</button>
-  <button class="menuBtn" id="btnHost">Host Co-op</button>
-  <button class="menuBtn" id="btnJoin">Join Co-op</button>
+  <button class="menuBtn" id="btnHost">Create / Host World</button>
+  <button class="menuBtn" id="btnJoin">Join World by Code</button>
   <button class="menuBtn" id="btnTitleImport">Import Save</button>
   <div id="ctrlHelp">
     <span class="desktopOnly"><b>WASD</b> move · <b>Mouse</b> look · <b>E</b> interact/mine · <b>Space</b> jump (hold = jetpack T3) · <b>Shift</b> sprint<br>

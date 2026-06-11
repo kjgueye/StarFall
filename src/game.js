@@ -84,6 +84,19 @@ function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; ret
 const SAVE_KEY='astravox_save_v1';
 const SAVE_VER=6;
 const MP_WORLD_KEY='astravox_mp_world_v1';
+/* Phase 3 — guest identity + persistent worlds */
+const GUEST_KEY='astravox_guest_v1';            // server-minted {id,tok}; our passwordless identity
+const WORLDS_KEY='astravox_worlds_v1';          // recent world codes for quick rejoin
+const SOLO_IMPORTED_KEY='astravox_solo_imported_v1';  // one-time solo-save import done
+function guestAuth(){ try{ const g=JSON.parse(localStorage.getItem(GUEST_KEY)); if(g&&g.id&&g.tok) return {id:g.id,tok:g.tok}; }catch(e){} return undefined; }
+function recentWorlds(){ try{ return JSON.parse(localStorage.getItem(WORLDS_KEY))||[]; }catch(e){ return []; } }
+function recordWorld(code){
+  try{
+    const l=recentWorlds().filter(w=>w&&w.code!==code);
+    l.unshift({code,at:Date.now()});
+    localStorage.setItem(WORLDS_KEY,JSON.stringify(l.slice(0,8)));
+  }catch(e){}
+}
 
 /* ============================================================
    NETWORK — co-op client. Every MP behavior is gated on NET.active;
@@ -3794,12 +3807,22 @@ function startGame(fromSave){
 let mpMode='host';
 function openMpSetup(mode){
   mpMode=mode;
-  $('mpTitle').textContent=mode==='host'?'Host Co-op Game':'Join Co-op Game';
+  $('mpTitle').textContent=mode==='host'?'Create Online World':'Join World by Code';
   $('mpCode').classList.toggle('hidden',mode==='host');
-  $('mpGo').textContent=mode==='host'?'Host New World':'Join Game';
+  $('mpGo').textContent=mode==='host'?'Create New World':'Join World';
   let snap=null;
   try{ snap=JSON.parse(localStorage.getItem(MP_WORLD_KEY)); }catch(e){}
   $('mpHostPrev').classList.toggle('hidden',!(mode==='host'&&snap&&snap.v===1));
+  /* one-time solo-save import (Phase 3) */
+  let solo=false;
+  try{ solo=!!localStorage.getItem(SAVE_KEY)&&!localStorage.getItem(SOLO_IMPORTED_KEY); }catch(e){}
+  $('mpImportSolo').classList.toggle('hidden',!(mode==='host'&&solo));
+  /* recent worlds: tap to fill the code box */
+  const rec=mode==='join'?recentWorlds():[];
+  $('mpRecent').innerHTML=rec.length
+    ?'<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">RECENT WORLDS</div>'
+      +rec.map(w=>'<button class="menuBtn" data-code="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
+    :'';
   try{ $('mpName').value=localStorage.getItem('astravox_name')||''; }catch(e){}
   mpStatus('');
   openPanel('mpSetup');
@@ -3812,14 +3835,31 @@ function mpBegin(world){
   SND.ensure();
   if(mpMode==='host'){
     NET.isHost=true;
-    NET.connect(world?{t:'host',name,world}:{t:'host',name});
+    NET.connect(world?{t:'host',name,world,auth:guestAuth()}:{t:'host',name,auth:guestAuth()});
   } else {
     const code=$('mpCode').value.trim().toUpperCase();
-    if(code.length<4){ mpStatus('Enter the room code'); return; }
+    if(code.length<4){ mpStatus('Enter the world code'); return; }
     NET.isHost=false;
-    NET.connect({t:'join',code,name});
+    NET.connect({t:'join',code,name,auth:guestAuth()});
   }
 }
+/* import the legacy solo save into a brand-new persistent world we own */
+$('mpImportSolo').addEventListener('click',()=>{
+  const d=loadSavedState();
+  if(!d){ mpStatus('No solo save found'); return; }
+  const name=$('mpName').value.trim().slice(0,16);
+  if(!name){ mpStatus('Enter a name first'); return; }
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
+  NET.name=name; NET.isHost=true;
+  SND.ensure();
+  pendingImportProg={tier:d.tier,res:d.res,weapons:d.weapons,ammo:d.ammo,medkits:d.medkits,o2:d.o2,fuel:d.fuel};
+  NET.connect({t:'host',name,auth:guestAuth(),
+    world:{structures:d.structures,station:d.station,stationOnline:d.stationOnline}});
+});
+$('mpRecent').addEventListener('click',e=>{
+  const b=e.target&&e.target.closest('[data-code]');
+  if(b){ $('mpCode').value=b.dataset.code; SND.blip(); }
+});
 $('btnHost').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('host'); });
 $('btnJoin').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openMpSetup('join'); });
 $('mpGo').addEventListener('click',()=>mpBegin(null));
@@ -3835,7 +3875,7 @@ $('roomBadge').addEventListener('click',()=>{
 });
 $('btnReconnect').addEventListener('click',()=>{
   $('netLost').classList.add('hidden');
-  NET.connect({t:'join',code:NET.code,name:NET.name});
+  NET.connect({t:'join',code:NET.code,name:NET.name,auth:guestAuth()});
 });
 $('btnNetQuit').addEventListener('click',()=>{ NET.quitting=true; location.reload(); });
 
@@ -3862,39 +3902,71 @@ function installWorld(world){
   NET.seats=new Map(world.seats||[]);
   if(typeof world.tod==='number') dayClock=world.tod*CYCLE_S;
 }
+let pendingImportProg=null;   // solo-save progress riding along with an import-host
 function startMultiplayer(w){
   NET.active=true;
   NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  if(w.guest){ try{ localStorage.setItem(GUEST_KEY,JSON.stringify(w.guest)); }catch(e){} }   // server minted us an identity
+  recordWorld(w.code);
   resetState();
   installWorld(w.world);
   if(S.beacon) S.victoryShown=true;
-  /* per-world progress: apply the local blob for instant UI, then submit it
-     once for the server to adopt (sanitized server-side — the Phase-3 seam) */
-  let blob=null;
-  try{ blob=JSON.parse(localStorage.getItem(mpPlayerKey())); }catch(e){}
-  if(blob){
-    S.tier=clamp(blob.tier|0,1,5);
-    S.res={fe:Math.max(0,blob.res&&blob.res.fe|0||0),cy:Math.max(0,blob.res&&blob.res.cy|0||0),bio:Math.max(0,blob.res&&blob.res.bio|0||0),ch:Math.max(0,blob.res&&blob.res.ch|0||0),pe:Math.max(0,blob.res&&blob.res.pe|0||0)};
-    S.o2=clamp(+blob.o2||100,5,200); S.fuel=clamp(+blob.fuel||100,0,100);
-    if(blob.victoryShown) S.victoryShown=true;
-    S.weapons=readWeapons(blob.weapons);
-    S.ammo=readAmmo(blob.ammo);
-    S.medkits=Math.max(0,blob.medkits|0); S.headbob=blob.headbob!==false;
-    NET.send({t:'progRestore',prog:mpProgBlob()});
-  } else if(w.prog) applyProg(w.prog);   // fresh join (or Commander host): adopt server state
+  let fromSave=false;
+  if(w.fresh){
+    /* first-ever join to this world: the one-time legacy import seam — a solo
+       save being imported, or the old per-world localStorage blob; the server
+       adopts it once (sanitized) and the store owns it from then on */
+    let blob=pendingImportProg;
+    if(!blob){ try{ blob=JSON.parse(localStorage.getItem(mpPlayerKey())); }catch(e){} }
+    if(blob){
+      S.tier=clamp(blob.tier|0,1,5);
+      S.res={fe:Math.max(0,blob.res&&blob.res.fe|0||0),cy:Math.max(0,blob.res&&blob.res.cy|0||0),bio:Math.max(0,blob.res&&blob.res.bio|0||0),ch:Math.max(0,blob.res&&blob.res.ch|0||0),pe:Math.max(0,blob.res&&blob.res.pe|0||0)};
+      S.o2=clamp(+blob.o2||100,5,200); S.fuel=clamp(+blob.fuel||100,0,100);
+      if(blob.victoryShown) S.victoryShown=true;
+      S.weapons=readWeapons(blob.weapons);
+      S.ammo=readAmmo(blob.ammo);
+      S.medkits=Math.max(0,blob.medkits|0); S.headbob=blob.headbob!==false;
+      NET.send({t:'progRestore',prog:mpProgBlob()});
+    } else if(w.prog) applyProg(w.prog);   // brand-new player (or Commander host): adopt server state
+    if(pendingImportProg){
+      try{ localStorage.setItem(SOLO_IMPORTED_KEY,'1'); }catch(e){}
+      pendingImportProg=null;
+      showToast('Solo save imported — this world now lives on the server',6000);
+    }
+  } else {
+    /* returning player: server-stored progress + last position are the truth */
+    if(w.prog){
+      applyProg(w.prog);
+      if(typeof w.prog.o2==='number') S.o2=clamp(w.prog.o2,5,o2Max());
+      if(typeof w.prog.fuel==='number') S.fuel=clamp(w.prog.fuel,0,100);
+    }
+    if(w.loc&&Array.isArray(w.loc.pos)&&w.loc.pos.length===3&&w.loc.pos.every(v=>isFinite(+v))){
+      if(w.loc.mode==='surface'&&PLANETS[w.loc.pl]){
+        S.mode='surface'; S.planet=w.loc.pl;
+        S.ppos=w.loc.pos.map(Number); S.pyaw=+w.loc.yaw||0;
+        fromSave=true;
+      } else if(w.loc.mode==='space'&&Math.hypot(w.loc.pos[0],w.loc.pos[1],w.loc.pos[2])>10){
+        S.mode='space'; S.spos=w.loc.pos.map(Number); S.syaw=+w.loc.yaw||0;
+        fromSave=true;
+      }
+    }
+  }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
   closeAllPanels();
-  startGame(false);
+  startGame(fromSave);
   updateRoomBadge();
-  showToast('ROOM '+NET.code+' — click the room badge (top right) to copy the code',6000);
+  showToast('WORLD '+NET.code+' — click the badge (top right) to copy the invite code',6000);
 }
 function resyncFromWelcome(w){
   NET.pid=w.pid; NET.code=w.code; NET.worldId=w.worldId;
+  if(w.guest){ try{ localStorage.setItem(GUEST_KEY,JSON.stringify(w.guest)); }catch(e){} }
   installWorld(w.world);
-  /* reconnect = a fresh server-side player; hand our progress back once */
-  NET.send({t:'progRestore',prog:mpProgBlob()});
+  /* reconnect: the server restored us from its store; only a fresh row
+     (store lost us somehow) still needs the legacy hand-back */
+  if(w.fresh) NET.send({t:'progRestore',prog:mpProgBlob()});
+  else if(w.prog) applyProg(w.prog);
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -3940,7 +4012,7 @@ function secretHost(){
   NET.name=name||'COMMANDER';
   SND.ensure(); SND.tierUp();
   showToast('⚡ COMMANDER MODE — hosting a new world with maxed resources');
-  NET.connect({t:'host',name:NET.name,cmd:1});
+  NET.connect({t:'host',name:NET.name,cmd:1,auth:guestAuth()});
 }
 function secretTap(){
   if(S.running) return;
