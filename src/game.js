@@ -176,7 +176,38 @@ function netHandle(m){
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
     case 'stationRemoved': applyStationRemovedById(m.id,m.by===NET.pid); break;
     case 'prog': applyProg(m); break;
+    case 'hurt': onHurt(m); break;
+    case 'pdeath': onPDeath(m); break;
+    case 'tfire': onTurretFire(m); break;
   }
+}
+/* ---- server-authoritative damage/death (Phase 2.3) ---- */
+function onHurt(m){
+  player.hp=Math.max(0,Math.min(HP_MAX,+m.hp||0));
+  NET.lastHitBy=m.by;
+  if(S.mode==='surface'){
+    dmgFlashFx(); SND.hurt();
+    spawnBurst(player.x,player.y+1.2,player.z,0xff4040,8,2,2,0.4,3);
+  }
+}
+function onPDeath(m){
+  NET.lastHitBy=m.by;
+  S.res.fe=0; S.res.cy=0; S.res.bio=0; updateHUDRes();   // server dropped the cache; prog confirms
+  if(S.mode==='surface'){
+    spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
+    spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
+  }
+  SND.impact();
+  if(S.mode==='surface'&&surf.built) respawnPlayer();
+  else { player.hp=HP_MAX; player.invuln=SPAWN_PROT; }
+}
+function onTurretFire(m){
+  if(S.mode!=='surface') return;
+  const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
+  if(!st||st.pl!==S.planet||!Array.isArray(m.p)) return;
+  tracerFx([st.x,st.y+1.35,st.z],m.p,0xff6a4a);
+  const dxs=player.x-st.x,dzs=player.z-st.z;
+  if(dxs*dxs+dzs*dzs<1600) SND.shoot();
 }
 /* ---- server-authoritative progress (Phase 2) ----
    In co-op the server owns resources/tier/weapons/ammo/medkits; every grant
@@ -194,6 +225,7 @@ function applyProg(m){
   S.weapons=readWeapons(m.weapons);
   S.ammo=readAmmo(m.ammo);
   S.medkits=Math.max(0,m.medkits|0);
+  if(typeof m.hp==='number') player.hp=clamp(m.hp,0,HP_MAX);
   if(!ownsSlot(S.slot)){ S.slot=0; updateViewmodel(); }
   updateHUDRes(); updateTierBadge(); renderHotbar();
   if(m.ev) progEvent(m.ev);
@@ -213,7 +245,7 @@ function progEvent(ev){
     if(!$('craftMenu').classList.contains('hidden')) renderCraftGrid();
   }
   else if(ev.type==='med'){
-    player.hp=Math.min(HP_MAX,player.hp+50);   // P2.3 makes hp fully server-owned
+    /* hp itself arrived in this prog snapshot */
     SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
     showToast('+50 HP');
   }
@@ -1826,7 +1858,7 @@ function doAttack(w,wp,kind){
   if(hitPid!==null) spawnBurst(end[0],end[1],end[2],0xffd0a0,9,2,2,0.4,3);
   if(NET.active){
     NET.send({t:'fire',wp,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+end[0].toFixed(2),+end[1].toFixed(2),+end[2].toFixed(2)],
-      target:hitPid!==null?hitPid:undefined,dmg:hitPid!==null?w.dmg:undefined});
+      target:hitPid!==null?hitPid:undefined});   // damage is computed server-side
   }
   if(critTarget) hitCritter(critTarget,w.dmg,end,wp);
 }
@@ -1845,7 +1877,7 @@ function onRemoteFire(m){
       const col=m.wp===2?0xffd060:0x7fff9a; if(m.o){ tracerFx(m.o,m.p,col); muzzleAt(m.o,col); }
     } else { spawnBurst(m.p[0],m.p[1],m.p[2],0x9feaff,5,2,2,0.3,1); const r=remotes.get(m.by); if(r) r.swingT=0.26; }
   }
-  if(m.target===NET.pid&&m.dmg){ NET.lastHitBy=m.by; applyDamageToSelf(m.dmg); }
+  /* damage no longer rides the fire relay — the server sends 'hurt'/'pdeath' */
 }
 function openCraftMenu(){ renderCraftGrid(); openPanel('craftMenu'); }
 
@@ -1979,6 +2011,7 @@ function dmgFlashFx(){
   setTimeout(()=>{ f.style.boxShadow='inset 0 0 150px rgba(255,30,30,0)'; },120);
 }
 function applyDamageToSelf(dmg){
+  if(NET.active) return;   // co-op damage arrives only via server 'hurt'/'pdeath'
   if(!S.running||S.mode!=='surface') return;
   if(player.invuln>0||inSafeZone(player.x,player.z)) return;
   player.hp=Math.max(0,player.hp-dmg);
@@ -1988,14 +2021,14 @@ function applyDamageToSelf(dmg){
 }
 let soloLootId=1;
 function die(){
+  /* solo only — in co-op the server decides deaths and sends 'pdeath' */
   const loot={fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0};
   S.res={fe:0,cy:0,bio:0,ch:S.res.ch|0,pe:S.res.pe|0}; updateHUDRes();   // Chitin & Pearls kept through death
   spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
   spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
   SND.impact();
   const pos=[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)];
-  if(NET.active) NET.send({t:'died',by:NET.lastHitBy||0,pos});   // server drops ITS tracked res as the cache
-  else if(loot.fe||loot.cy||loot.bio) spawnLootBox('Lsolo'+(soloLootId++),S.planet,pos,loot);
+  if(loot.fe||loot.cy||loot.bio) spawnLootBox('Lsolo'+(soloLootId++),S.planet,pos,loot);
   respawnPlayer();
 }
 function respawnPlayer(){
@@ -2167,7 +2200,7 @@ function updateTurrets(dt){
     let dy=desired-st._tyaw; dy=((dy+Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)-Math.PI;
     st._tyaw+=dy*Math.min(1,dt*6);
     for(const pi of def.headParts){ structMatrixHead(st,def.parts[pi],_doorM,st._tyaw); structMeshes.turret[pi].setMatrixAt(i,_doorM); }
-    if(tg&&st.hp>0){
+    if(tg&&st.hp>0&&!NET.active){   // co-op: the SERVER simulates turret fire ('tfire')
       st._tfire=(st._tfire||0)-dt;
       if(st._tfire<=0&&Math.abs(dy)<0.5){ st._tfire=TURRET_CD; turretFire(st,tg); }
     } else st._tfire=0.4;
@@ -2451,8 +2484,8 @@ function explodeGrenade(t){
   /* players: each client applies blast to ITSELF (safe zone / invuln respected) */
   const dx=player.x-t.x, dy=(player.y+1)-t.y, dz=player.z-t.z, d=Math.hypot(dx,dy,dz);
   if(d<GREN_R){ const dmg=Math.round(GREN_DMG*(1-d/GREN_R)); if(dmg>0) applyDamageToSelf(dmg); }
-  /* critters: only the owner's grenade deals damage (avoids double in MP) */
-  if(t.owned){
+  /* critters: solo only — in co-op the server resolves the blast on its own sim */
+  if(t.owned&&!NET.active){
     for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
       const cd=Math.hypot(c.x-t.x,(c.y+0.4)-t.y,c.z-t.z);
       if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)),6);
@@ -2547,7 +2580,7 @@ function fireInferno(w){
         if(d>w.range||d<0.1) continue;
         if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
         if(inSafeZone(r.avatar.position.x,r.avatar.position.z)) continue;
-        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+ctr[0].toFixed(2),+ctr[1].toFixed(2),+ctr[2].toFixed(2)],target:pid,dmg:w.dmg}); sent=true;
+        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+ctr[0].toFixed(2),+ctr[1].toFixed(2),+ctr[2].toFixed(2)],target:pid}); sent=true;
       }
       const nw=performance.now();
       if(!sent&&nw-infNetT>150){ infNetT=nw;

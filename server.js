@@ -29,11 +29,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
 import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
-  MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_DMG, SHIELD_CD } from './shared/constants.js';
+  MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_R, GREN_DMG, GREN_FUSE, SHIELD_CD, SHIELD_LIFE,
+  TURRET_R, TURRET_DMG, TURRET_CD, WORLD_R } from './shared/constants.js';
 import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
-  placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid } from './shared/rules.js';
+  placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
+  inSafeZone, groundYAt, shotBlocked } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 
 /* deterministic resource-node layout per planet — same data the client renders */
@@ -109,6 +111,7 @@ function makeRoom(world) {
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
+    walls: [],                          // live deployable shield walls (server blocks shots)
     station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
   };
@@ -162,7 +165,7 @@ function sanitizeProg(d) {
   return out;
 }
 function progOf(p) {
-  return { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo }, medkits: p.medkits };
+  return { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo }, medkits: p.medkits, hp: p.hp };
 }
 function sendProg(room, pid, ev) {
   const p = room.players.get(pid); if (!p) return;
@@ -176,6 +179,68 @@ function grantRes(room, p, key, amt) {
   const before = p.res[key] | 0;
   p.res[key] = Math.min(cap, before + Math.max(0, amt | 0));
   return p.res[key] - before;
+}
+
+/* ---------- combat authority (Phase 2.3): the server owns player HP ---------- */
+function damagePlayer(room, pid, dmg, byPid) {
+  const p = room.players.get(pid); if (!p) return;
+  if (p.mode !== 'surface') return;
+  if (Date.now() < p.invulnUntil) return;                               // spawn protection
+  if (inSafeZone(room.structures, p.pl, p.pos[0], p.pos[2])) return;    // Beacon safe zone
+  p.hp = Math.max(0, p.hp - dmg);
+  if (p.hp > 0) { sendTo(p.ws, { t: 'hurt', hp: p.hp, dmg, by: byPid }); return; }
+  /* death: drop the SERVER-tracked cache where they fell, reset, respawn-protect */
+  const drop = { fe: p.res.fe | 0, cy: p.res.cy | 0, bio: p.res.bio | 0 };
+  p.res.fe = 0; p.res.cy = 0; p.res.bio = 0;          // Chitin & Pearls kept through death
+  if (drop.fe || drop.cy || drop.bio) {
+    const id = 'L' + (room.nextLoot++);
+    const cont = { id, pl: p.pl, pos: [p.pos[0], p.pos[1], p.pos[2]], loot: drop, expireAt: Date.now() + 300000 };
+    room.loot.set(id, cont);
+    bcast(room, { t: 'lootSpawn', id, pl: cont.pl, pos: cont.pos, loot: drop });
+  }
+  p.hp = HP_MAX;
+  p.invulnUntil = Date.now() + SPAWN_PROT * 1000;
+  const killer = room.players.get(byPid);
+  bcast(room, { t: 'sys', text: (killer ? killer.name : 'Someone') + ' eliminated ' + p.name });
+  sendTo(p.ws, { t: 'pdeath', by: byPid });
+  sendProg(room, pid);
+}
+/* critter damage + chitin payout — used by critHit intents and grenade AoE */
+function damageCritter(room, plKey, c, dmg, byPid, fromX, fromZ) {
+  const arr = room.crit[plKey]; if (!arr || arr.indexOf(c) < 0) return;
+  c.hp -= dmg;
+  c.st = 1; c.idle = 0; c.hd = Math.atan2(c.z - fromZ, c.x - fromX);   // flee the shooter
+  if (c.hp <= 0) {
+    arr.splice(arr.indexOf(c), 1);
+    const r = CRITTERS[c.type].ch;
+    const ch = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
+    const by = room.players.get(byPid);
+    const got = by ? grantRes(room, by, 'ch', ch) : 0;
+    bcast(room, { t: 'critDead', id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), by: byPid, ch });
+    if (by) sendProg(room, byPid, { type: 'gain', k: 'ch', amt: got });
+  }
+}
+/* ballistic sim on the shared heightfield+structures — grenade rest point / shield landing */
+function simThrowable(room, pl, o, v, kind) {
+  let x = +o[0], y = +o[1], z = +o[2], vx = +v[0], vy = +v[1], vz = +v[2];
+  const dt = 0.05;
+  for (let t = 0; t < GREN_FUSE; t += dt) {
+    vy -= 18 * dt; x += vx * dt; y += vy * dt; z += vz * dt;
+    const gy = groundYAt(room.structures, pl, x, z, 1e9);
+    if (y <= gy + 0.22) {
+      if (kind === 'shield') return { x, y: gy, z, t };
+      y = gy + 0.22; vy *= -0.4; vx *= 0.55; vz *= 0.55;
+      if (Math.abs(vy) < 1.2) { vy = 0; vx *= 0.6; vz *= 0.6; }
+    }
+    const r = Math.hypot(x, z);
+    if (r > WORLD_R - 2) { x *= (WORLD_R - 2) / r; z *= (WORLD_R - 2) / r; vx *= -0.4; vz *= -0.4; }
+  }
+  return { x, y, z, t: GREN_FUSE };
+}
+function activeWalls(room, pl) {
+  const now = Date.now();
+  room.walls = room.walls.filter(w => now < w.expireAt);
+  return room.walls.filter(w => w.pl === pl);
 }
 
 function bcast(room, obj, exceptPid) {
@@ -417,27 +482,74 @@ function handle(ws, m) {
       sendProg(room, ws.pid, { type: 'gain', k: rk, amt });
       return;
     }
-    /* ---- combat (ammo/ownership validated; P2.3 moves damage here too) ---- */
+    /* ---- combat (fully server-authoritative: ammo, cooldown, range, zones, damage) ---- */
     case 'fire': {
       const wp = m.wp | 0;
       const chk = fireCheck(me.weapons, me.ammo, wp);
       if (chk.err) return;                               // unowned weapon / no ammo: drop silently
-      if (chk.ammoKey) {
-        if (wp === 5) {                                  // inferno: fuel burns on a 110ms window
-          const now = Date.now();
-          if (now - (me.lastFuel || 0) >= 110) { me.lastFuel = now; me.ammo.fuel = Math.max(0, me.ammo.fuel - 1); }
-        } else me.ammo[chk.ammoKey] = Math.max(0, me.ammo[chk.ammoKey] - chk.use);
+      const w = chk.w, now = Date.now();
+      if (wp === 5) {                                    // inferno sprays multiple frames/targets
+        if (now - (me.lastFuel || 0) >= 110) { me.lastFuel = now; me.ammo.fuel = Math.max(0, me.ammo.fuel - 1); }
+      } else {
+        if (now - (me.fireAt[wp] || 0) < (w.cd || 0.1) * 800) return;   // cooldown, 20% lag slack
+        me.fireAt[wp] = now;
+        if (chk.ammoKey) me.ammo[chk.ammoKey] = Math.max(0, me.ammo[chk.ammoKey] - chk.use);
       }
-      bcast(room, { t: 'fire', by: ws.pid, wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
+      bcast(room, { t: 'fire', by: ws.pid, wp, o: m.o, p: m.p }, ws.pid);
+      /* claimed hit: validate everything the client can lie about, then apply */
+      if (m.target !== undefined && m.target !== null && w.dmg) {
+        const victim = room.players.get(m.target);
+        if (!victim || victim === me) return;
+        if (me.mode !== 'surface' || victim.mode !== 'surface' || victim.pl !== me.pl) return;
+        if (inSafeZone(room.structures, me.pl, me.pos[0], me.pos[2])) return;   // no shooting FROM safety
+        if (wp === 5) {                                  // inferno: per-victim damage window
+          me.infHit = me.infHit || {};
+          if (now - (me.infHit[m.target] || 0) < 100) return;
+          me.infHit[m.target] = now;
+        }
+        const dx = victim.pos[0] - me.pos[0], dy = victim.pos[1] - me.pos[1], dz = victim.pos[2] - me.pos[2];
+        const range = (w.range || 4) + 8;                // pos updates are 10Hz; small slack
+        if (dx * dx + dy * dy + dz * dz > range * range) return;
+        if (!w.melee && !w.cone) {
+          const hit = shotBlocked(activeWalls(room, me.pl),
+            [me.pos[0], me.pos[1] + 1.6, me.pos[2]], [victim.pos[0], victim.pos[1] + 1, victim.pos[2]]);
+          if (hit) return;                               // a deployable shield wall absorbed it
+        }
+        damagePlayer(room, m.target, w.dmg, ws.pid);
+      }
       return;
     }
     case 'nade': {
       if (!me.weapons.grenade || (me.ammo.nade | 0) <= 0) return;
+      if (me.mode !== 'surface') return;
+      if (inSafeZone(room.structures, me.pl, me.pos[0], me.pos[2])) return;
       const now = Date.now();
       if (now - (me.lastNade || 0) < 500) return;
       me.lastNade = now;
       me.ammo.nade--;
+      if (!Array.isArray(m.o) || !Array.isArray(m.v)) return;
       bcast(room, { t: 'nade', by: ws.pid, o: m.o, v: m.v }, ws.pid);
+      /* server resolves the blast on its own sim of the throw */
+      const pl = me.pl, byPid = ws.pid, code = room.code;
+      const o = m.o.map(Number), v = m.v.map(Number);
+      if (o.some(n => !isFinite(n)) || v.some(n => !isFinite(n)) || Math.hypot(v[0], v[1], v[2]) > 40) return;
+      setTimeout(() => {
+        if (!rooms.has(code)) return;
+        const at = simThrowable(room, pl, o, v, 'grenade');
+        for (const [pid, p] of room.players) {
+          if (p.mode !== 'surface' || p.pl !== pl) continue;
+          const dx = p.pos[0] - at.x, dy = (p.pos[1] + 1) - at.y, dz = p.pos[2] - at.z;
+          const d = Math.hypot(dx, dy, dz);
+          if (d < GREN_R) {
+            const dmg = Math.round(GREN_DMG * (1 - d / GREN_R));
+            if (dmg > 0) damagePlayer(room, pid, dmg, byPid);
+          }
+        }
+        for (const c of (room.crit[pl] || []).slice()) {
+          const cd = Math.hypot(c.x - at.x, c.z - at.z);
+          if (cd < GREN_R) damageCritter(room, pl, c, Math.round(GREN_DMG * (1 - cd / GREN_R)), byPid, at.x, at.z);
+        }
+      }, GREN_FUSE * 1000);
       return;
     }
     case 'useMed': {
@@ -475,11 +587,18 @@ function handle(ws, m) {
       return;
     }
     case 'shield': {
-      if (!me.weapons.shield) return;
+      if (!me.weapons.shield || me.mode !== 'surface') return;
       const now = Date.now();
       if (now - (me.lastShield || 0) < (SHIELD_CD - 2) * 1000) return;
+      if (!Array.isArray(m.o) || !Array.isArray(m.v)) return;
+      const o = m.o.map(Number), v = m.v.map(Number);
+      if (o.some(n => !isFinite(n)) || v.some(n => !isFinite(n)) || Math.hypot(v[0], v[1], v[2]) > 30) return;
       me.lastShield = now;
       bcast(room, { t: 'shield', by: ws.pid, o: m.o, v: m.v }, ws.pid);
+      /* register the wall server-side so it blocks validated shots */
+      const at = simThrowable(room, me.pl, o, v, 'shield');
+      room.walls.push({ pl: me.pl, x: at.x, y: at.y, z: at.z, yaw: Math.atan2(v[0], v[2]),
+        hw: 2.5, h: 3.2, expireAt: now + (at.t + SHIELD_LIFE) * 1000 });
       return;
     }
     case 'critHit': {
@@ -499,34 +618,10 @@ function handle(ws, m) {
       }
       const dx = c.x - me.pos[0], dz = c.z - me.pos[2];
       if (dx * dx + dz * dz > range * range) return;
-      c.hp -= dmg;
-      c.st = 1; c.idle = 0; c.hd = Math.atan2(c.z - me.pos[2], c.x - me.pos[0]);   // flee the shooter
-      if (c.hp <= 0) {
-        arr.splice(arr.indexOf(c), 1);
-        const r = CRITTERS[c.type].ch;
-        const ch = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
-        const got = grantRes(room, me, 'ch', ch);
-        bcast(room, { t: 'critDead', id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), by: ws.pid, ch });
-        sendProg(room, ws.pid, { type: 'gain', k: 'ch', amt: got });
-      }
+      damageCritter(room, me.pl, c, dmg, ws.pid, me.pos[0], me.pos[2]);
       return;
     }
-    case 'died': {
-      /* the dropped cache comes from SERVER-tracked resources, never the client's claim */
-      const drop = { fe: me.res.fe | 0, cy: me.res.cy | 0, bio: me.res.bio | 0 };
-      me.res.fe = 0; me.res.cy = 0; me.res.bio = 0;     // Chitin & Pearls kept through death
-      if (Array.isArray(m.pos) && m.pos.every(v => isFinite(+v)) && (drop.fe || drop.cy || drop.bio)) {
-        const id = 'L' + (room.nextLoot++);
-        const cont = { id, pl: me.pl, pos: m.pos.map(Number), loot: drop, expireAt: Date.now() + 300000 };
-        room.loot.set(id, cont);
-        bcast(room, { t: 'lootSpawn', id, pl: cont.pl, pos: cont.pos, loot: drop });
-      }
-      me.invulnUntil = Date.now() + SPAWN_PROT * 1000;
-      const killer = room.players.get(m.by);
-      bcast(room, { t: 'sys', text: (killer ? killer.name : 'Someone') + ' eliminated ' + me.name });
-      sendProg(room, ws.pid);
-      return;
-    }
+    /* 'died' intent removed in P2.3 — the server decides deaths in damagePlayer() */
     case 'lootClaim': {
       const c = room.loot.get(m.id);
       if (!c) return;
@@ -608,6 +703,29 @@ function beaconOnPlanetS(room, pl) {
   for (const s of room.structures) if (s.t === 'beacon' && s.pl === pl) return s;
   return null;
 }
+/* sentry turrets: server-side targeting + damage (clients only render tracers) */
+function simTurrets(room, pl, dt) {
+  const now = Date.now();
+  for (const st of room.structures) {
+    if (st.t !== 'turret' || st.pl !== pl || st.hp <= 0) continue;
+    if (inSafeZone(room.structures, pl, st.x, st.z)) continue;
+    let best = TURRET_R * TURRET_R, tgtPid = 0, tgt = null;
+    for (const [pid, p] of room.players) {
+      if (pid === st.owner || p.mode !== 'surface' || p.pl !== pl) continue;
+      if (now < p.invulnUntil) continue;
+      if (inSafeZone(room.structures, pl, p.pos[0], p.pos[2])) continue;
+      const dx = p.pos[0] - st.x, dz = p.pos[2] - st.z, d2 = dx * dx + dz * dz;
+      if (d2 < best) { best = d2; tgt = p; tgtPid = pid; }
+    }
+    if (!tgt) { st._tf = 0.5; continue; }                 // matches the client's aim-settle delay
+    st._tf = (st._tf === undefined ? 0.5 : st._tf) - dt;
+    if (st._tf <= 0) {
+      st._tf = TURRET_CD;
+      bcast(room, { t: 'tfire', id: st.id, tp: tgtPid, p: [tgt.pos[0], tgt.pos[1] + 1, tgt.pos[2]] });
+      damagePlayer(room, tgtPid, TURRET_DMG, st.owner || 0);
+    }
+  }
+}
 /* simulate one planet's critters; only runs while that surface is occupied */
 function simCritters(room, pl, dt) {
   const arr = room.crit[pl];
@@ -678,6 +796,7 @@ setInterval(() => {
       for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
       if (!occupied) continue;
       simCritters(room, pl, dt);
+      simTurrets(room, pl, dt);
       const ms = room.meteor[pl];
       ms.t -= dt;
       if (ms.phase === 'idle') {
