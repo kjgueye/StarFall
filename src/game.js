@@ -415,7 +415,7 @@ function buildSaveObj(){
     rsp:S.respawnPt||null,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
-    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true};
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true};
 }
 function saveGame(){
   if(!S.running) return;
@@ -458,7 +458,7 @@ function parseSave(json){
       weapons:readWeapons(d.weapons),
       ammo:readAmmo(d.ammo),
       medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false,
-      fx:typeof d.fx==='boolean'?d.fx:null};
+      fx:typeof d.fx==='boolean'?d.fx:null, amb:d.amb===true};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
         if(out.structures.length>=MAX_STRUCT) break;
@@ -501,6 +501,7 @@ function applySave(d){
   S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
   if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
+  S.amb=d.amb===true;
 }
 function exportSave(){
   const code=btoa(unescape(encodeURIComponent(JSON.stringify(buildSaveObj()))));
@@ -1143,6 +1144,7 @@ function buildSurface(planetKey){
 
   surfScene.add(g);
   buildAmbient();
+  SND.ambStart(planetKey);
   refreshStructures();
   if(NET.active&&NET.deadNodes[planetKey]){
     for(const i of NET.deadNodes[planetKey]){
@@ -1350,6 +1352,10 @@ function updateDoors(dt){
       const target=anyoneNear(st.x,st.z,7.5)?1:0;
       const cur=st.open||0;
       if(Math.abs(target-cur)<0.005) continue;
+      if(t==='airlock'&&cur<0.02&&target===1){
+        const adx=player.x-st.x, adz=player.z-st.z;
+        if(adx*adx+adz*adz<144) SND.airlock();
+      }
       st.open=cur+(target-cur)*Math.min(1,dt*def.doorSpeed);
       for(let k=0;k<def.doorParts.length;k++){
         const pi=def.doorParts[k];
@@ -1386,6 +1392,12 @@ function updateLifts(dt){
     if(Math.abs(target-cur)<0.002) continue;
     const dir=target>cur?1:-1;
     st.lift=clamp(cur+dir*dt*0.35,0,1);
+    /* motion sounds, only if the local player can hear it */
+    const sdx=player.x-st.x, sdz=player.z-st.z;
+    if(sdx*sdx+sdz*sdz<576){
+      if(cur===0&&st.lift>0) SND.liftStart();
+      else if((st.lift===1&&cur<1)||(st.lift===0&&cur>0)) SND.liftStop();
+    }
     const offY=st.lift*def.liftH;
     for(const pi of def.liftParts){
       structMatrix(st,def.parts[pi],_doorM,0,offY);
@@ -1865,6 +1877,34 @@ SND.hurt=function(){ this.tone(200,0.16,'square',0.08,90); };
 SND.heal=function(){ [440,660,880].forEach((f,i)=>setTimeout(()=>this.tone(f,0.12,'sine',0.07),i*70)); };
 SND.craft=function(){ [330,494,660].forEach((f,i)=>setTimeout(()=>this.tone(f,0.13,'triangle',0.08),i*80)); };
 SND.poof=function(){ this.tone(300,0.18,'sine',0.05,90); setTimeout(()=>this.tone(170,0.16,'triangle',0.04,70),40); };
+/* ---- Outpost piece sounds (P6) ---- */
+SND.teleport=function(){ this.tone(360,0.16,'sine',0.07,980); setTimeout(()=>this.tone(980,0.22,'sine',0.055,1520),70); };
+SND.jump=function(){ this.tone(240,0.16,'triangle',0.08,640); };
+SND.liftStart=function(){ this.tone(160,0.22,'triangle',0.05,230); };
+SND.liftStop=function(){ this.tone(230,0.14,'triangle',0.05,150); };
+SND.airlock=function(){ this.tone(120,0.3,'sawtooth',0.045,70); setTimeout(()=>this.tone(2400,0.25,'sine',0.018,3000),80); };
+SND.navPing=function(){ this.tone(1180,0.16,'sine',0.035,1160); };
+/* per-planet ambient bed: looping filtered noise, OFF by default (S.amb) */
+SND.amb=null;
+SND.ambStart=function(planet){
+  this.ambStop();
+  if(!this.on||!S.amb||!this.ctx) return;
+  try{
+    const ctx=this.ctx, buf=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate);
+    const d=buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
+    const f=ctx.createBiquadFilter(); f.type='lowpass';
+    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05]}[planet]||[420,0.04];
+    f.frequency.value=cfg[0];
+    const g=ctx.createGain();
+    g.gain.setValueAtTime(0.0001,ctx.currentTime);
+    g.gain.linearRampToValueAtTime(cfg[1],ctx.currentTime+1.5);   // fade in
+    src.connect(f); f.connect(g); g.connect(ctx.destination); src.start();
+    this.amb={src,gain:g};
+  }catch(e){}
+};
+SND.ambStop=function(){ if(this.amb&&this.amb.src){ try{ this.amb.src.stop(); }catch(e){} } this.amb=null; };
 
 let driving=null;          // rover entity when seated (Phase 4)
 let weaponCd=0, swingT=0, fireHeld=false;
@@ -3388,6 +3428,7 @@ function openSettings(){
   $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF');
   $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
   $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
+  $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF');
   $('importWrap').classList.add('hidden');
   openPanel('settings');
 }
@@ -3400,6 +3441,11 @@ $('btnImportGo').addEventListener('click',()=>{
 $('btnSound').addEventListener('click',()=>{ SND.on=!SND.on; $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip(); });
 $('btnBob').addEventListener('click',()=>{ S.headbob=!S.headbob; $('btnBob').textContent='Head Bob: '+(S.headbob?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnFx').addEventListener('click',()=>{ S.fx=!S.fx; applyFx(); $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF'); SND.blip(); saveGame(); });
+$('btnAmb').addEventListener('click',()=>{
+  S.amb=!S.amb;
+  if(S.amb&&S.running&&S.mode==='surface') SND.ambStart(S.planet); else SND.ambStop();
+  $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF'); SND.blip(); saveGame();
+});
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 $('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
 $('mMap').addEventListener('touchstart',e=>{ e.preventDefault(); toggleMap(); },{passive:false});
@@ -3482,6 +3528,7 @@ function doLand(planetKey){
 function doLaunch(){
   if(transitioning) return;
   resetEmisBoost();   // night emissive boost is surface-only; mats are shared with space
+  SND.ambStop();
   fadeTo('LAUNCHING',()=>{ enterSpace(S.planet,false); saveGame(); });
 }
 function doBlackout(){
@@ -3833,7 +3880,7 @@ function updateSpaceHUD(){
 /* ============================================================
    SURFACE UPDATE
    ============================================================ */
-let o2BeepT=0, footT=0, puSprint=false, puJet=false;   // activity flags reported to the server
+let o2BeepT=0, navPingT=0, footT=0, puSprint=false, puJet=false;   // activity flags reported to the server
 function updateSurface(dt){
   if(anyPanelOpen()||transitioning){ justE=false; renderSurfaceCam(); return; }
   const p=curP();
@@ -3904,6 +3951,16 @@ function updateSurface(dt){
   $('o2bar').style.width=(o2f*100)+'%';
   $('o2bar').classList.toggle('low',o2f<0.25&&lowAir);
   if(o2f<0.25&&lowAir){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  /* nav beacon proximity ping (throttled) */
+  navPingT-=dt;
+  if(navPingT<=0){
+    navPingT=1;
+    for(const s of placedByType.navbeacon||[]){
+      if(s.hp<=0) continue;
+      const ndx=player.x-s.x, ndz=player.z-s.z;
+      if(ndx*ndx+ndz*ndz<900){ SND.navPing(); navPingT=4.5; break; }
+    }
+  }
   $('waterVig').style.opacity = water?(submerged?clamp((SEA_Y-0.3-player.y)/3,0.35,0.85):(wading?0.12:0)):0;
   if(S.o2<=0){ doBlackout(); justE=false; return; }
   if(S.tier>=3) $('fuelbar').style.width=S.fuel+'%';
@@ -4291,6 +4348,7 @@ function secretTap(){
 
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
+if(typeof S.amb!=='boolean') S.amb=false;   // planet ambience is opt-in
 applyFx();
 
 /* autosave */
@@ -4366,7 +4424,7 @@ Object.assign(window,{
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
-  applyFx,openSettings,buildAmbient,updateAmbient,
+  applyFx,openSettings,buildAmbient,updateAmbient,SND,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

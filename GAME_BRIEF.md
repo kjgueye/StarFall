@@ -59,8 +59,23 @@ Live versions:
 >   day/night clock persists. `test/persistence.mjs` proves the full restart cycle.
 >   ⚠ Railway still needs the Postgres plugin attached + `DATABASE_URL` wired; without it
 >   the prod store is an ephemeral file (wiped per deploy).
-> - **Next:** Phase 4 owner moderation (kick/ban/PvP toggle/safe zones/chat safety);
->   Phase 5 hardening.
+> - **Migration PAUSED after Phase 3 (merged to main 88124e9).** Phase 4 moderation /
+>   Phase 5 hardening resume later.
+>
+> **"Outpost & Atmosphere" content update (2026-06-11, branch `server-migration`, commits
+> Outpost P1–P6):** 8 functional buildables — Teleporter Pads (link by paint colour, E to
+> warp), Lift Platform (rises while ridden; platform top is a shared `groundYAt` walk
+> surface), Jump Pad, Airlock Door (`updateDoors` is now data-driven via CAT
+> doorParts/doorSlide/doorSpeed), Spotlight (faked cone), Cryopod (per-player respawn
+> point; solo SAVE_VER **7** `rsp`, MP `setSpawn` intent persisted in the progress row),
+> Storage Silo (`carryCap` now sums CAT `capUp`), Nav Beacon (paint-tinted map markers).
+> Visual/audio pass: PBR material contrast + curated emissive hot set; per-planet night
+> palettes/dusk tint/night emissive boost in `applyDayNight`; **THREE is npm-bundled
+> (pinned 0.158.0, CDN tag removed)** with an EffectComposer bloom + ACES grade post
+> stack behind a persisted "Effects" toggle (default off on touch); per-planet ambient
+> particles (`PLANETS.ambient`); new SND one-shots + opt-in looping planet ambience.
+> Tests: in-repo suites cover the new shared rules + cryopod-spawn persistence;
+> /tmp/pwtest gained p1_outpost/p1_mp/p3_light/p4_fx/p5_amb/p6_regress.
 
 
 - **Language:** Plain JavaScript (ES2020), no TypeScript, **no build step**, no framework.
