@@ -85,7 +85,7 @@
   .panel h2 { font-weight:300; letter-spacing:0.3em; color:#aee8ff; font-size:20px; margin-bottom:14px; text-transform:uppercase; }
   .closeX { position:absolute; top:12px; right:14px; background:none; border:1px solid #3fa9d4; color:#aee8ff; width:30px; height:30px;
     cursor:pointer; font-size:15px; }
-  #buildGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:9px; }
+  #buildGrid, #stationGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:9px; }
   #paintGrid { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; }
   .swatch { height:46px; border:2px solid rgba(140,200,230,0.5); cursor:pointer; border-radius:4px; }
   .swatch:hover { border-color:#fff; box-shadow:0 0 12px rgba(255,255,255,0.4); }
@@ -293,6 +293,12 @@
   <button class="closeX" data-close="craftMenu">✕</button>
   <h2>Armory — Fabricate</h2>
   <div id="craftGrid"></div>
+</div>
+
+<div id="stationMenu" class="panel hidden">
+  <button class="closeX" data-close="stationMenu">✕</button>
+  <h2>Station Fabricator — EVA</h2>
+  <div id="stationGrid"></div>
 </div>
 
 <div id="paintPanel" class="panel hidden">
@@ -649,12 +655,54 @@ const CRAFT={
 };
 function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 
+/* ============================================================
+   ORBITAL STATION (Phase 7) — built in EVA near Rust at Tier 5.
+   Pieces snap to 3D sockets on the core and on each other. `out`
+   = sockets a piece exposes (local offset p + outward dir d); a
+   piece's origin connects INTO the socket it was placed on, body
+   extends along +Z. Costs are steep (all planet resources + pearls).
+   ============================================================ */
+const STATION={
+  corridor:{name:'Corridor Tube', ic:'▭', cost:{fe:40,cy:20},
+    parts:[{g:'cyl',m:'metal',o:[0,0,2.5],s:[1.5,5,1.5],r:[Math.PI/2,0,0]},
+           {g:'torus',m:'emisC',o:[0,0,0.15],s:[1.6,1.6,1.6]},{g:'torus',m:'emisC',o:[0,0,4.85],s:[1.6,1.6,1.6]}],
+    out:[{p:[0,0,5],d:[0,0,1]}]},
+  habitat:{name:'Habitat Module', ic:'⬢', cost:{fe:80,cy:50,bio:20,pe:8},
+    parts:[{g:'cyl',m:'metal',o:[0,0,2],s:[4.4,4,4.4],r:[Math.PI/2,0,0]},
+           {g:'cyl',m:'dark',o:[0,0,2],s:[4.7,1.0,4.7],r:[Math.PI/2,0,0]},
+           {g:'box',m:'glass',o:[0,2.05,2],s:[1.5,0.6,1.7]},{g:'torus',m:'emisC',o:[0,0,0.15],s:[4.4,4.4,4.4]}],
+    out:[{p:[0,0,4],d:[0,0,1]},{p:[2.2,0,2],d:[1,0,0]},{p:[-2.2,0,2],d:[-1,0,0]},{p:[0,2.2,2],d:[0,1,0]},{p:[0,-2.2,2],d:[0,-1,0]}]},
+  solar:{name:'Solar Wing', ic:'❉', cost:{fe:50,cy:30,pe:5},
+    parts:[{g:'cyl',m:'metal',o:[0,0,1],s:[0.3,2,0.3],r:[Math.PI/2,0,0]},
+           {g:'box',m:'solar',o:[0,0,2.4],s:[6.5,0.1,2.8]},{g:'box',m:'dark',o:[0,0,2.4],s:[0.2,0.14,2.8]}],
+    out:[]},
+  dome:{name:'Observation Dome', ic:'◓', cost:{fe:40,cy:40,bio:15,pe:6},
+    parts:[{g:'dome',m:'glass',o:[0,0,0.2],s:[2.4,2.4,2.4],r:[-Math.PI/2,0,0]},
+           {g:'torus',m:'metal',o:[0,0,0.15],s:[4.6,4.6,4.6]},{g:'sphere',m:'emisC',o:[0,0,1.4],s:[0.3,0.3,0.3]}],
+    out:[]},
+  dock:{name:'Docking Ring', ic:'◎', cost:{fe:60,cy:30,ch:20,pe:6},
+    parts:[{g:'torus',m:'metal',o:[0,0,1],s:[5,5,5]},{g:'cyl',m:'dark',o:[0,0,1],s:[3,2,3],r:[Math.PI/2,0,0]},
+           {g:'torus',m:'emisG',o:[0,0,1.9],s:[5,5,5]}],
+    out:[{p:[0,0,2.6],d:[0,0,1]}]},
+  comms:{name:'Comms Dish', ic:'☄', cost:{fe:50,cy:25,bio:20,pe:5},
+    parts:[{g:'cyl',m:'metal',o:[0,0,1],s:[0.3,2,0.3],r:[Math.PI/2,0,0]},
+           {g:'cone',m:'metal',o:[0,0,2.5],s:[3,1.4,3],r:[-Math.PI/2,0,0]},{g:'sphere',m:'emisR',o:[0,0,2.0],s:[0.32,0.32,0.32]}],
+    out:[]},
+};
+const STATION_KEYS=['corridor','habitat','solar','dome','dock','comms'];
+const STATION_POS=new THREE.Vector3(330,40,30);     // orbit near Rust [260,6,60]
+const CORE_R=7;
+const CORE_DIRS=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].map(d=>new THREE.Vector3(d[0],d[1],d[2]));
+const STATION_MAX=60;
+const STATION_MIN_PIECES=10;
+
 /* ---------- game state ---------- */
 const S={
   running:false, mode:'space', planet:'rust',
   tier:1, res:{fe:0,cy:0,bio:0,ch:0,pe:0},
   structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
+  station:[], stationOnline:false,
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingCutscene:null,
@@ -668,7 +716,7 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='starfall_save_v1';
-const SAVE_VER=5;
+const SAVE_VER=6;
 const MP_WORLD_KEY='starfall_mp_world_v1';
 
 /* ============================================================
@@ -756,6 +804,8 @@ function netHandle(m){
     case 'critDead': onCritDead(m); break;
     case 'nade': onRemoteNade(m); break;
     case 'shield': onRemoteShield(m); break;
+    case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
+    case 'stationRemoved': applyStationRemovedById(m.id,m.by===NET.pid); break;
   }
 }
 /* chat / system message overlay (also used by Phase 5) */
@@ -876,9 +926,14 @@ function structSave(s){
   if(s.col!==undefined&&s.col!==null) o.col=s.col;
   return o;
 }
+function stationSave(p){
+  return {t:p.t,x:+p.x.toFixed(2),y:+p.y.toFixed(2),z:+p.z.toFixed(2),
+    qx:+p.qx.toFixed(4),qy:+p.qy.toFixed(4),qz:+p.qz.toFixed(4),qw:+p.qw.toFixed(4),r:p.r|0};
+}
 function buildSaveObj(){
   return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},
     structures:S.structures.map(structSave),
+    station:S.station.map(stationSave), stationOnline:!!S.stationOnline,
     mode:S.mode==='surface'?'surface':'space', planet:S.planet,
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
@@ -900,7 +955,7 @@ function saveMP(){
       ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false}));
     if(NET.isHost){
       localStorage.setItem(MP_WORLD_KEY,JSON.stringify({v:1,worldId:NET.worldId,savedAt:Date.now(),beacon:!!S.beacon,
-        structures:S.structures.map(structSave)}));
+        structures:S.structures.map(structSave),station:S.station.map(stationSave),stationOnline:!!S.stationOnline}));
     }
   }catch(e){}
 }
@@ -912,7 +967,8 @@ function parseSave(json){
     const out={
       tier:clamp(d.tier|0,1,5),
       res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0),ch:Math.max(0,d.res&&d.res.ch|0||0),pe:Math.max(0,d.res&&d.res.pe|0||0)},
-      structures:[], mode:(d.mode==='surface'?'surface':'space'),
+      structures:[], station:[], stationOnline:!!d.stationOnline,
+      mode:(d.mode==='surface'?'surface':'space'),
       planet:PLANETS[d.planet]?d.planet:'rust',
       ppos:Array.isArray(d.ppos)&&d.ppos.length===3?d.ppos.map(Number):[0,0,0],
       pyaw:Number(d.pyaw)||0,
@@ -938,6 +994,15 @@ function parseSave(json){
         out.structures.push(st);
       }
     }
+    if(Array.isArray(d.station)){
+      for(const p of d.station){
+        if(out.station.length>=STATION_MAX) break;
+        if(!p||!STATION[p.t]) continue;
+        const x=Number(p.x),y=Number(p.y),z=Number(p.z);
+        if(!isFinite(x)||!isFinite(y)||!isFinite(z)) continue;
+        out.station.push({t:p.t,x,y,z,qx:Number(p.qx)||0,qy:Number(p.qy)||0,qz:Number(p.qz)||0,qw:isFinite(Number(p.qw))?Number(p.qw):1,r:(p.r|0)%4});
+      }
+    }
     if(out.ppos.some(v=>!isFinite(v))) out.ppos=[0,0,0];
     if(out.spos.some(v=>!isFinite(v))) out.spos=[300,8,100];
     return out;
@@ -953,6 +1018,7 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
+  S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
 }
@@ -1037,6 +1103,7 @@ const MAT={
   rug:stdMat(0x6a3a5a,{roughness:0.95,metalness:0.0}),
   wood:stdMat(0x7a5a3a,{roughness:0.85,metalness:0.05}),
   screen:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
+  solar:new THREE.MeshStandardMaterial({color:0x12306a,emissive:0x0a2050,emissiveIntensity:0.6,roughness:0.4,metalness:0.5}),
   ghostOk:new THREE.MeshBasicMaterial({color:0x4aff8a,transparent:true,opacity:0.42,depthWrite:false}),
   ghostBad:new THREE.MeshBasicMaterial({color:0xff5040,transparent:true,opacity:0.42,depthWrite:false}),
 };
@@ -1201,6 +1268,25 @@ const ship=buildShip();
 spaceScene.add(ship);
 ship.position.fromArray(S.spos);
 
+/* ---------- orbital station (Phase 7): core + placed pieces ---------- */
+function buildStationCore(){
+  const g=new THREE.Group();
+  const hub=new THREE.Mesh(GEO.sphere,stdMat(0x8a98a8,{metalness:0.6,roughness:0.4})); hub.scale.set(9,9,9); g.add(hub);
+  const ring=new THREE.Mesh(GEO.torus,MAT.metal); ring.scale.set(20,20,20); g.add(ring);
+  const ring2=new THREE.Mesh(GEO.torus,MAT.metal); ring2.scale.set(20,20,20); ring2.rotation.x=Math.PI/2; g.add(ring2);
+  for(const d of CORE_DIRS){
+    const n=new THREE.Mesh(GEO.cyl,MAT.dark); n.scale.set(1.8,2,1.8);
+    n.position.copy(d).multiplyScalar(CORE_R-1);
+    n.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d);
+    g.add(n);
+  }
+  const beacon=new THREE.Mesh(GEO.sphere,MAT.emisC); beacon.scale.set(2.6,2.6,2.6); beacon.name='coreBeacon'; g.add(beacon);
+  return g;
+}
+const stationGroup=new THREE.Group(); spaceScene.add(stationGroup);   // placed pieces
+const stationCore=buildStationCore(); stationCore.position.copy(STATION_POS); stationCore.visible=false; spaceScene.add(stationCore);
+const stationGlow=makeGlow('#8fe8ff',150); stationGlow.position.copy(STATION_POS); stationGlow.visible=false; spaceScene.add(stationGlow);
+
 /* ============================================================
    REMOTE PLAYERS — co-op avatars, ships, name tags
    ============================================================ */
@@ -1355,6 +1441,9 @@ function sendPU(){
     NET.send({t:'pu',pos:[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)],
       yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet,
       wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0});
+  } else if(S.mode==='eva'){
+    NET.send({t:'pu',pos:[+evaPos.x.toFixed(1),+evaPos.y.toFixed(1),+evaPos.z.toFixed(1)],
+      yaw:+evaYaw.toFixed(3),pitch:+evaPitch.toFixed(3),mode:'space',pl:S.planet});
   } else {
     NET.send({t:'pu',pos:[+ship.position.x.toFixed(1),+ship.position.y.toFixed(1),+ship.position.z.toFixed(1)],
       yaw:+S.syaw.toFixed(3),pitch:+S.spitch.toFixed(3),mode:'space',pl:S.planet});
@@ -3431,7 +3520,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -3508,6 +3597,7 @@ function unlockTier(n){
     if(S.mode==='space') startShieldCutscene('pelagos');
     else showToast('⬆ TIER 5 — Hover Module & O₂ tank online. Pelagos signal shield is collapsing... visible from orbit.',4500);
   }
+  updateStationVisibility();
   updateTierBadge(); renderTierList(); renderBuildGrid(); renderCraftGrid(); saveGame();
 }
 function triggerVictory(){
@@ -3538,12 +3628,12 @@ document.addEventListener('keydown',e=>{
   keys[e.code]=true;
   if(!S.running) return;
   if(e.code==='KeyE') justE=true;
-  if(e.code==='KeyB'){ if(anyPanelOpen()){closeAllPanels();} else if(S.mode==='surface'){ renderBuildGrid(); openPanel('buildMenu'); } else showToast('Land on a planet to build'); }
+  if(e.code==='KeyB'){ if(anyPanelOpen()){closeAllPanels();} else if(S.mode==='surface'){ renderBuildGrid(); openPanel('buildMenu'); } else if(S.mode==='eva'){ renderStationGrid(); openPanel('stationMenu'); } else showToast('Land on a planet to build'); }
   if(e.code==='KeyT'){ if(anyPanelOpen()){closeAllPanels();} else { renderTierList(); openPanel('tierMenu'); } }
-  if(e.code==='KeyR'){ if(buildSel) ghostRot=(ghostRot+1)%4; else if(bpStamp) bpStampRot=(bpStampRot+1)%4; }
+  if(e.code==='KeyR'){ if(buildSel) ghostRot=(ghostRot+1)%4; else if(bpStamp) bpStampRot=(bpStampRot+1)%4; else if(stationSel) stationRoll=(stationRoll+1)%4; }
   if(e.code==='KeyG'&&buildSel){ toggleFreePlace(); }
-  if(e.code==='KeyX'){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
-  if(e.code==='Escape'){ if(bpSelecting){ bpSelecting=false; $('bpSel').style.display='none'; } else if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
+  if(e.code==='KeyX'){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(stationSel) cancelStation(); else if(S.mode==='eva') removeAimedStation(); else if(S.mode==='surface') removeStructure(); }
+  if(e.code==='Escape'){ if(bpSelecting){ bpSelecting=false; $('bpSel').style.display='none'; } else if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(stationSel) cancelStation(); else if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
   if(S.mode==='surface'&&!driving){
     if(e.code==='Digit1') setSlot(0);
     else if(e.code==='Digit2') setSlot(1);
@@ -3585,6 +3675,7 @@ document.addEventListener('mousedown',e=>{
   }
   if(e.button===0&&paintMode&&S.mode==='surface'){ paintAimed(); return; }
   if(e.button===0&&bpStamp&&S.mode==='surface'){ placeStamp(); return; }
+  if(S.mode==='eva'){ if(e.button===0){ if(stationSel) placeStationPiece(); } else if(e.button===2){ if(stationSel) cancelStation(); else removeAimedStation(); } return; }
   if(e.button===0&&buildSel&&S.mode==='surface') placeStructure();
   else if(e.button===0&&!buildSel&&S.mode==='surface'&&S.slot>0&&!driving) primaryDown();
   else if(e.button===2){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
@@ -3596,6 +3687,9 @@ document.addEventListener('mousemove',e=>{
   if(S.mode==='surface'){
     player.yaw-=e.movementX*sens;
     player.pitch=clamp(player.pitch-e.movementY*sens,-1.45,1.45);
+  } else if(S.mode==='eva'){
+    evaYaw-=e.movementX*sens;
+    evaPitch=clamp(evaPitch-e.movementY*sens,-1.5,1.5);
   } else {
     S.syaw-=e.movementX*sens*0.7;
     S.spitch=clamp(S.spitch-e.movementY*sens*0.7,-1.25,1.25);
@@ -3669,25 +3763,31 @@ let mFire=false;
 })();
 $('mMed').addEventListener('touchstart',e=>{ e.preventDefault(); useMed(); },{passive:false});
 function toggleFreePlace(){ freePlace=!freePlace; $('mFree').textContent=freePlace?'FREE':'SNAP'; showToast(freePlace?'Free placement (snap off)':'Snap-to-piece on'); SND.blip(); }
-$('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(paintMode) paintAimed(); else if(bpStamp) placeStamp(); else if(buildSel) placeStructure(); },{passive:false});
+$('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(S.mode==='eva'){ if(stationSel) placeStationPiece(); } else if(paintMode) paintAimed(); else if(bpStamp) placeStamp(); else if(buildSel) placeStructure(); },{passive:false});
 $('mFree').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) toggleFreePlace(); },{passive:false});
-$('mRemove').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); },{passive:false});
+$('mRemove').addEventListener('touchstart',e=>{ e.preventDefault(); if(S.mode==='eva'){ if(stationSel) cancelStation(); else removeAimedStation(); } else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); },{passive:false});
 $('mBuild').addEventListener('touchstart',e=>{ e.preventDefault();
   if(anyPanelOpen()) closeAllPanels();
   else if(S.mode==='surface'){ renderBuildGrid(); openPanel('buildMenu'); }
+  else if(S.mode==='eva'){ renderStationGrid(); openPanel('stationMenu'); }
   else showToast('Land on a planet to build'); },{passive:false});
+/* EVA vertical thrust on mobile (▲ up / ▼ down) — buttons also set KeyW/KeyS via bindHold, ignored in EVA */
+$('mThrust').addEventListener('touchstart',e=>{ if(S.mode==='eva') keys.Space=true; },{passive:false});
+$('mThrust').addEventListener('touchend',()=>{ keys.Space=false; });
+$('mBrake').addEventListener('touchstart',e=>{ if(S.mode==='eva') keys.ShiftLeft=true; },{passive:false});
+$('mBrake').addEventListener('touchend',()=>{ keys.ShiftLeft=false; });
 function refreshMobileUI(){
-  const sp=S.mode==='space';
-  $('mThrust').classList.toggle('hidden',!sp);
-  $('mBrake').classList.toggle('hidden',!sp);
-  $('mJump').classList.toggle('hidden',sp);
+  const sp=S.mode==='space', eva=S.mode==='eva', surf=S.mode==='surface';
+  $('mThrust').classList.toggle('hidden',!(sp||eva));
+  $('mBrake').classList.toggle('hidden',!(sp||eva));
+  $('mJump').classList.toggle('hidden',!surf);
   $('mRemove').classList.toggle('hidden',sp);
   $('mBuild').classList.toggle('hidden',sp);
-  $('mMed').classList.toggle('hidden',sp);
-  $('mMap').classList.toggle('hidden',sp);
-  $('mChat').classList.toggle('hidden',sp||!NET.active);
-  $('hotbar').classList.toggle('hidden',sp);
-  if(sp) $('mPlace').classList.add('hidden');
+  $('mMed').classList.toggle('hidden',!surf);
+  $('mMap').classList.toggle('hidden',!surf);
+  $('mChat').classList.toggle('hidden',!(surf&&NET.active));
+  $('hotbar').classList.toggle('hidden',!surf);
+  if(!eva) {} if(sp) $('mPlace').classList.add('hidden');
 }
 
 $('tierBadge').addEventListener('click',()=>{ SND.ensure(); SND.blip();
@@ -3856,6 +3956,206 @@ function updateCutscene(dt){
 }
 
 /* ============================================================
+   ORBITAL STATION + EVA (Phase 7)
+   ============================================================ */
+const _zAxis=new THREE.Vector3(0,0,1), _evf=new THREE.Vector3(), _evr=new THREE.Vector3(),
+      _qa=new THREE.Quaternion(), _qb=new THREE.Quaternion(), _vst=new THREE.Vector3(), _aim=new THREE.Vector3();
+const STATION_REACH=15, STATION_SNAP=13, EVA_SPEED=14;
+let stationSel=null, stationRoll=0, stationGhost=null, stationGhostOK=false, stationSnap=null;
+let evaPos=new THREE.Vector3(), evaYaw=0, evaPitch=0;
+
+function stationVisible(){ return S.tier>=5 || S.station.length>0; }
+function buildStationPiece(t,ghost){
+  const def=STATION[t], g=new THREE.Group();
+  for(const part of def.parts){
+    const m=new THREE.Mesh(GEO[part.g], ghost?MAT.ghostOk:MAT[part.m]);
+    m.position.fromArray(part.o); if(part.r) m.rotation.set(part.r[0],part.r[1],part.r[2]); m.scale.fromArray(part.s);
+    g.add(m);
+  }
+  return g;
+}
+/* orient a piece so its local +Z aligns to a socket's outward dir, with R roll */
+function socketQuat(dir,roll,out){
+  out.setFromUnitVectors(_zAxis,dir);
+  _qb.setFromAxisAngle(dir,(roll||0)*Math.PI/2);
+  out.premultiply(_qb);
+  return out;
+}
+/* all open attach sockets (core faces + each piece's exposed sockets) */
+function stationSockets(){
+  const list=[];
+  for(const d of CORE_DIRS) list.push({pos:new THREE.Vector3().copy(d).multiplyScalar(CORE_R).add(STATION_POS),dir:d.clone()});
+  for(const pc of S.station){
+    const q=_qa.set(pc.qx,pc.qy,pc.qz,pc.qw), base=_vst.set(pc.x,pc.y,pc.z);
+    for(const o of STATION[pc.t].out){
+      const wp=new THREE.Vector3(o.p[0],o.p[1],o.p[2]).applyQuaternion(q).add(base);
+      const wd=new THREE.Vector3(o.d[0],o.d[1],o.d[2]).applyQuaternion(q).normalize();
+      list.push({pos:wp,dir:wd});
+    }
+  }
+  return list.filter(s=>!S.station.some(pc=>{
+    const dx=pc.x-s.pos.x, dy=pc.y-s.pos.y, dz=pc.z-s.pos.z; return dx*dx+dy*dy+dz*dz<1.6;
+  }));
+}
+function refreshStation(){
+  while(stationGroup.children.length) stationGroup.remove(stationGroup.children[0]);
+  for(const pc of S.station){
+    const grp=buildStationPiece(pc.t,false);
+    grp.position.set(pc.x,pc.y,pc.z); grp.quaternion.set(pc.qx,pc.qy,pc.qz,pc.qw);
+    grp.userData.st=pc; stationGroup.add(grp);
+  }
+  updateStationVisibility();
+}
+function updateStationVisibility(){
+  const vis=stationVisible();
+  stationCore.visible=vis; stationGroup.visible=vis;
+  stationGlow.visible=vis&&S.stationOnline;
+  const b=stationCore.getObjectByName('coreBeacon'); if(b) b.material=S.stationOnline?MAT.emisG:MAT.emisC;
+}
+function stationComplete(){ const types=new Set(S.station.map(p=>p.t)); return S.station.length>=STATION_MIN_PIECES && types.size>=STATION_KEYS.length; }
+function checkStationComplete(){
+  if(!S.stationOnline && stationComplete()){ S.stationOnline=true; stationOnlineCelebration(); saveGame(); }
+  updateStationVisibility();
+}
+function stationOnlineCelebration(){
+  SND.victory(); showToast('★ STARFALL STATION ONLINE ★',6000); flashFx();
+  for(let i=0;i<18;i++) setTimeout(()=>{
+    if(!S.running) return;
+    const a=Math.random()*6.28, b=Math.random()*6.28, r=14+Math.random()*18;
+    spawnBurst(STATION_POS.x+Math.cos(a)*r, STATION_POS.y+Math.sin(b)*r, STATION_POS.z+Math.sin(a)*r,
+      [0x7fff9a,0x9feaff,0xffd97f,0xb060ff][i%4],28,10,9,1.8,0);
+  },i*200);
+}
+/* ---------- placement ---------- */
+function selectStation(t){
+  const def=STATION[t]; if(!def) return;
+  if(!canAfford(def.cost)){ SND.denied(); showToast('Need '+costStr(def.cost)); return; }
+  stationSel=t; stationRoll=0;
+  if(stationGhost){ spaceScene.remove(stationGhost); stationGhost=null; }
+  stationGhost=buildStationPiece(t,true); spaceScene.add(stationGhost);
+  closePanel('stationMenu');
+  showToast(def.name+' — aim near a glowing socket, click to place · R roll · X cancel');
+  $('mPlace').classList.remove('hidden'); $('mFree').classList.add('hidden');
+}
+function cancelStation(){ stationSel=null; if(stationGhost){ spaceScene.remove(stationGhost); stationGhost=null; } stationSnap=null; $('mPlace').classList.add('hidden'); }
+function updateStationGhost(){
+  if(!stationSel||!stationGhost) return;
+  evaForward(_evf); _aim.copy(evaPos).addScaledVector(_evf,STATION_REACH);
+  let best=null,bd=STATION_SNAP*STATION_SNAP;
+  for(const s of stationSockets()){ const d=s.pos.distanceToSquared(_aim); if(d<bd){ bd=d; best=s; } }
+  if(best){
+    stationGhost.visible=true; stationGhost.position.copy(best.pos);
+    socketQuat(best.dir,stationRoll,_qa); stationGhost.quaternion.copy(_qa);
+    stationSnap={pos:best.pos.clone(),dir:best.dir.clone()};
+    stationGhostOK=canAfford(STATION[stationSel].cost)&&S.station.length<STATION_MAX;
+    stationGhost.traverse(o=>{ if(o.isMesh) o.material=stationGhostOK?MAT.ghostOk:MAT.ghostBad; });
+  } else { stationGhost.visible=false; stationSnap=null; stationGhostOK=false; }
+}
+function placeStationPiece(){
+  if(!stationSel||!stationSnap){ SND.denied(); showToast('Aim near a socket'); return; }
+  const def=STATION[stationSel];
+  if(!canAfford(def.cost)){ SND.denied(); showToast('Need '+costStr(def.cost)); return; }
+  if(S.station.length>=STATION_MAX){ SND.denied(); showToast('Station piece limit ('+STATION_MAX+')'); return; }
+  socketQuat(stationSnap.dir,stationRoll,_qa);
+  const pc={t:stationSel,x:+stationSnap.pos.x.toFixed(2),y:+stationSnap.pos.y.toFixed(2),z:+stationSnap.pos.z.toFixed(2),
+    qx:+_qa.x.toFixed(4),qy:+_qa.y.toFixed(4),qz:+_qa.z.toFixed(4),qw:+_qa.w.toFixed(4),r:stationRoll};
+  if(NET.active) NET.send({t:'stationPlace',st:pc});
+  else applyStationPlaced(pc,true);
+}
+function applyStationPlaced(m,byMe){
+  if(!STATION[m.t]) return;
+  const pc={t:m.t,x:m.x,y:m.y,z:m.z,qx:m.qx,qy:m.qy,qz:m.qz,qw:m.qw,r:m.r|0}; if(m.id!==undefined) pc.id=m.id;
+  S.station.push(pc); refreshStation();
+  if(byMe){ payCost(STATION[m.t].cost); SND.place(); spawnBurst(m.x,m.y,m.z,0x7fd6ff,16,4,4,0.8,0);
+    if(!canAfford(STATION[m.t].cost)) cancelStation(); saveGame(); }
+  checkStationComplete();
+}
+function removeAimedStation(){
+  evaForward(_evf); _aim.copy(evaPos).addScaledVector(_evf,STATION_REACH);
+  let best=-1,bd=72; for(let i=0;i<S.station.length;i++){ const p=S.station[i]; const dx=p.x-_aim.x,dy=p.y-_aim.y,dz=p.z-_aim.z,d=dx*dx+dy*dy+dz*dz; if(d<bd){bd=d;best=i;} }
+  if(best<0){ showToast('Aim at a station piece to remove'); return; }
+  const pc=S.station[best];
+  if(NET.active) NET.send({t:'stationRemove',id:pc.id});
+  else applyStationRemoved(pc,true);
+}
+function applyStationRemovedById(id,byMe){ const i=S.station.findIndex(p=>p.id===id); if(i>=0) applyStationRemoved(S.station[i],byMe); }
+function applyStationRemoved(pc,byMe){
+  const i=S.station.indexOf(pc); if(i<0) return;
+  S.station.splice(i,1); refreshStation();
+  if(byMe){ for(const k in STATION[pc.t].cost) S.res[k]=Math.min(carryCap?carryCap():99999,(S.res[k]||0)+Math.floor(STATION[pc.t].cost[k]/2)); updateHUDRes(); SND.remove(); saveGame(); }
+  updateStationVisibility();
+}
+/* ---------- EVA mode ---------- */
+function evaForward(out){ return out.set(-Math.sin(evaYaw)*Math.cos(evaPitch),Math.sin(evaPitch),-Math.cos(evaYaw)*Math.cos(evaPitch)); }
+function evaRight(out){ return out.set(Math.cos(evaYaw),0,-Math.sin(evaYaw)); }
+function enterEva(){
+  if(S.tier<5){ showToast('Reach Tier 5 to dock'); SND.denied(); return; }
+  S.mode='eva'; activeScene=spaceScene;
+  _vst.copy(STATION_POS).sub(ship.position).normalize();
+  evaPos.copy(ship.position).addScaledVector(_vst,6);
+  evaYaw=S.syaw; evaPitch=0; stationSel=null;
+  showToast('EVA — WASD + Space/Shift fly · B station build · E to return to ship · O₂ draining',5500);
+  refreshMobileUI();
+}
+function exitEva(){
+  cancelStation();
+  S.mode='space'; activeScene=spaceScene;
+  ship.getObjectByName('engGlow').visible=true;
+  closeAllPanels(); refreshMobileUI(); SND.place(); saveGame();
+}
+function evaEmergency(){ S.o2=o2Max(); showToast('O₂ DEPLETED — emergency recall to ship'); exitEva(); }
+function renderEvaCam(){ camera.position.copy(evaPos); camera.rotation.set(evaPitch,evaYaw,0); }
+function updateEva(dt){
+  if(anyPanelOpen()||transitioning){ justE=false; renderEvaCam(); return; }
+  const fwd=evaForward(_evf), right=evaRight(_evr);
+  let mvx=0,mvy=0,mvz=0;
+  const add=(v,s)=>{ mvx+=v.x*s; mvy+=v.y*s; mvz+=v.z*s; };
+  if(!isTouch){ if(keys.KeyW||keys.ArrowUp) add(fwd,1); if(keys.KeyS||keys.ArrowDown) add(fwd,-1); if(keys.KeyD||keys.ArrowRight) add(right,1); if(keys.KeyA||keys.ArrowLeft) add(right,-1); }
+  if(joy.active){ add(fwd,-joy.y); add(right,joy.x); }
+  if(keys.Space) mvy+=1; if(keys.ShiftLeft) mvy-=1;
+  const ml=Math.hypot(mvx,mvy,mvz);
+  if(ml>0.001){ const f=EVA_SPEED*dt/ml; evaPos.x+=mvx*f; evaPos.y+=mvy*f; evaPos.z+=mvz*f; }
+  if(evaPos.distanceTo(STATION_POS)>140){ _vst.copy(evaPos).sub(STATION_POS).setLength(140).add(STATION_POS); evaPos.copy(_vst); }
+  /* O2: refill near the parked ship, otherwise drain */
+  const nearShip=evaPos.distanceTo(ship.position)<14;
+  if(nearShip) S.o2=Math.min(o2Max(),S.o2+30*dt); else S.o2=Math.max(0,S.o2-2.6*dt);
+  const o2f=S.o2/o2Max();
+  $('o2bar').style.width=(o2f*100)+'%'; $('o2bar').classList.toggle('low',o2f<0.25&&!nearShip);
+  if(o2f<0.25&&!nearShip){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  if(S.o2<=0){ evaEmergency(); justE=false; return; }
+  $('hpbar').style.width=(player.hp/HP_MAX*100)+'%';
+  /* build / undock prompts */
+  if(stationSel){
+    updateStationGhost();
+    setPrompt(stationGhostOK?'<span class="key">CLICK</span>PLACE '+STATION[stationSel].name+' · <span class="key">R</span>ROLL · <span class="key">X</span>CANCEL'
+      :'<span style="color:#ff9a8a">Aim near a socket'+(canAfford(STATION[stationSel].cost)?'':' — NEED '+costStr(STATION[stationSel].cost))+'</span>');
+    setMAct('—');
+  } else {
+    setPrompt('<span class="key">B</span>STATION BUILD · <span class="key">E</span>RETURN TO SHIP'+(nearShip?' (O₂ refilling)':''));
+    setMAct('UNDOCK');
+    if(justE){ exitEva(); justE=false; return; }
+  }
+  justE=false;
+  S.spos=[ship.position.x,ship.position.y,ship.position.z];
+  renderEvaCam();
+}
+function renderStationGrid(){
+  const grid=$('stationGrid'); grid.innerHTML='';
+  const have=new Set(S.station.map(p=>p.t));
+  const hd=document.createElement('div'); hd.className='bSection';
+  hd.textContent='All 6 types + '+STATION_MIN_PIECES+' pieces to power it · '+S.station.length+' placed, '+have.size+'/6 types'+(S.stationOnline?' · ONLINE ✓':'');
+  grid.appendChild(hd);
+  for(const k of STATION_KEYS){
+    const def=STATION[k], d=document.createElement('div');
+    d.className='bItem'+(canAfford(def.cost)?'':' locked');
+    d.innerHTML='<div class="ic">'+def.ic+'</div><div class="nm">'+def.name+(have.has(k)?' ✓':'')+'</div><div class="cs">'+
+      Object.keys(def.cost).map(r=>'<span style="color:'+RES_DOTS[r]+'">'+def.cost[r]+'</span>').join(' · ')+'</div>';
+    d.addEventListener('click',()=>{ SND.blip(); selectStation(k); });
+    grid.appendChild(d);
+  }
+}
+
+/* ============================================================
    SPACE UPDATE
    ============================================================ */
 let spaceBank=0;
@@ -3886,13 +4186,26 @@ function updateSpace(dt){
     if(d<p.r+9){ ship.position.sub(_tmpV).setLength(p.r+9).add(_tmpV); S.sspeed*=0.2; }
     if(d<p.r+75&&d<landDist){ landDist=d; landKey=key; }
   }
+  /* station core: gentle collision + dock proximity */
+  const coreVis=stationVisible();
+  const coreDist=coreVis?ship.position.distanceTo(STATION_POS):1e9;
+  if(coreVis&&coreDist<10){ ship.position.sub(STATION_POS).setLength(10).add(STATION_POS); S.sspeed*=0.3; }
   ship.rotation.order='YXZ';
   spaceBank*=Math.pow(0.04,dt);
   ship.rotation.set(S.spitch,S.syaw,clamp(-spaceBank,-0.5,0.5));
   const eg=ship.getObjectByName('engGlow');
   eg.scale.setScalar(3+Math.abs(S.sspeed)*0.09+Math.sin(performance.now()*0.02)*0.4);
   /* prompts */
-  if(landKey){
+  if(coreDist<24){
+    if(S.tier>=5){
+      setPrompt('<span class="key">E</span>DOCK — Orbital Station'+(S.stationOnline?' <span style="color:#8fefb0">(ONLINE)</span>':''));
+      setMAct('DOCK');
+      if(justE){ enterEva(); justE=false; return; }
+    } else {
+      setPrompt('<span style="color:#ff9a8a">STATION CORE — REQUIRES TIER 5 TO DOCK</span>'); setMAct('✕');
+      if(justE){ SND.denied(); showToast('Reach Tier 5 to dock with the station core'); }
+    }
+  } else if(landKey){
     const p=PLANETS[landKey];
     if(SHIELDED[landKey]&&S.tier<SHIELDED[landKey].tier){
       setPrompt('<span style="color:#ff9a8a">⚠ SIGNAL INTERFERENCE — '+p.name+' REQUIRES TIER '+SHIELDED[landKey].tier+'</span>');
@@ -4107,6 +4420,7 @@ function renderSurfaceCam(){
 function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
+  S.station=[]; S.stationOnline=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
   S.spos=[PLANETS.rust.pos[0]+50,PLANETS.rust.pos[1]+18,PLANETS.rust.pos[2]+55];
@@ -4128,6 +4442,7 @@ function startGame(fromSave){
   player.hp=HP_MAX; player.invuln=0; S.slot=0; driving=null;
   $('protRing').classList.add('hidden');
   updateHUDRes(); updateTierBadge(); updateCapNote(); renderHotbar(); updateViewmodel();
+  refreshStation();
   $('fuelwrap').classList.toggle('hidden',S.tier<3);
   for(const key in SHIELDED){ if(S.tier>=SHIELDED[key].tier&&shieldGroups[key].parent&&S.pendingCutscene!==key) spaceScene.remove(shieldGroups[key]); }
   if(fromSave&&S.mode==='surface') enterSurface(S.planet,true);
@@ -4200,6 +4515,9 @@ function installWorld(world){
   }
   clearLoot();
   clearCritters();
+  S.station=(world.station||[]).map(p=>({t:p.t,x:+p.x,y:+p.y,z:+p.z,qx:+p.qx,qy:+p.qy,qz:+p.qz,qw:+p.qw,r:p.r|0,id:p.id}));
+  S.stationOnline=!!world.stationOnline;
+  refreshStation();
   for(const c of (world.loot||[])) spawnLootBox(c.id,c.pl,c.pos,c.loot);
   NET.seats=new Map(world.seats||[]);
   if(typeof world.tod==='number') dayClock=world.tod*CYCLE_S;
@@ -4312,6 +4630,7 @@ function loop(now){
   if(S.running){
     if(cs.active){ updateCutscene(dt); }
     else if(S.mode==='space') updateSpace(dt);
+    else if(S.mode==='eva') updateEva(dt);
     else updateSurface(dt);
     if(NET.active){
       const nw=performance.now();
@@ -4326,6 +4645,9 @@ function loop(now){
     activeScene=spaceScene;
   }
   for(const key in shieldGroups){ const g=shieldGroups[key]; if(g.parent){ g.rotation.y+=dt*0.3; g.rotation.x+=dt*0.11; } }
+  if(stationCore.visible){ stationCore.rotation.y+=dt*0.08;
+    const cb=stationCore.getObjectByName('coreBeacon'); if(cb) cb.scale.setScalar(2.4+Math.sin(now*0.004)*0.4);
+    if(stationGlow.visible) stationGlow.scale.setScalar(150+Math.sin(now*0.002)*30); }
   /* animated holo screens (consoles, holo-signs, armory) */
   const ho=0.55+0.3*Math.sin(now*0.005);
   MAT.screen.opacity=ho; MAT.holo.opacity=0.5+0.25*Math.sin(now*0.004+1.3);
@@ -4340,6 +4662,7 @@ requestAnimationFrame(loop);
 /* debug / automation hook */
 window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
   WEAPONS,SLOT_KEYS,throwables,shieldWalls,SHIELDED,shieldGroups,
+  STATION,STATION_KEYS,STATION_POS,stationCore,stationGroup,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
 </script>
 </body>

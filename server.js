@@ -5,12 +5,14 @@
    PROTOCOL (JSON frames, server is authoritative for shared-world objects):
    client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
      place{st}, remove{id}, repair{id}, mine{pl,i},
-     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, nade{o,v}, shield{o,v}, died{by,pos,loot}, lootClaim{id},
+     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, nade{o,v}, shield{o,v},
+     stationPlace{st}, stationRemove{id}, died{by,pos,loot}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
    server->client: welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats}},
      err, pjoin, pleave, pu, placed, removed, hp, destroyed,
      nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
      fire, nade, shield, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
+     stationPlaced{by,st}, stationRemoved{id,by},
      lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
    Damage is client-authoritative (victim applies); loot containers,
    turret ownership and rover seats are server-authoritative.
@@ -64,6 +66,10 @@ const PLANET_CRIT = {
   pelagos: ['skimmer', 'floater'],
 };
 const CRIT_CAP = 12;
+/* ---- orbital station (Phase 7): server-owned shared pieces, one core/room ---- */
+const STATION_TYPES = new Set(['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms']);
+const STATION_MAX = 60, STATION_MIN = 10;
+function serverStationComplete(room) { const t = new Set(room.station.map(p => p.t)); return room.station.length >= STATION_MIN && t.size >= 6; }
 const DAY_CYCLE = 600;            // seconds for a full day/night cycle
 let worldClock = 300;             // shared time-of-day (seconds)
 function worldTod() { return ((worldClock % DAY_CYCLE) + DAY_CYCLE) % DAY_CYCLE / DAY_CYCLE; }
@@ -121,6 +127,7 @@ function makeRoom(world) {
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
+    station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
   };
   for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; }
@@ -138,6 +145,16 @@ function makeRoom(world) {
       room.structures.push(st);
       if (s.t === 'beacon') room.beacon = true;
     }
+  }
+  if (world && Array.isArray(world.station)) {
+    for (const p of world.station) {
+      if (room.station.length >= STATION_MAX) break;
+      if (!p || !STATION_TYPES.has(p.t)) continue;
+      const x = +p.x, y = +p.y, z = +p.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+      room.station.push({ id: room.nextStation++, t: p.t, x, y, z, qx: +p.qx || 0, qy: +p.qy || 0, qz: +p.qz || 0, qw: isFinite(+p.qw) ? +p.qw : 1, r: (p.r | 0) % 4 });
+    }
+    room.stationOnline = serverStationComplete(room) || !!world.stationOnline;
   }
   rooms.set(code, room);
   return room;
@@ -178,6 +195,8 @@ function welcomeMsg(room, pid) {
       loot: [...room.loot.values()].map(c => ({ id: c.id, pl: c.pl, pos: c.pos, loot: c.loot })),
       seats: [...room.seats.entries()],
       tod: worldTod(),
+      station: room.station,
+      stationOnline: room.stationOnline,
     },
   };
 }
@@ -320,6 +339,25 @@ function handle(ws, m) {
     }
     case 'nade': {
       bcast(room, { t: 'nade', by: ws.pid, o: m.o, v: m.v }, ws.pid);
+      return;
+    }
+    case 'stationPlace': {
+      const s = m.st;
+      if (!s || !STATION_TYPES.has(s.t)) return;
+      const x = +s.x, y = +s.y, z = +s.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+      if (room.station.length >= STATION_MAX) { sendTo(ws, { t: 'err', msg: 'Station piece limit reached (' + STATION_MAX + ')' }); return; }
+      const pc = { id: room.nextStation++, t: s.t, x, y, z, qx: +s.qx || 0, qy: +s.qy || 0, qz: +s.qz || 0, qw: isFinite(+s.qw) ? +s.qw : 1, r: (s.r | 0) % 4 };
+      room.station.push(pc);
+      if (!room.stationOnline && serverStationComplete(room)) room.stationOnline = true;
+      bcast(room, { t: 'stationPlaced', by: ws.pid, st: pc });
+      return;
+    }
+    case 'stationRemove': {
+      const i = room.station.findIndex(p => p.id === m.id);
+      if (i < 0) return;
+      const pc = room.station[i]; room.station.splice(i, 1);
+      bcast(room, { t: 'stationRemoved', id: pc.id, by: ws.pid });
       return;
     }
     case 'shield': {
