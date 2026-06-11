@@ -18,12 +18,14 @@
    Damage is client-authoritative (victim applies); loot containers,
    turret ownership and rover seats are server-authoritative.
    ============================================================ */
-'use strict';
-const http = require('node:http');
-const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
-const { WebSocketServer } = require('ws');
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3000;
 const METEOR_FAST = !!process.env.METEOR_FAST;     // test knob: rapid showers

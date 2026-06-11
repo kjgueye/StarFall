@@ -3,11 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "description": "Starfall — sci-fi build & explore game with 1-4 player co-op",
+  "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview"
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
   }
 }
