@@ -28,10 +28,17 @@ import { WebSocketServer } from 'ws';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
-import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX } from './shared/constants.js';
-import { CAT, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
-import { PLANET_KEYS as PLANETS } from './shared/world.js';
-import { stationComplete, todOf } from './shared/rules.js';
+import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
+  MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_DMG, SHIELD_CD } from './shared/constants.js';
+import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
+import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout } from './shared/world.js';
+import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
+  placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid } from './shared/rules.js';
+import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
+
+/* deterministic resource-node layout per planet — same data the client renders */
+const NODES = {};
+for (const pl of PLANETS) NODES[pl] = surfaceLayout(PDATA[pl]).nodes;
 
 const PORT = process.env.PORT || 3000;
 const METEOR_FAST = !!process.env.METEOR_FAST;     // test knob: rapid showers
@@ -134,6 +141,43 @@ function makeRoom(world) {
   rooms.set(code, room);
   return room;
 }
+/* ---------- per-player progress (server-authoritative as of Phase 2) ----------
+   The server owns resources/tier/weapons/ammo/medkits for the whole session.
+   `progRestore` is the Phase-2 persistence bridge: once, right after joining,
+   a client may submit its localStorage progress blob (sanitized + clamped).
+   Phase 3 replaces that bridge with Postgres keyed by guest id. */
+const ci = (v, lo, hi) => Math.max(lo, Math.min(hi, v | 0));
+function freshProg() {
+  return { res: { fe: 0, cy: 0, bio: 0, ch: 0, pe: 0 }, tier: 1,
+    weapons: {}, ammo: { light: 0, heavy: 0, fuel: 0, nade: 0 }, medkits: 0 };
+}
+function sanitizeProg(d) {
+  d = (d && typeof d === 'object') ? d : {};
+  const out = freshProg(), rs = d.res || {}, w = d.weapons || {}, a = d.ammo || {};
+  for (const k in out.res) out.res[k] = ci(rs[k], 0, 99999);
+  out.tier = ci(d.tier, 1, TIERS.length);
+  for (const k of WEP_KEYS) out.weapons[k] = !!w[k];
+  for (const k of AMMO_KEYS) out.ammo[k] = ci(a[k], 0, 9999);
+  out.medkits = ci(d.medkits, 0, 99);
+  return out;
+}
+function progOf(p) {
+  return { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo }, medkits: p.medkits };
+}
+function sendProg(room, pid, ev) {
+  const p = room.players.get(pid); if (!p) return;
+  const msg = Object.assign({ t: 'prog' }, progOf(p));
+  if (ev) msg.ev = ev;
+  sendTo(p.ws, msg);
+}
+/* grant resources into a player's pack, respecting the shared carry cap */
+function grantRes(room, p, key, amt) {
+  const cap = carryCap(room.structures);
+  const before = p.res[key] | 0;
+  p.res[key] = Math.min(cap, before + Math.max(0, amt | 0));
+  return p.res[key] - before;
+}
+
 function bcast(room, obj, exceptPid) {
   const msg = JSON.stringify(obj);
   for (const [pid, p] of room.players) {
@@ -159,8 +203,10 @@ function meteorSnapshot(room) {
   return out;
 }
 function welcomeMsg(room, pid) {
+  const self = room.players.get(pid);
   return {
     t: 'welcome', pid, code: room.code, worldId: room.worldId,
+    prog: self ? progOf(self) : undefined,
     players: [...room.players.entries()].map(([id, p]) => ({ pid: id, name: p.name, slot: p.slot })),
     world: {
       structures: room.structures,
@@ -203,7 +249,7 @@ wss.on('connection', ws => {
   });
 });
 
-function joinRoom(ws, room, name) {
+function joinRoom(ws, room, name, opts) {
   if (room.players.size >= MAX_PLAYERS) { sendTo(ws, { t: 'err', msg: 'Room is full (4 players max)', fatal: true }); return; }
   name = String(name || '').trim().slice(0, 16) || 'PLAYER';
   for (const p of room.players.values()) {
@@ -212,7 +258,13 @@ function joinRoom(ws, room, name) {
   const used = new Set([...room.players.values()].map(p => p.slot));
   let slot = 0; while (used.has(slot)) slot++;
   const pid = room.nextPid++;
-  const player = { ws, name, slot, pos: [0, 0, 0], yaw: 0, pitch: 0, mode: 'space', pl: 'rust' };
+  const player = Object.assign(
+    { ws, name, slot, pos: [0, 0, 0], yaw: 0, pitch: 0, mode: 'space', pl: 'rust',
+      hp: HP_MAX, o2: 100, fuel: 100, invulnUntil: Date.now() + SPAWN_PROT * 1000,
+      joinedAt: Date.now(), restored: false, lastMine: 0, lastRepair: 0, fireAt: {} },
+    freshProg());
+  /* secret "Commander" host: maxed resources in your own fresh world */
+  if (opts && opts.commander) for (const k in player.res) player.res[k] = 99999;
   room.players.set(pid, player);
   room.emptySince = 0;
   ws.room = room; ws.pid = pid;
@@ -227,7 +279,7 @@ function handle(ws, m) {
       if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
       const room = makeRoom(m.world);
       if (!room) { sendTo(ws, { t: 'err', msg: 'Could not create room', fatal: true }); return; }
-      joinRoom(ws, room, m.name);
+      joinRoom(ws, room, m.name, { commander: !!m.cmd });
       if (room.players.size === 0) rooms.delete(room.code); // join failed somehow
       return;
     }
@@ -255,17 +307,30 @@ function handle(ws, m) {
         wp: m.wp | 0, iv: m.iv ? 1 : 0, dr: m.dr | 0, sw: m.sw ? 1 : 0 }, ws.pid);
       return;
     }
+    case 'progRestore': {
+      /* one-shot localStorage progress import, right after join (Phase-3 seam) */
+      if (me.restored || Date.now() - me.joinedAt > 20000) return;
+      me.restored = true;
+      const s = sanitizeProg(m.prog);
+      me.res = s.res; me.tier = s.tier; me.weapons = s.weapons; me.ammo = s.ammo; me.medkits = s.medkits;
+      sendProg(room, ws.pid);
+      return;
+    }
     case 'place': {
       const s = m.st;
       if (!s || !CAT[s.t] || !PLANETS.includes(s.pl)) return;
       const x = +s.x, y = +s.y, z = +s.z;
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
-      if (room.structures.length >= MAX_STRUCT) { sendTo(ws, { t: 'err', msg: 'Construction limit reached (' + MAX_STRUCT + ' pieces)' }); return; }
+      if (me.mode !== 'surface' || me.pl !== s.pl) { sendTo(ws, { t: 'err', msg: 'You must be on that surface to build' }); return; }
       if (s.t === 'beacon' && room.beacon) { sendTo(ws, { t: 'err', msg: 'The Beacon is already placed' }); return; }
       if (s.t === 'turret') {
         let mine = 0; for (const o of room.structures) if (o.t === 'turret' && o.owner === ws.pid) mine++;
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
       }
+      const err = placeError({ structures: room.structures, st: { t: s.t, pl: s.pl, x, y, z, r: s.r | 0 },
+        tier: me.tier, res: me.res, px: me.pos[0], pz: me.pos[2] });
+      if (err) { sendTo(ws, { t: 'err', msg: err }); return; }
+      payCost(me.res, CAT[s.t].cost);
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: CAT[s.t].hp };
       if (OWNED.has(s.t)) st.owner = ws.pid;
       if (DYNAMIC.has(s.t)) st.ry = isFinite(+s.ry) ? +s.ry : 0;
@@ -273,6 +338,7 @@ function handle(ws, m) {
       room.structures.push(st);
       if (st.t === 'beacon') room.beacon = true;
       bcast(room, { t: 'placed', by: ws.pid, st });
+      sendProg(room, ws.pid);
       return;
     }
     case 'remove': {
@@ -280,14 +346,46 @@ function handle(ws, m) {
       if (!st) return;
       if (st.t === 'beacon') { sendTo(ws, { t: 'err', msg: 'The Beacon cannot be removed' }); return; }
       room.structures.splice(room.structures.indexOf(st), 1);
+      const rf = refundFor(CAT[st.t].cost);
+      for (const k in rf) grantRes(room, me, k, rf[k]);
       bcast(room, { t: 'removed', id: st.id, by: ws.pid });
+      sendProg(room, ws.pid);
       return;
     }
     case 'repair': {
       const st = room.structures.find(s => s.id === m.id);
-      if (!st) return;
+      if (!st || st.hp >= CAT[st.t].hp) return;
+      const now = Date.now();
+      if (now - me.lastRepair < 600) return;                      // repair pulses every 0.8s
+      if ((me.res.fe | 0) < 2) { sendTo(ws, { t: 'err', msg: 'Repair needs 2 Ferrite' }); return; }
+      me.lastRepair = now; me.res.fe -= 2;
       st.hp = CAT[st.t].hp;
       bcast(room, { t: 'hp', id: st.id, hp: st.hp });
+      sendProg(room, ws.pid);
+      return;
+    }
+    case 'craft': {
+      const key = String(m.key || '');
+      const r = craftCheck(key, me.tier, me.res, me.weapons);
+      if (r.err) { sendTo(ws, { t: 'err', msg: r.err }); return; }
+      payCost(me.res, r.cost);
+      const c = r.c;
+      if (c.kind === 'weapon') me.weapons[key] = true;
+      else if (c.kind === 'ammo') me.ammo[c.ammo] = Math.min(9999, (me.ammo[c.ammo] | 0) + c.give);
+      else if (c.kind === 'med') me.medkits = Math.min(99, me.medkits + 1);
+      else if (c.kind === 'throwable') { me.weapons[c.own] = true; me.ammo[c.ammo] = Math.min(9999, (me.ammo[c.ammo] | 0) + c.give); }
+      else if (c.kind === 'gadget') me.weapons[c.own] = true;
+      sendProg(room, ws.pid, { type: 'craft', key });
+      return;
+    }
+    case 'tierUp': {
+      const n = me.tier + 1;
+      const r = tierUpCheck(me.tier, n, me.res);
+      if (r.err) { sendTo(ws, { t: 'err', msg: r.err }); return; }
+      payCost(me.res, r.cost);
+      me.tier = n;
+      me.o2 = Math.max(me.o2, o2Max(n) * 0.7);
+      sendProg(room, ws.pid, { type: 'tier', n });
       return;
     }
     case 'paint': {
@@ -300,20 +398,53 @@ function handle(ws, m) {
     case 'mine': {
       if (!PLANETS.includes(m.pl)) return;
       const i = m.i | 0;
-      if (i < 0 || i > 45) return;
+      const nd = NODES[m.pl][i];
+      if (!nd) return;
       const key = m.pl + ':' + i;
       if (room.nodeDead.has(key)) return;     // race loser
-      room.nodeDead.set(key, Date.now() + RESPAWN_MS);
+      if (me.mode !== 'surface' || me.pl !== m.pl) return;
+      const now = Date.now();
+      if (now - me.lastMine < 1100) return;   // mining a node takes 1.4s — flood guard
+      const dx = me.pos[0] - nd.x, dz = me.pos[2] - nd.z;
+      const reach = MINE_RANGE + 4;           // pos updates are 10Hz; small slack
+      if (dx * dx + dz * dz > reach * reach) return;
+      const rk = PDATA[m.pl].res;
+      if ((me.res[rk] | 0) >= carryCap(room.structures)) { sendTo(ws, { t: 'err', msg: 'Storage full — build more crates' }); return; }
+      me.lastMine = now;
+      room.nodeDead.set(key, now + RESPAWN_MS);
+      const amt = grantRes(room, me, rk, 4 + Math.floor(Math.random() * 3));
       bcast(room, { t: 'nodeDead', pl: m.pl, i, by: ws.pid });
+      sendProg(room, ws.pid, { type: 'gain', k: rk, amt });
       return;
     }
-    /* ---- combat (client-authoritative damage; server relays) ---- */
+    /* ---- combat (ammo/ownership validated; P2.3 moves damage here too) ---- */
     case 'fire': {
-      bcast(room, { t: 'fire', by: ws.pid, wp: m.wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
+      const wp = m.wp | 0;
+      const chk = fireCheck(me.weapons, me.ammo, wp);
+      if (chk.err) return;                               // unowned weapon / no ammo: drop silently
+      if (chk.ammoKey) {
+        if (wp === 5) {                                  // inferno: fuel burns on a 110ms window
+          const now = Date.now();
+          if (now - (me.lastFuel || 0) >= 110) { me.lastFuel = now; me.ammo.fuel = Math.max(0, me.ammo.fuel - 1); }
+        } else me.ammo[chk.ammoKey] = Math.max(0, me.ammo[chk.ammoKey] - chk.use);
+      }
+      bcast(room, { t: 'fire', by: ws.pid, wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
       return;
     }
     case 'nade': {
+      if (!me.weapons.grenade || (me.ammo.nade | 0) <= 0) return;
+      const now = Date.now();
+      if (now - (me.lastNade || 0) < 500) return;
+      me.lastNade = now;
+      me.ammo.nade--;
       bcast(room, { t: 'nade', by: ws.pid, o: m.o, v: m.v }, ws.pid);
+      return;
+    }
+    case 'useMed': {
+      if (me.medkits <= 0) return;
+      me.medkits--;
+      me.hp = Math.min(HP_MAX, me.hp + 50);
+      sendProg(room, ws.pid, { type: 'med' });
       return;
     }
     case 'stationPlace': {
@@ -321,56 +452,92 @@ function handle(ws, m) {
       if (!s || !STATION_TYPES.has(s.t)) return;
       const x = +s.x, y = +s.y, z = +s.z;
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+      if (me.tier < 5) { sendTo(ws, { t: 'err', msg: 'Requires Tier 5' }); return; }
       if (room.station.length >= STATION_MAX) { sendTo(ws, { t: 'err', msg: 'Station piece limit reached (' + STATION_MAX + ')' }); return; }
+      const def = STATION[s.t];
+      if (!canAfford(me.res, def.cost)) { sendTo(ws, { t: 'err', msg: 'Not enough resources' }); return; }
+      if (!stationPlaceValid(room.station, x, y, z)) { sendTo(ws, { t: 'err', msg: 'No open socket there' }); return; }
+      payCost(me.res, def.cost);
       const pc = { id: room.nextStation++, t: s.t, x, y, z, qx: +s.qx || 0, qy: +s.qy || 0, qz: +s.qz || 0, qw: isFinite(+s.qw) ? +s.qw : 1, r: (s.r | 0) % 4 };
       room.station.push(pc);
       if (!room.stationOnline && stationComplete(room.station)) room.stationOnline = true;
       bcast(room, { t: 'stationPlaced', by: ws.pid, st: pc });
+      sendProg(room, ws.pid);
       return;
     }
     case 'stationRemove': {
       const i = room.station.findIndex(p => p.id === m.id);
       if (i < 0) return;
       const pc = room.station[i]; room.station.splice(i, 1);
+      for (const k in STATION[pc.t].cost) grantRes(room, me, k, Math.floor(STATION[pc.t].cost[k] / 2));
       bcast(room, { t: 'stationRemoved', id: pc.id, by: ws.pid });
+      sendProg(room, ws.pid);
       return;
     }
     case 'shield': {
+      if (!me.weapons.shield) return;
+      const now = Date.now();
+      if (now - (me.lastShield || 0) < (SHIELD_CD - 2) * 1000) return;
+      me.lastShield = now;
       bcast(room, { t: 'shield', by: ws.pid, o: m.o, v: m.v }, ws.pid);
       return;
     }
     case 'critHit': {
+      /* damage computed server-side from the claimed weapon — never trusted */
+      if (me.mode !== 'surface') return;
       const arr = room.crit[me.pl]; if (!arr) return;
       const c = arr.find(k => k.id === m.id); if (!c) return;
-      c.hp -= Math.max(0, Math.min(200, +m.dmg || 0));
+      const wp = m.wp | 0;
+      let dmg = 0, range = 0;
+      if (wp === 6) {                                   // grenade AoE (thrown up to ~30m)
+        if (!me.weapons.grenade) return;
+        dmg = GREN_DMG; range = 46;
+      } else {
+        const chk = fireCheck(me.weapons, { light: 1e9, heavy: 1e9, fuel: 1e9, nade: 1e9 }, wp);  // ammo is charged on 'fire'
+        if (chk.err || !chk.w.dmg) return;
+        dmg = chk.w.dmg; range = (chk.w.range || 4) + 10;
+      }
+      const dx = c.x - me.pos[0], dz = c.z - me.pos[2];
+      if (dx * dx + dz * dz > range * range) return;
+      c.hp -= dmg;
       c.st = 1; c.idle = 0; c.hd = Math.atan2(c.z - me.pos[2], c.x - me.pos[0]);   // flee the shooter
       if (c.hp <= 0) {
         arr.splice(arr.indexOf(c), 1);
         const r = CRITTERS[c.type].ch;
         const ch = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
+        const got = grantRes(room, me, 'ch', ch);
         bcast(room, { t: 'critDead', id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), by: ws.pid, ch });
+        sendProg(room, ws.pid, { type: 'gain', k: 'ch', amt: got });
       }
       return;
     }
     case 'died': {
-      const loot = m.loot || {};
-      const drop = { fe: Math.max(0, loot.fe | 0), cy: Math.max(0, loot.cy | 0), bio: Math.max(0, loot.bio | 0) };
-      if (Array.isArray(m.pos) && (drop.fe || drop.cy || drop.bio)) {
+      /* the dropped cache comes from SERVER-tracked resources, never the client's claim */
+      const drop = { fe: me.res.fe | 0, cy: me.res.cy | 0, bio: me.res.bio | 0 };
+      me.res.fe = 0; me.res.cy = 0; me.res.bio = 0;     // Chitin & Pearls kept through death
+      if (Array.isArray(m.pos) && m.pos.every(v => isFinite(+v)) && (drop.fe || drop.cy || drop.bio)) {
         const id = 'L' + (room.nextLoot++);
         const cont = { id, pl: me.pl, pos: m.pos.map(Number), loot: drop, expireAt: Date.now() + 300000 };
         room.loot.set(id, cont);
         bcast(room, { t: 'lootSpawn', id, pl: cont.pl, pos: cont.pos, loot: drop });
       }
+      me.invulnUntil = Date.now() + SPAWN_PROT * 1000;
       const killer = room.players.get(m.by);
       bcast(room, { t: 'sys', text: (killer ? killer.name : 'Someone') + ' eliminated ' + me.name });
+      sendProg(room, ws.pid);
       return;
     }
     case 'lootClaim': {
       const c = room.loot.get(m.id);
       if (!c) return;
+      if (me.mode !== 'surface' || me.pl !== c.pl) return;
+      const dx = me.pos[0] - c.pos[0], dz = me.pos[2] - c.pos[2];
+      if (dx * dx + dz * dz > 144) return;               // must actually be near the cache
       room.loot.delete(m.id);
+      for (const k of ['fe', 'cy', 'bio']) grantRes(room, me, k, c.loot[k] | 0);
       sendTo(ws, { t: 'lootGot', id: m.id, loot: c.loot });
       bcast(room, { t: 'lootGone', id: m.id });
+      sendProg(room, ws.pid);
       return;
     }
     case 'chat': {
