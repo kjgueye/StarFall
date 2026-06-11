@@ -28,6 +28,22 @@ Live versions:
 
 ## 2. Tech stack & how it's written
 
+> **⚠ FOUNDATION MIGRATION (branch `server-migration`) — supersedes parts of this brief.**
+> The game is being converted to a Tier-A persistent online architecture. Done so far:
+> - **Phase 1:** Vite build step. The client now lives in `src/game.js` (ES modules), built to
+>   `dist/`; `index.html` is the Vite entry. All gameplay rules/data live in **`shared/`**
+>   (`constants/catalog/tiers/world/rules.js`) imported by BOTH client and server.
+>   The "single self-contained index.html" constraint below is obsolete.
+> - **Phase 2:** **Server-authoritative simulation.** In co-op the server owns per-player
+>   resources/tier/weapons/ammo/medkits/HP/O2/fuel and validates every intent (build costs,
+>   tier gates, mining range vs the shared node layout, weapon ownership/ammo/cooldowns/range,
+>   safe zones, spawn protection, turrets, grenade AoE, deaths/loot). Clients send intents and
+>   render; grants arrive as `prog` snapshots. Solo offline play is unchanged (`NET.active`
+>   gates everything). See the protocol comment atop `server.js` and `test/authority.mjs`.
+> - **Next:** Phase 3 Postgres persistence + guest identity; Phase 4 owner moderation;
+>   Phase 5 hardening.
+
+
 - **Language:** Plain JavaScript (ES2020), no TypeScript, **no build step**, no framework.
 - **3D engine:** [Three.js](https://threejs.org) **r158**, loaded from cdnjs as a UMD `<script>` (global `THREE`). No imports/modules.
 - **Client = ONE file:** `index.html` (~4,700 lines). All HTML, CSS, and JavaScript are inline in this single self-contained file. There are **no external assets** — every 3D model is built from Three.js primitives (boxes, cylinders, spheres, cones), every texture/sound is generated in code.

@@ -10,7 +10,10 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "test": "node test/check_shared.mjs"
+    "test": "node test/check_shared.mjs",
+    "test:mp": "node test/with_server.mjs test/mp_smoke.cjs 3997",
+    "test:authority": "node test/with_server.mjs test/authority.mjs 3996",
+    "test:all": "npm test && npm run test:mp && npm run test:authority"
   },
   "dependencies": {
     "ws": "^8.18.0"

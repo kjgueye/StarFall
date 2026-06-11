@@ -1,22 +1,39 @@
 /* ============================================================
-   STARFALL co-op server — rooms, world authority, relay
-   Serves index.html over HTTP and the game protocol over WS.
+   STARFALL co-op server — SERVER-AUTHORITATIVE simulation (Phase 2)
+   Serves the built client (dist/) over HTTP and the game protocol
+   over WS. Clients send INTENTS; the server validates them against
+   the shared rule modules (shared/) and broadcasts results. Nothing
+   a client reports about resources, tier, ammo, HP, O2 or damage is
+   trusted.
 
-   PROTOCOL (JSON frames, server is authoritative for shared-world objects):
-   client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
+   PROTOCOL (JSON frames):
+   client->server (intents):
+     host{name,world?,cmd?}, join{code,name},
+     progRestore{prog}                — one-shot localStorage import (Phase-3 seam),
+     pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw,sp,jt,ev},
      place{st}, remove{id}, repair{id}, paint{id,col}, mine{pl,i},
-     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, nade{o,v}, shield{o,v},
-     stationPlace{st}, stationRemove{id}, died{by,pos,loot}, lootClaim{id},
+     craft{key}, tierUp{}, useMed{},
+     fire{wp,o,p,target?}, critHit{id,wp}, nade{o,v}, shield{o,v},
+     stationPlace{st}, stationRemove{id}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
-   server->client:
-     welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats,tod,station,stationOnline}},
+   server->client (authoritative results):
+     welcome{...,prog,world{structures,beacon,deadNodes,meteor,loot,seats,tod,station,stationOnline}},
+     prog{res,tier,weapons,ammo,medkits,hp,ev?}   — per-player progress snapshot,
+     vitals{o2,fuel}, blackout, hurt{hp,dmg,by}, pdeath{by}, tfire{id,tp,p},
      err, pjoin, pleave, pu, placed, removed, paint, hp, destroyed, clock{tod},
      nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
      fire, nade, shield, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
      stationPlaced{by,st}, stationRemoved{id,by},
      lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
-   Damage is client-authoritative (victim applies); loot containers,
-   turret ownership and rover seats are server-authoritative.
+
+   Known Phase-2 trust limits (closed in later phases):
+   - progRestore accepts a clamped localStorage blob at join; Phase 3
+     replaces it with Postgres-backed per-guest progress.
+   - Movement is client-predicted; pu positions are bounds/finite
+     checked but not speed-validated. Aim (which target a shot claims)
+     is client-chosen within server-checked range/zones.
+   - Anyone may remove structures (refund to remover) — Phase 4 adds
+     ownership/moderation.
    ============================================================ */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -661,9 +678,11 @@ function handle(ws, m) {
     }
     case 'roverMove': {
       if (room.seats.get(m.id) !== ws.pid) return;
+      const x = +m.x, y = +m.y, z = +m.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z) || Math.hypot(x, z) > WORLD_R) return;
       const st = room.structures.find(s => s.id === m.id);
-      if (st) { st.x = +m.x; st.y = +m.y; st.z = +m.z; st.ry = +m.ry || 0; }
-      bcast(room, { t: 'roverMove', id: m.id, x: m.x, y: m.y, z: m.z, ry: m.ry }, ws.pid);
+      if (st) { st.x = x; st.y = y; st.z = z; st.ry = +m.ry || 0; }
+      bcast(room, { t: 'roverMove', id: m.id, x, y, z, ry: m.ry }, ws.pid);
       return;
     }
   }
