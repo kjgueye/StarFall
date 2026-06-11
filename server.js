@@ -39,7 +39,7 @@ const SCAT = {
   shieldgen: 150, armory: 120, window: 80, door: 100, dome: 90, beacon: 500,
   turret: 110, rover: 160,
   foundation: 140, pillar: 90, pillar2: 90, pillar3: 90, halfwall: 60, halffloor: 70,
-  roof45: 90, roofcorner: 90, beam: 60,
+  roof45: 90, roofcorner: 90, flatroof: 100, beam: 60,
   flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
   table: 50, antenna: 40,
   bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,

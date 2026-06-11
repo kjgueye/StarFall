@@ -496,6 +496,8 @@ const CAT={
     parts:[{g:'box',m:'metal',o:[0,1.5,0],s:[4,0.25,5.66],r:[Math.PI/4,0,0]}]},
   roofcorner:{name:'Roof Corner', ic:'◸', tier:2, cost:{fe:6,cy:1}, hp:90,
     parts:[{g:'cone',m:'metal',o:[0,1.4,0],s:[3.2,2.8,3.2]}]},
+  flatroof:{name:'Flat Roof', ic:'▤', tier:2, cost:{fe:6,cy:2}, hp:100,   // floor-footprint slab: caps walls, tiles flat, walkable second-story floor
+    parts:[{g:'box',m:'metal',o:[0,0.15,0],s:[4,0.3,4]},{g:'box',m:'trim',o:[0,0.32,0],s:[3.6,0.04,3.6]}]},
   beam:    {name:'Beam', ic:'━', tier:1, cost:{fe:3}, hp:60,
     parts:[{g:'box',m:'metal',o:[0,0,0],s:[4,0.3,0.3]}]},
   armory:{name:'Armory', ic:'⚒', tier:2, cost:{fe:35,cy:15}, hp:120, interact:'armory',
@@ -563,9 +565,9 @@ const CAT={
    accept:[piece types that may attach]}. The attaching piece's ORIGIN goes to the
    socket world position; R cycles the allowed rotations. Transforms are arbitrary,
    so collision/doors/save/MP all keep working unchanged. */
-const SNAP_WALLS=['wall','window','door','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
+const SNAP_WALLS=['wall','window','door','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner','flatroof'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
 const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
-const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','beam']);
+const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam']);
 const SNAP_R=3.2;        // max distance from aim to a socket to snap
 CAT.floor.sockets=[
   {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
@@ -621,6 +623,13 @@ CAT.roofcorner.sockets=[
 CAT.dome.sockets=[
   {p:[4,0,0],rots:[0],accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},
   {p:[0,0,4],rots:[0],accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];
+/* flat roof slab — mirrors the floor: walls snap to its top-face edges (second story),
+   and it tiles edge-to-edge with other roofs to cover a multi-tile building */
+CAT.flatroof.sockets=[
+  {p:[2,0,0], rots:[1], accept:SNAP_WALLS},{p:[-2,0,0],rots:[1],accept:SNAP_WALLS},  // second-story walls on the slab edges
+  {p:[0,0,2], rots:[0], accept:SNAP_WALLS},{p:[0,0,-2],rots:[0],accept:SNAP_WALLS},
+  {p:[4,0,0], rots:[0], accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},  // tile the flat roof across the building
+  {p:[0,0,4], rots:[0], accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];
 
 const MAX_STRUCT=400;
 const SEA_Y=0;            // Pelagos sea level (water planets)
@@ -1868,13 +1877,13 @@ function updateDoors(dt){
 function groundYAt(x,z,curY){
   const p=curP();
   let g=terrainH(x,z,p);
-  for(const t of ['floor','ramp','crate','foundation','halffloor']){
+  for(const t of ['floor','ramp','crate','foundation','halffloor','flatroof']){
     const list=placedByType[t]||[];
     for(const st of list){
       toLocal(st,x,z,_loc);
       const lx=_loc.lx, lz=_loc.lz;
       let top=null;
-      if(t==='floor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
+      if((t==='floor'||t==='flatroof')&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
       else if(t==='halffloor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=1.05) top=st.y+0.31;
       else if(t==='foundation'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+1.01;
       else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
@@ -3573,7 +3582,7 @@ function renderBuildGrid(){
   tool('◑','Paint Tool',()=>{ renderPaintGrid(); openPanel('paintPanel'); });
   tool('▤','Blueprints',openBlueprints);
   addSection('Structures');
-  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','ramp','beam','pillar','pillar2','pillar3','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
+  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
   addSection('Furniture & Interior');
