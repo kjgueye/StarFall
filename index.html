@@ -186,6 +186,7 @@
   #mJump { right:24px; bottom:84px; }
   #mAct  { right:100px; bottom:26px; width:72px; height:72px; font-size:12px; background:rgba(20,70,50,0.55); border-color:rgba(120,255,190,0.6); }
   #mPlace{ right:24px; bottom:170px; background:rgba(60,90,25,0.55); border-color:rgba(190,255,120,0.6); }
+  #mFree{ right:100px; bottom:200px; width:54px; height:54px; background:rgba(25,70,90,0.55); border-color:rgba(120,220,255,0.6); font-size:10px; }
   #mRemove{ right:100px; bottom:140px; background:rgba(80,30,30,0.55); border-color:rgba(255,140,120,0.6); width:54px; height:54px; }
   #mBuild{ left:26px; bottom:26px; width:58px; height:58px; }
   #mThrust{ right:24px; bottom:160px; }
@@ -322,6 +323,7 @@
   <button class="mBtn" id="mJump">JUMP</button>
   <button class="mBtn" id="mAct">MINE</button>
   <button class="mBtn hidden" id="mPlace">PLACE</button>
+  <button class="mBtn hidden" id="mFree">SNAP</button>
   <button class="mBtn" id="mRemove">✕</button>
   <button class="mBtn" id="mBuild">BUILD</button>
   <button class="mBtn hidden" id="mThrust">▲</button>
@@ -486,6 +488,42 @@ const CAT={
            {g:'cyl',m:'dark',o:[-1.85,0.6,0],s:[0.08,1.2,0.08]},{g:'cyl',m:'dark',o:[0,0.6,0],s:[0.08,1.2,0.08]},
            {g:'cyl',m:'dark',o:[1.85,0.6,0],s:[0.08,1.2,0.08]}]},
 };
+/* ---------- build snap sockets ---------- */
+/* A socket lives on a host piece: {p:[local x,y,z], rots:[allowed rotations 0-3],
+   accept:[piece types that may attach]}. The attaching piece's ORIGIN goes to the
+   socket world position; R cycles the allowed rotations. Transforms are arbitrary,
+   so collision/doors/save/MP all keep working unchanged. */
+const SNAP_WALLS=['wall','window','door'], SNAP_ROOFS=['dome'], SNAP_FLOORS=['floor'], SNAP_RAMPS=['ramp'];
+const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
+const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome']);
+const SNAP_R=3.2;        // max distance from aim to a socket to snap
+CAT.floor.sockets=[
+  {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
+  {p:[-2,0,0],  rots:[1], accept:SNAP_WALLS},
+  {p:[0,0,2],   rots:[0], accept:SNAP_WALLS},   // +z edge wall (runs along x)
+  {p:[0,0,-2],  rots:[0], accept:SNAP_WALLS},
+  {p:[4,0,0],   rots:[0], accept:SNAP_FLOORS},  // tile floors edge to edge
+  {p:[-4,0,0],  rots:[0], accept:SNAP_FLOORS},
+  {p:[0,0,4],   rots:[0], accept:SNAP_FLOORS},
+  {p:[0,0,-4],  rots:[0], accept:SNAP_FLOORS},
+  {p:[0,3,0],   rots:[0], accept:SNAP_FLOORS.concat(SNAP_ROOFS)},  // second story / centered roof
+  {p:[4,-3,0],  rots:[1], accept:SNAP_RAMPS},   // ramp up to this floor edge
+  {p:[-4,-3,0], rots:[3], accept:SNAP_RAMPS},
+  {p:[0,-3,4],  rots:[2], accept:SNAP_RAMPS},
+  {p:[0,-3,-4], rots:[0], accept:SNAP_RAMPS},
+];
+CAT.wall.sockets=[
+  {p:[0,3,0],   rots:[0], accept:WALL_LIKE},    // stack wall / roof / floor on top
+  {p:[4,0,0],   rots:[0], accept:SNAP_WALLS},   // continue straight +x
+  {p:[-4,0,0],  rots:[0], accept:SNAP_WALLS},
+  {p:[2,0,2],   rots:[1], accept:SNAP_WALLS},   // flush corner off +x end
+  {p:[2,0,-2],  rots:[1], accept:SNAP_WALLS},
+  {p:[-2,0,2],  rots:[1], accept:SNAP_WALLS},   // flush corner off -x end
+  {p:[-2,0,-2], rots:[1], accept:SNAP_WALLS},
+];
+CAT.window.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
+CAT.door.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
+
 const MAX_STRUCT=400;
 const GRID=4;
 const SAFE_R=32;          // PvP-free radius around a Colony Beacon
@@ -526,7 +564,7 @@ const S={
   ammo:{light:0,heavy:0}, medkits:0, slot:0, headbob:true,
 };
 const SAVE_KEY='starfall_save_v1';
-const SAVE_VER=2;
+const SAVE_VER=3;
 const MP_WORLD_KEY='starfall_mp_world_v1';
 
 /* ============================================================
@@ -1680,8 +1718,12 @@ function updateNodes(dt){
    BUILDING — ghost, placement, removal, repair
    ============================================================ */
 const raycaster=new THREE.Raycaster();
-let buildSel=null, ghost=null, ghostRot=0, ghostOK=false, removeMode=false;
+let buildSel=null, ghost=null, ghostRot=0, ghostOK=false, removeMode=false, ghostPlaceRot=0, freePlace=false;
 const ghostPos=new THREE.Vector3();
+const snapMarker=new THREE.Mesh(new THREE.TorusGeometry(0.55,0.09,6,18),
+  new THREE.MeshBasicMaterial({color:0x7fffc0,transparent:true,opacity:0.95,depthTest:false}));
+snapMarker.rotation.x=-Math.PI/2; snapMarker.visible=false; snapMarker.renderOrder=999;
+surfScene.add(snapMarker);
 
 function canAfford(cost){ for(const k in cost){ if(S.res[k]<cost[k]) return false; } return true; }
 function payCost(cost){ for(const k in cost){ S.res[k]=Math.max(0,S.res[k]-cost[k]); } updateHUDRes(); }
@@ -1707,18 +1749,46 @@ function selectBuild(t){
   }
   surfScene.add(ghost);
   closePanel('buildMenu');
-  showToast(def.name+' — click/PLACE to build, R rotates, X cancels');
+  showToast(def.name+(SNAP_PIECES.has(t)?' — snaps to nearby pieces · R cycles orientation · G free-place':' — R rotates')+' · X cancels');
   $('mPlace').classList.remove('hidden');
+  $('mFree').classList.toggle('hidden',!SNAP_PIECES.has(t));
+  $('mFree').textContent=freePlace?'FREE':'SNAP';
 }
 function cancelBuild(){
   buildSel=null;
   if(ghost){ surfScene.remove(ghost); ghost=null; }
+  snapMarker.visible=false;
   $('mPlace').classList.add('hidden');
+  $('mFree').classList.add('hidden');
+}
+/* nearest valid socket to the aim point, or null */
+function findSnap(ax,az){
+  let best=null, bestD=SNAP_R*SNAP_R;
+  for(const st of S.structures){
+    if(st.pl!==S.planet) continue;
+    const hdef=CAT[st.t]; if(!hdef.sockets) continue;
+    const a=st.r*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
+    for(const sk of hdef.sockets){
+      if(sk.accept.indexOf(buildSel)<0) continue;
+      const wx=st.x+sk.p[0]*c+sk.p[2]*s, wz=st.z-sk.p[0]*s+sk.p[2]*c;
+      const d=(wx-ax)*(wx-ax)+(wz-az)*(wz-az);
+      if(d<bestD){ bestD=d; best={x:wx,y:st.y+sk.p[1],z:wz,rots:sk.rots.map(r=>(r+st.r)%4)}; }
+    }
+  }
+  return best;
+}
+function occupiedAt(x,y,z){
+  for(const st of S.structures){
+    if(st.pl!==S.planet||st.t!==buildSel) continue;
+    if(Math.abs(st.x-x)<0.25&&Math.abs(st.y-y)<0.25&&Math.abs(st.z-z)<0.25) return true;
+  }
+  return false;
 }
 function updateGhost(){
   if(!buildSel||!ghost) return;
+  const def=CAT[buildSel];
   raycaster.setFromCamera({x:0,y:0},camera);
-  raycaster.far=16;
+  raycaster.far=18;
   const targets=[surf.terrain];
   for(const t in structMeshes) for(const im of structMeshes[t]) if(im.count>0) targets.push(im);
   const hits=raycaster.intersectObjects(targets,false);
@@ -1729,21 +1799,29 @@ function updateGhost(){
     pt=new THREE.Vector3(player.x,0,player.z).addScaledVector(new THREE.Vector3(dir.x,0,dir.z).normalize(),7);
     pt.y=terrainH(pt.x,pt.z,curP());
   }
-  const def=CAT[buildSel];
-  let gx,gz,gy;
-  if(def.decor||buildSel==='crate'||buildSel==='lightpole'||buildSel==='relay'||buildSel==='shieldgen'||buildSel==='beacon'){
-    gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2;
-  } else {
-    gx=Math.round(pt.x/GRID)*GRID; gz=Math.round(pt.z/GRID)*GRID;
+  let gx,gz,gy, snapped=false;
+  if(!freePlace&&SNAP_PIECES.has(buildSel)){
+    const snap=findSnap(pt.x,pt.z);
+    if(snap){
+      const n=snap.rots.length, wr=snap.rots[((ghostRot%n)+n)%n];
+      gx=snap.x; gy=snap.y; gz=snap.z; ghostPlaceRot=wr; snapped=true;
+      ghost.rotation.y=wr*Math.PI/2;
+      snapMarker.visible=true; snapMarker.position.set(gx,gy+0.05,gz);
+    }
   }
-  if(stackY!==null) gy=Math.round(stackY/0.5)*0.5;
-  else gy=groundYAt(gx,gz,1e9);
+  if(!snapped){
+    if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
+    else { gx=Math.round(pt.x/GRID)*GRID; gz=Math.round(pt.z/GRID)*GRID; }
+    gy=(stackY!==null)?Math.round(stackY/0.5)*0.5:groundYAt(gx,gz,1e9);
+    ghostPlaceRot=ghostRot;
+    ghost.rotation.y=ghostRot*Math.PI/2;
+    snapMarker.visible=false;
+  }
   ghostPos.set(gx,gy,gz);
   ghost.position.copy(ghostPos);
-  ghost.rotation.y=ghostRot*Math.PI/2;
   const inB=Math.hypot(gx,gz)<WORLD_R-6;
   const dx=gx-player.x,dz=gz-player.z;
-  ghostOK=inB&&(dx*dx+dz*dz<260)&&canAfford(def.cost)&&structCount()<MAX_STRUCT;
+  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz);
   ghost.children.forEach(m=>m.material=ghostOK?MAT.ghostOk:MAT.ghostBad);
 }
 function placeStructure(){
@@ -1755,10 +1833,10 @@ function placeStructure(){
   if(!canAfford(def.cost)){ showToast('Need '+costStr(def.cost)); SND.denied(); return; }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
-    NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostRot}});
+    NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostPlaceRot}});
     return;
   }
-  applyPlaced({t:buildSel,pl:S.planet,x:ghostPos.x,y:ghostPos.y,z:ghostPos.z,r:ghostRot,hp:def.hp},true);
+  applyPlaced({t:buildSel,pl:S.planet,x:ghostPos.x,y:ghostPos.y,z:ghostPos.z,r:ghostPlaceRot,hp:def.hp},true);
 }
 function applyPlaced(m,byMe){
   const def=CAT[m.t]; if(!def) return;
@@ -2578,6 +2656,7 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyB'){ if(anyPanelOpen()){closeAllPanels();} else if(S.mode==='surface'){ renderBuildGrid(); openPanel('buildMenu'); } else showToast('Land on a planet to build'); }
   if(e.code==='KeyT'){ if(anyPanelOpen()){closeAllPanels();} else { renderTierList(); openPanel('tierMenu'); } }
   if(e.code==='KeyR'&&buildSel) ghostRot=(ghostRot+1)%4;
+  if(e.code==='KeyG'&&buildSel){ toggleFreePlace(); }
   if(e.code==='KeyX'){ if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
   if(e.code==='Escape'){ if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
   if(S.mode==='surface'&&!driving){
@@ -2686,7 +2765,9 @@ let mFire=false;
   el.addEventListener('touchcancel',()=>{ keys.KeyE=false; fireHeld=false; });
 })();
 $('mMed').addEventListener('touchstart',e=>{ e.preventDefault(); useMed(); },{passive:false});
+function toggleFreePlace(){ freePlace=!freePlace; $('mFree').textContent=freePlace?'FREE':'SNAP'; showToast(freePlace?'Free placement (snap off)':'Snap-to-piece on'); SND.blip(); }
 $('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) placeStructure(); },{passive:false});
+$('mFree').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) toggleFreePlace(); },{passive:false});
 $('mRemove').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); },{passive:false});
 $('mBuild').addEventListener('touchstart',e=>{ e.preventDefault();
   if(anyPanelOpen()) closeAllPanels();
