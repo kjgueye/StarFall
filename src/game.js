@@ -2793,7 +2793,6 @@ function primaryDown(){
 /* CYCLE_S imported from shared/constants.js */
 let dayClock=300;                 // seconds; start near noon (tod 0.5)
 const dnBaseFog=new THREE.Color(), dnBaseSky=new THREE.Color();
-const _ngSky=new THREE.Color(0x05070d), _ngFog=new THREE.Color(0x080c16);
 let surfStars=null;
 (function(){
   const n=900, sp=new Float32Array(n*3), rng=mulberry32(555);
@@ -2808,22 +2807,36 @@ function meteorActiveNow(){
   if(NET.active){ const m=NET.meteor[S.planet]; return !!(m&&m.phase&&m.phase!=='idle'); }
   return meteorState.phase==='warning'||meteorState.phase==='active';
 }
+/* the emissive hot set runs brighter after dark; bases recorded once so the
+   boost never compounds and can be reset when leaving the surface */
+const EMIS_NIGHT=[MAT.emisC,MAT.emisW,MAT.emisO,MAT.emisR,MAT.emisG,MAT.emisB];
+for(const m of EMIS_NIGHT) m.userData._ei0=m.emissiveIntensity;
+function resetEmisBoost(){ for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0; }
 function applyDayNight(){
   if(!surf.built) return;
   const p=curP(), tod=todNow();
   const sunUp=Math.sin((tod-0.25)*Math.PI*2);      // 1 noon, -1 midnight
   const day=clamp((sunUp+0.25)/1.15,0,1);
   if(surf.hemi) surf.hemi.intensity=0.12+0.78*day;
-  if(surf.dirLight) surf.dirLight.intensity=0.08+1.2*day;
+  if(surf.dirLight){
+    surf.dirLight.intensity=0.08+1.2*day;
+    /* horizon light warms toward the planet's dusk tint at dawn/sunset */
+    const duskK=clamp(1-Math.abs(sunUp)*2.6,0,1)*0.85;
+    surf.dirLight.color.set(p.sun).lerp(_tmpC2.set(p.dusk!==undefined?p.dusk:0xffb070),duskK);
+  }
   if(surf.amb) surf.amb.intensity=0.16+0.34*day;
-  dnBaseSky.copy(_ngSky).lerp(_tmpC.set(p.sky),day);
-  dnBaseFog.copy(_ngFog).lerp(_tmpC.set(p.fog),day);
+  dnBaseSky.set(p.nightSky!==undefined?p.nightSky:0x05070d).lerp(_tmpC.set(p.sky),day);
+  dnBaseFog.set(p.nightFog!==undefined?p.nightFog:0x080c16).lerp(_tmpC.set(p.fog),day);
   surfScene.background=dnBaseSky;
   if(!meteorActiveNow()&&surfScene.fog) surfScene.fog.color.copy(dnBaseFog);
   if(surfStars) surfStars.material.opacity=clamp(1-day*1.3,0,1)*0.9;
   /* lamps/beacons glow stronger after dark so they actually matter at night */
-  const glowK=0.45+0.95*(1-day);
+  const glowK=(0.45+0.95*(1-day))*(p.glowNight||1);
   for(const gl of structGlows) gl.material.opacity=Math.min(1,gl.userData._o0*glowK);
+  /* emissive materials run hotter at night (shared with the space scene —
+     reset on launch) */
+  const nightK=1+0.4*(1-day);
+  for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0*nightK;
 }
 const _tmpC=new THREE.Color(), _tmpC2=new THREE.Color();
 
@@ -3379,6 +3392,7 @@ function doLand(planetKey){
 }
 function doLaunch(){
   if(transitioning) return;
+  resetEmisBoost();   // night emissive boost is surface-only; mats are shared with space
   fadeTo('LAUNCHING',()=>{ enterSpace(S.planet,false); saveGame(); });
 }
 function doBlackout(){
