@@ -984,6 +984,54 @@ function updateWater(){
   pos.needsUpdate=true;
 }
 
+/* ---------- ambient planet atmosphere (Outpost P5) ----------
+   One small Points cloud (dust/snow/spores/mist per PLANETS.ambient data)
+   wrapped in a 50m box around the player. Near-free: positions stream once
+   per frame, no allocation; halves its draw range when Effects are off. */
+let ambPts=null, ambVel=null, ambN=0, ambDef=null;
+function buildAmbient(){
+  if(ambPts){ surfScene.remove(ambPts); ambPts.geometry.dispose(); ambPts.material.dispose(); ambPts=null; }
+  ambDef=curP().ambient||null;
+  if(!ambDef) return;
+  ambN=ambDef.count;
+  const pos=new Float32Array(ambN*3); ambVel=new Float32Array(ambN*3);
+  for(let i=0;i<ambN;i++){
+    pos[i*3]=player.x+(Math.random()-0.5)*50;
+    pos[i*3+1]=player.y+Math.random()*16-2;
+    pos[i*3+2]=player.z+(Math.random()-0.5)*50;
+    ambVel[i*3]  =ambDef.drift*(0.4+Math.random()*0.9);
+    ambVel[i*3+1]=ambDef.fall*(0.6+Math.random()*0.8);
+    ambVel[i*3+2]=(Math.random()-0.5)*ambDef.drift;
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  const mat=new THREE.PointsMaterial({color:ambDef.col,size:ambDef.size||0.22,transparent:true,
+    opacity:ambDef.op||0.5,depthWrite:false,sizeAttenuation:true});
+  ambPts=new THREE.Points(geo,mat);
+  ambPts.frustumCulled=false;
+  surfScene.add(ambPts);
+}
+function updateAmbient(dt){
+  if(!ambPts||!ambDef) return;
+  const a=ambPts.geometry.attributes.position.array;
+  const wob=performance.now()*0.0006;
+  for(let i=0;i<ambN;i++){
+    a[i*3]  +=(ambVel[i*3]+Math.sin(wob+i)*0.4)*dt;
+    a[i*3+1]+=ambVel[i*3+1]*dt;
+    a[i*3+2]+=ambVel[i*3+2]*dt;
+    /* wrap into the box around the player */
+    if(a[i*3]>player.x+25) a[i*3]-=50; else if(a[i*3]<player.x-25) a[i*3]+=50;
+    if(a[i*3+2]>player.z+25) a[i*3+2]-=50; else if(a[i*3+2]<player.z-25) a[i*3+2]+=50;
+    if(a[i*3+1]>player.y+14) a[i*3+1]-=18; else if(a[i*3+1]<player.y-4) a[i*3+1]+=18;
+  }
+  ambPts.geometry.attributes.position.needsUpdate=true;
+  ambPts.geometry.setDrawRange(0,S.fx===false?(ambN>>1):ambN);   // effects-off: half density
+  if(ambDef.nightGlow){
+    const sunUp=Math.sin((todNow()-0.25)*Math.PI*2);
+    const day=clamp((sunUp+0.25)/1.15,0,1);
+    ambPts.material.opacity=(ambDef.op||0.5)*(0.7+0.9*(1-day));   // spores glow after dark
+  }
+}
 function buildSurface(planetKey){
   /* tear down previous */
   if(surf.group){ surfScene.remove(surf.group); surf.group.traverse(o=>{ if(o.geometry&&!Object.values(GEO).includes(o.geometry)) o.geometry.dispose(); }); }
@@ -1094,6 +1142,7 @@ function buildSurface(planetKey){
   surf.shipPos.set(sx,terrainH(sx,sz,p)+2.3,sz);
 
   surfScene.add(g);
+  buildAmbient();
   refreshStructures();
   if(NET.active&&NET.deadNodes[planetKey]){
     for(const i of NET.deadNodes[planetKey]){
@@ -3963,6 +4012,7 @@ function updateSurface(dt){
   updateCritters(dt);
   updateHeavyWeapons(dt);
   updateWater();
+  updateAmbient(dt);
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
@@ -4316,7 +4366,7 @@ Object.assign(window,{
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
-  applyFx,openSettings,
+  applyFx,openSettings,buildAmbient,updateAmbient,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
