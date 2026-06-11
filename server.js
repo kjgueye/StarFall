@@ -30,7 +30,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
 import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
   MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_R, GREN_DMG, GREN_FUSE, SHIELD_CD, SHIELD_LIFE,
-  TURRET_R, TURRET_DMG, TURRET_CD, WORLD_R } from './shared/constants.js';
+  TURRET_R, TURRET_DMG, TURRET_CD, WORLD_R, SEA_Y,
+  O2_DRAIN, O2_DRAIN_SPRINT, O2_JET_MULT, O2_DRAIN_SUBMERGED, O2_REFILL,
+  EVA_O2_DRAIN, EVA_O2_REFILL } from './shared/constants.js';
 import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
@@ -365,9 +367,12 @@ function handle(ws, m) {
   switch (m.t) {
     case 'pu': {
       if (!Array.isArray(m.pos) || m.pos.length !== 3) return;
-      me.pos = m.pos.map(Number); me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
+      const pos = m.pos.map(Number);
+      if (pos.some(v => !isFinite(v) || Math.abs(v) > 4000)) return;
+      me.pos = pos; me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
       me.mode = m.mode === 'surface' ? 'surface' : 'space';
       me.pl = PLANETS.includes(m.pl) ? m.pl : me.pl;
+      me.sp = !!m.sp; me.jt = !!m.jt; me.ev = !!m.ev;   // activity flags for the vitals ledger
       bcast(room, { t: 'pu', pid: ws.pid, pos: me.pos, yaw: me.yaw, pitch: me.pitch, mode: me.mode, pl: me.pl,
         wp: m.wp | 0, iv: m.iv ? 1 : 0, dr: m.dr | 0, sw: m.sw ? 1 : 0 }, ws.pid);
       return;
@@ -378,6 +383,8 @@ function handle(ws, m) {
       me.restored = true;
       const s = sanitizeProg(m.prog);
       me.res = s.res; me.tier = s.tier; me.weapons = s.weapons; me.ammo = s.ammo; me.medkits = s.medkits;
+      me.o2 = Math.max(5, Math.min(o2Max(me.tier), +((m.prog || {}).o2) || 100));
+      me.fuel = Math.max(0, Math.min(100, +((m.prog || {}).fuel) || 100));
       sendProg(room, ws.pid);
       return;
     }
@@ -703,6 +710,51 @@ function beaconOnPlanetS(room, pl) {
   for (const s of room.structures) if (s.t === 'beacon' && s.pl === pl) return s;
   return null;
 }
+/* ---------- O2/fuel ledger (Phase 2.4) ----------
+   Coarse server simulation from last known position + activity flags.
+   sprint/jet flags only ever INCREASE drain, so lying about them is a
+   sub-percent O2 saving, not a cheat; refill zones and submersion are
+   verified server-side. Movement itself stays client-predicted (Phase 2
+   accepts snap-correct-level trust there). */
+function o2RangeSrv(room, p) {
+  const dx = p.pos[0] - 8, dz = p.pos[2] - 2;          // landed ship: deterministic (8,·,2)
+  if (dx * dx + dz * dz < 400) return true;
+  for (const st of room.structures) {
+    if (st.pl !== p.pl || st.hp <= 0) continue;
+    const r = CAT[st.t].o2r; if (!r) continue;
+    const ax = p.pos[0] - st.x, az = p.pos[2] - st.z;
+    if (ax * ax + az * az < r * r) return true;
+  }
+  return false;
+}
+function simVitals(room, dt, now) {
+  for (const p of room.players.values()) {
+    const max = o2Max(p.tier);
+    if (p.mode === 'space') {
+      if (p.ev) {                                       // EVA at the orbital station
+        const sp = p.shipPos;
+        const near = sp && Math.hypot(p.pos[0] - sp[0], p.pos[1] - sp[1], p.pos[2] - sp[2]) < 14;
+        p.o2 = near ? Math.min(max, p.o2 + EVA_O2_REFILL * dt) : Math.max(0, p.o2 - EVA_O2_DRAIN * dt);
+      } else {                                          // aboard ship: slow refill
+        p.shipPos = [p.pos[0], p.pos[1], p.pos[2]];
+        p.o2 = Math.min(max, p.o2 + 12 * dt);
+      }
+    } else {
+      const submerged = !!PDATA[p.pl].water && p.pos[1] < SEA_Y - 0.3;
+      if (submerged) p.o2 = Math.max(0, p.o2 - O2_DRAIN_SUBMERGED * dt);
+      else if (o2RangeSrv(room, p)) p.o2 = Math.min(max, p.o2 + O2_REFILL * dt);
+      else p.o2 = Math.max(0, p.o2 - (p.sp ? O2_DRAIN_SPRINT : O2_DRAIN) * (p.jt ? O2_JET_MULT : 1) * dt);
+      if (p.jt) p.fuel = Math.max(0, p.fuel - 32 * dt);
+      else p.fuel = Math.min(100, p.fuel + 24 * dt);
+    }
+    if (p.o2 <= 0) { p.o2 = max; sendTo(p.ws, { t: 'blackout' }); }   // emergency recall
+    if (now - (p.lastVitals || 0) > 2000) {
+      p.lastVitals = now;
+      sendTo(p.ws, { t: 'vitals', o2: Math.round(p.o2), fuel: Math.round(p.fuel) });
+    }
+  }
+}
+
 /* sentry turrets: server-side targeting + damage (clients only render tracers) */
 function simTurrets(room, pl, dt) {
   const now = Date.now();
@@ -790,6 +842,8 @@ setInterval(() => {
     for (const [id, c] of room.loot) {
       if (now >= c.expireAt) { room.loot.delete(id); bcast(room, { t: 'lootGone', id }); }
     }
+    /* O2/fuel ledger */
+    simVitals(room, dt, now);
     /* meteors: per planet, clock advances only while someone is on that surface */
     for (const pl of PLANETS) {
       let occupied = false;

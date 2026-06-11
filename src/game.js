@@ -176,6 +176,13 @@ function netHandle(m){
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
     case 'stationRemoved': applyStationRemovedById(m.id,m.by===NET.pid); break;
     case 'prog': applyProg(m); break;
+    case 'vitals':
+      if(typeof m.o2==='number'&&Math.abs(S.o2-m.o2)>8) S.o2=clamp(m.o2,0,o2Max());
+      if(typeof m.fuel==='number'&&Math.abs(S.fuel-m.fuel)>12) S.fuel=clamp(m.fuel,0,100);
+      break;
+    case 'blackout':
+      if(S.running&&S.o2<10){ if(S.mode==='eva') evaEmergency(); else if(S.mode==='surface') doBlackout(); }
+      break;
     case 'hurt': onHurt(m); break;
     case 'pdeath': onPDeath(m); break;
     case 'tfire': onTurretFire(m); break;
@@ -214,7 +221,7 @@ function onTurretFire(m){
    or payment arrives as a `prog` snapshot. The client only predicts. */
 function mpProgBlob(){
   return {tier:S.tier,res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},
-    weapons:saveWeapons(),ammo:saveAmmo(),medkits:S.medkits|0};
+    weapons:saveWeapons(),ammo:saveAmmo(),medkits:S.medkits|0,o2:S.o2|0,fuel:S.fuel|0};
 }
 function applyProg(m){
   if(!m||!m.res) return;
@@ -883,10 +890,11 @@ function sendPU(){
   if(S.mode==='surface'){
     NET.send({t:'pu',pos:[+player.x.toFixed(2),+player.y.toFixed(2),+player.z.toFixed(2)],
       yaw:+player.yaw.toFixed(3),pitch:+player.pitch.toFixed(3),mode:'surface',pl:S.planet,
-      wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0});
+      wp:S.slot, iv:player.invuln>0?1:0, dr:driving?driving.id:0, sw:swingT>0?1:0,
+      sp:puSprint?1:0, jt:puJet?1:0});
   } else if(S.mode==='eva'){
     NET.send({t:'pu',pos:[+evaPos.x.toFixed(1),+evaPos.y.toFixed(1),+evaPos.z.toFixed(1)],
-      yaw:+evaYaw.toFixed(3),pitch:+evaPitch.toFixed(3),mode:'space',pl:S.planet});
+      yaw:+evaYaw.toFixed(3),pitch:+evaPitch.toFixed(3),mode:'space',pl:S.planet,ev:1});
   } else {
     NET.send({t:'pu',pos:[+ship.position.x.toFixed(1),+ship.position.y.toFixed(1),+ship.position.z.toFixed(1)],
       yaw:+S.syaw.toFixed(3),pitch:+S.spitch.toFixed(3),mode:'space',pl:S.planet});
@@ -1981,6 +1989,7 @@ function updateRover(dt){
   /* driver shares rover location for O2/turret/meteor systems */
   player.x=st.x; player.z=st.z; player.y=st.y;
   /* O2 (open-top cockpit) */
+  puSprint=false; puJet=false;
   const safe=inO2Range();
   if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt); else S.o2=Math.max(0,S.o2-1.15*dt);
   if(S.o2<=0){ exitRover(); doBlackout(); return; }
@@ -3572,7 +3581,7 @@ function updateSpaceHUD(){
 /* ============================================================
    SURFACE UPDATE
    ============================================================ */
-let o2BeepT=0, footT=0;
+let o2BeepT=0, footT=0, puSprint=false, puJet=false;   // activity flags reported to the server
 function updateSurface(dt){
   if(anyPanelOpen()||transitioning){ justE=false; renderSurfaceCam(); return; }
   const p=curP();
@@ -3630,6 +3639,7 @@ function updateSurface(dt){
   /* head bob */
   footT+=im*dt*(sprinting?11:7);
   /* --- O2 --- */
+  puSprint=sprinting; puJet=jetting;
   const safe=inO2Range();
   if(submerged) S.o2=Math.max(0,S.o2-4.6*dt);            // deep water: ~4x drain, no air
   else if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt);

@@ -12,7 +12,7 @@ const ok = (cond, msg) => { console.log((cond ? '  ok  ' : 'FAIL  ') + msg); if 
 
 function client(name) {
   const ws = new WebSocket(URL);
-  const c = { ws, name, pid: null, code: null, prog: null, hurts: [], deaths: [], loot: [], placed: [], nodeDead: [], errs: [], tfires: [] };
+  const c = { ws, name, pid: null, code: null, prog: null, hurts: [], deaths: [], loot: [], placed: [], nodeDead: [], errs: [], tfires: [], vitals: [] };
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch (e) { return; }
     if (m.t === 'welcome') { c.pid = m.pid; c.code = m.code; c.prog = m.prog; }
@@ -24,6 +24,7 @@ function client(name) {
     if (m.t === 'nodeDead') c.nodeDead.push(m);
     if (m.t === 'tfire') c.tfires.push(m);
     if (m.t === 'err') c.errs.push(m.msg);
+    if (m.t === 'vitals') c.vitals.push(m);
   });
   c.send = o => ws.send(JSON.stringify(o));
   c.ready = new Promise(r => ws.on('open', r));
@@ -125,6 +126,12 @@ const pu = (c, x, z) => c.send({ t: 'pu', pos: [x, ty(x, z) + 0.1, z], yaw: 0, p
   await sleep(400);
   ok(B.prog.tier === 1 && B.prog.res.fe < 9999, 'second progRestore (re-arm attempt) was ignored');
   ok(B.prog.ammo.light < 50 && B.prog.weapons.pistol === true, 'ammo drained server-side per shot (' + B.prog.ammo.light + '/50)');
+
+  /* ---- 15. O2 ledger runs server-side: away from any O2 source it drains ---- */
+  const v0 = B.vitals.length ? B.vitals[B.vitals.length - 1].o2 : 100;
+  for (let i = 0; i < 18; i++) { await sleep(250); pu(B, 250, 250); }   // far from ship/relays
+  const v1 = B.vitals[B.vitals.length - 1];
+  ok(B.vitals.length > 0 && v1.o2 < v0, 'server vitals: O2 drains away from sources (' + v0 + ' -> ' + v1.o2 + ')');
 
   console.log(fails === 0 ? '\nAUTHORITY SUITE PASS' : '\n' + fails + ' FAILURES');
   process.exit(fails ? 1 : 0);
