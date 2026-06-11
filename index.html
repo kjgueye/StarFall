@@ -86,6 +86,15 @@
   .closeX { position:absolute; top:12px; right:14px; background:none; border:1px solid #3fa9d4; color:#aee8ff; width:30px; height:30px;
     cursor:pointer; font-size:15px; }
   #buildGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:9px; }
+  #paintGrid { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; }
+  .swatch { height:46px; border:2px solid rgba(140,200,230,0.5); cursor:pointer; border-radius:4px; }
+  .swatch:hover { border-color:#fff; box-shadow:0 0 12px rgba(255,255,255,0.4); }
+  #blueprintList .bpItem { display:flex; gap:8px; align-items:center; border:1px solid rgba(90,180,220,0.35); padding:8px 10px; margin-bottom:7px; background:rgba(12,30,46,0.55); }
+  #blueprintList .bpItem b { flex:1; color:#cfeefe; font-size:13px; }
+  #blueprintList .bpItem button, #bpTools button { background:rgba(20,60,90,0.5); border:1px solid #2e8fb8; color:#cfeefe; padding:6px 11px; cursor:pointer; font-size:12px; letter-spacing:0.06em; }
+  #bpTools { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  #bpImportBox { width:100%; height:64px; background:#06141f; color:#9fdcf5; border:1px solid #2e8fb8; margin:8px 0; font-size:10px; padding:6px; }
+  #bpSel { position:fixed; border:2px dashed #7fffc0; background:rgba(120,255,180,0.12); z-index:24; pointer-events:none; display:none; }
   .bItem { border:1px solid rgba(90,180,220,0.4); background:rgba(14,36,54,0.6); padding:9px 7px; cursor:pointer; text-align:center; position:relative; }
   .bItem:hover { background:rgba(30,90,130,0.7); }
   .bItem.locked { opacity:0.38; cursor:default; }
@@ -277,6 +286,29 @@
   <div id="craftGrid"></div>
 </div>
 
+<div id="paintPanel" class="panel hidden">
+  <button class="closeX" data-close="paintPanel">✕</button>
+  <h2>Paint — pick a colour</h2>
+  <div id="paintGrid"></div>
+  <div style="margin-top:10px;color:#7fc0da;font-size:12px">Then aim at any placed piece and click / PAINT. X exits.</div>
+</div>
+
+<div id="blueprintPanel" class="panel hidden">
+  <button class="closeX" data-close="blueprintPanel">✕</button>
+  <h2>Blueprints</h2>
+  <div id="bpTools">
+    <button id="bpSelectBtn">Select &amp; Save</button>
+    <button id="bpImportBtn">Import Code</button>
+  </div>
+  <div id="bpImportWrap" class="hidden">
+    <textarea id="bpImportBox" placeholder="Paste blueprint code…"></textarea>
+    <button id="bpImportGo" style="background:rgba(20,60,90,0.5);border:1px solid #2e8fb8;color:#cfeefe;padding:7px 12px;cursor:pointer">Load Blueprint</button>
+  </div>
+  <div id="blueprintList"></div>
+</div>
+
+<div id="bpSel"></div>
+
 <canvas id="minimap" class="hidden" width="320" height="320"></canvas>
 <input id="chatInput" class="hidden" maxlength="120" placeholder="Say something… (Enter to send, Esc to cancel)" autocomplete="off">
 
@@ -428,6 +460,25 @@ const CAT={
            {g:'box',m:'emisC',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
   dome:   {name:'Dome Roof', ic:'◠', tier:2, cost:{fe:10,cy:4}, hp:90,
     parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisC',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
+  /* ---- Phase 2 building pieces ---- */
+  foundation:{name:'Foundation', ic:'▰', tier:1, cost:{fe:6}, hp:140,
+    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[4,1,4]},{g:'box',m:'trim',o:[0,1.01,0],s:[3.8,0.04,3.8]}]},
+  pillar:  {name:'Pillar (S)', ic:'╿', tier:1, cost:{fe:4}, hp:90,
+    parts:[{g:'cyl',m:'metal',o:[0,1.5,0],s:[0.5,3,0.5]}]},
+  pillar2: {name:'Pillar (M)', ic:'╿', tier:1, cost:{fe:6}, hp:90,
+    parts:[{g:'cyl',m:'metal',o:[0,2.5,0],s:[0.5,5,0.5]}]},
+  pillar3: {name:'Pillar (L)', ic:'╿', tier:1, cost:{fe:8}, hp:90,
+    parts:[{g:'cyl',m:'metal',o:[0,3.5,0],s:[0.5,7,0.5]}]},
+  halfwall:{name:'Half Wall', ic:'▬', tier:1, cost:{fe:2}, hp:60,
+    parts:[{g:'box',m:'metal',o:[0,0.75,0],s:[4,1.5,0.3]},{g:'box',m:'trim',o:[0,0.75,0.16],s:[3.6,1.3,0.02]}]},
+  halffloor:{name:'Half Floor', ic:'▱', tier:1, cost:{fe:2}, hp:70,
+    parts:[{g:'box',m:'metal',o:[0,0.15,0],s:[4,0.3,2]},{g:'box',m:'trim',o:[0,0.31,0],s:[3.7,0.02,1.8]}]},
+  roof45:  {name:'Angled Roof', ic:'◹', tier:2, cost:{fe:6,cy:1}, hp:90,
+    parts:[{g:'box',m:'metal',o:[0,1.5,0],s:[4,0.25,5.66],r:[Math.PI/4,0,0]}]},
+  roofcorner:{name:'Roof Corner', ic:'◸', tier:2, cost:{fe:6,cy:1}, hp:90,
+    parts:[{g:'cone',m:'metal',o:[0,1.4,0],s:[3.2,2.8,3.2]}]},
+  beam:    {name:'Beam', ic:'━', tier:1, cost:{fe:3}, hp:60,
+    parts:[{g:'box',m:'metal',o:[0,0,0],s:[4,0.3,0.3]}]},
   armory:{name:'Armory', ic:'⚒', tier:2, cost:{fe:35,cy:15}, hp:120, interact:'armory',
     parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[2.6,1.0,1.4]},{g:'box',m:'metal',o:[0,1.06,0],s:[2.75,0.12,1.55]},
            {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
@@ -493,9 +544,9 @@ const CAT={
    accept:[piece types that may attach]}. The attaching piece's ORIGIN goes to the
    socket world position; R cycles the allowed rotations. Transforms are arbitrary,
    so collision/doors/save/MP all keep working unchanged. */
-const SNAP_WALLS=['wall','window','door'], SNAP_ROOFS=['dome'], SNAP_FLOORS=['floor'], SNAP_RAMPS=['ramp'];
+const SNAP_WALLS=['wall','window','door','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
 const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
-const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome']);
+const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','beam']);
 const SNAP_R=3.2;        // max distance from aim to a socket to snap
 CAT.floor.sockets=[
   {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
@@ -523,6 +574,24 @@ CAT.wall.sockets=[
 ];
 CAT.window.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
 CAT.door.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
+CAT.foundation.sockets=[
+  {p:[0,1,0],   rots:[0], accept:SNAP_FLOORS},          // floor/foundation on top
+  {p:[2,1,0],   rots:[1], accept:SNAP_WALLS},{p:[-2,1,0],rots:[1],accept:SNAP_WALLS},
+  {p:[0,1,2],   rots:[0], accept:SNAP_WALLS},{p:[0,1,-2],rots:[0],accept:SNAP_WALLS},
+  {p:[4,0,0],   rots:[0], accept:['foundation']},{p:[-4,0,0],rots:[0],accept:['foundation']},
+  {p:[0,0,4],   rots:[0], accept:['foundation']},{p:[0,0,-4],rots:[0],accept:['foundation']},
+];
+CAT.halffloor.sockets=[
+  {p:[2,0,0],rots:[1],accept:SNAP_WALLS},{p:[-2,0,0],rots:[1],accept:SNAP_WALLS},
+  {p:[0,0,1],rots:[0],accept:SNAP_WALLS},{p:[0,0,-1],rots:[0],accept:SNAP_WALLS},
+  {p:[0,3,0],rots:[0],accept:SNAP_ROOFS}];
+CAT.halfwall.sockets=[
+  {p:[0,1.5,0],rots:[0],accept:WALL_LIKE},
+  {p:[4,0,0],rots:[0],accept:SNAP_WALLS},{p:[-4,0,0],rots:[0],accept:SNAP_WALLS}];
+CAT.pillar.sockets=[{p:[0,3,0],rots:[0],accept:SNAP_FLOORS}];
+CAT.pillar2.sockets=[{p:[0,5,0],rots:[0],accept:SNAP_FLOORS}];
+CAT.pillar3.sockets=[{p:[0,7,0],rots:[0],accept:SNAP_FLOORS}];
+CAT.beam.sockets=[{p:[4,0,0],rots:[0],accept:['beam']},{p:[-4,0,0],rots:[0],accept:['beam']}];
 
 const MAX_STRUCT=400;
 const GRID=4;
@@ -646,6 +715,7 @@ function netHandle(m){
     case 'chat': addChat(m.name,m.text,false); break;
     case 'roverSeat': onRoverSeat(m.id,m.pid); break;
     case 'roverMove': onRoverMove(m); break;
+    case 'paint': applyPaintById(m.id,m.col); break;
   }
 }
 /* chat / system message overlay (also used by Phase 5) */
@@ -758,6 +828,7 @@ function structSave(s){
   const o={t:s.t,pl:s.pl,x:+s.x.toFixed(2),y:+s.y.toFixed(2),z:+s.z.toFixed(2),r:s.r,hp:s.hp|0};
   if(s.owner!==undefined&&s.owner!==null) o.owner=s.owner;
   if(s.ry!==undefined) o.ry=+s.ry.toFixed(3);
+  if(s.col!==undefined&&s.col!==null) o.col=s.col;
   return o;
 }
 function buildSaveObj(){
@@ -818,6 +889,7 @@ function parseSave(json){
         const st={t:s.t,pl:s.pl,x,y,z,r:((s.r|0)%4+4)%4,hp:clamp(Number(s.hp)||CAT[s.t].hp,1,CAT[s.t].hp)};
         if(s.owner!==undefined&&s.owner!==null) st.owner=s.owner;
         if(s.ry!==undefined&&isFinite(Number(s.ry))) st.ry=Number(s.ry);
+        if(s.col!==undefined&&isFinite(Number(s.col))) st.col=Number(s.col)|0;
         out.structures.push(st);
       }
     }
@@ -1399,12 +1471,13 @@ for(const t in CAT){
   structMeshes[t]=def.parts.map(part=>{
     const im=new THREE.InstancedMesh(GEO[part.g],MAT[part.m],MAX_STRUCT);
     im.count=0; im.userData.stype=t; im.frustumCulled=false;
+    im.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(MAX_STRUCT*3).fill(1),3);
     structGroup.add(im);
     return im;
   });
 }
 const _m1=new THREE.Matrix4(), _m2=new THREE.Matrix4(), _q=new THREE.Quaternion(),
-      _e=new THREE.Euler(), _v=new THREE.Vector3(), _sv=new THREE.Vector3();
+      _e=new THREE.Euler(), _v=new THREE.Vector3(), _sv=new THREE.Vector3(), _pc=new THREE.Color();
 
 function structMatrix(st,part,out,slideX){
   _e.set(0,st.r*Math.PI/2,0); _q.setFromEuler(_e);
@@ -1431,8 +1504,12 @@ function refreshStructures(){
     def.parts.forEach((part,pi)=>{
       const im=structMeshes[t][pi];
       im.count=list.length;
-      for(let i=0;i<list.length;i++){ structMatrix(list[i],part,M); im.setMatrixAt(i,M); }
+      for(let i=0;i<list.length;i++){
+        structMatrix(list[i],part,M); im.setMatrixAt(i,M);
+        const c=list[i].col; _pc.set(c!=null?c:0xffffff); im.setColorAt(i,_pc);
+      }
       im.instanceMatrix.needsUpdate=true;
+      if(im.instanceColor) im.instanceColor.needsUpdate=true;
     });
   }
   rebuildAux();
@@ -1501,6 +1578,12 @@ const COLLIDERS={
   locker: {r:0.5,h:2.2},
   chair:  {r:0.4,h:0.9},
   railing:{boxes:[{cx:0,hx:2,hz:0.06}],h:1.1,step:0.3},
+  foundation:{boxes:[{cx:0,hx:2,hz:2}],h:1,step:0.45},
+  halfwall:{boxes:[{cx:0,hx:2,hz:0.16}],h:1.5,step:0.3},
+  pillar:  {r:0.55,h:3},
+  pillar2: {r:0.55,h:5},
+  pillar3: {r:0.55,h:7},
+  beam:    {boxes:[{cx:0,hx:2,hz:0.16}],h:0.3,step:0.3},
 };
 function doorBoxes(st){
   const b=[{cx:1.45,hx:0.56,hz:0.16},{cx:-1.45,hx:0.56,hz:0.16}];
@@ -1593,13 +1676,15 @@ function updateDoors(dt){
 function groundYAt(x,z,curY){
   const p=curP();
   let g=terrainH(x,z,p);
-  for(const t of ['floor','ramp','crate']){
+  for(const t of ['floor','ramp','crate','foundation','halffloor']){
     const list=placedByType[t]||[];
     for(const st of list){
       toLocal(st,x,z,_loc);
       const lx=_loc.lx, lz=_loc.lz;
       let top=null;
       if(t==='floor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+0.31;
+      else if(t==='halffloor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=1.05) top=st.y+0.31;
+      else if(t==='foundation'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+1.01;
       else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
       else if(t==='ramp'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.1){
         const tt=clamp((2-lz)/4,0,1); top=st.y+0.31+tt*3;
@@ -1810,7 +1895,7 @@ function updateGhost(){
     }
   }
   if(!snapped){
-    if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
+    if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover','pillar','pillar2','pillar3','beam'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
     else { gx=Math.round(pt.x/GRID)*GRID; gz=Math.round(pt.z/GRID)*GRID; }
     gy=(stackY!==null)?Math.round(stackY/0.5)*0.5:groundYAt(gx,gz,1e9);
     ghostPlaceRot=ghostRot;
@@ -1845,6 +1930,7 @@ function applyPlaced(m,byMe){
   if(m.owner!==undefined&&m.owner!==null) st.owner=m.owner;
   else if(def.owned&&byMe) st.owner=myPid();
   if(m.ry!==undefined) st.ry=m.ry;
+  if(m.col!==undefined) st.col=m.col;
   S.structures.push(st);
   if(S.mode==='surface'&&st.pl===S.planet){
     refreshStructures();
@@ -1932,6 +2018,158 @@ function updateRepair(dt,interactHeld,target){
   }
   return true;
 }
+
+/* ============================================================
+   PAINT TOOL + BLUEPRINTS (Phase 2)
+   ============================================================ */
+const PAINT_COLORS=[0xff5050,0xff9a4a,0xffd24a,0x9ee84a,0x4adf8a,0x4adfff,0x4a9aff,0x9a6aff,0xff6ad0,0xffffff,0x8fa0b0,0x2a2f38];
+let paintMode=false, paintColor=0xff5050;
+function renderPaintGrid(){
+  const g=$('paintGrid'); g.innerHTML='';
+  for(const c of PAINT_COLORS){
+    const d=document.createElement('div'); d.className='swatch';
+    d.style.background='#'+c.toString(16).padStart(6,'0');
+    d.addEventListener('click',()=>{ startPaint(c); });
+    g.appendChild(d);
+  }
+}
+function startPaint(c){
+  paintColor=c; paintMode=true; cancelBuild(); closeAllPanels();
+  showToast('Paint mode — aim at a piece and click. X exits'); SND.blip();
+  $('mPlace').classList.remove('hidden');
+}
+function exitPaint(){ paintMode=false; $('mPlace').classList.add('hidden'); }
+function paintAimed(){
+  const st=aimedStructure();
+  if(!st){ showToast('Aim at a structure to paint'); return; }
+  if(NET.active) NET.send({t:'paint',id:st.id,col:paintColor});
+  else applyPaint(st,paintColor);
+}
+function applyPaint(st,col){
+  st.col=col;
+  if(S.mode==='surface'&&st.pl===S.planet) refreshStructures();
+  SND.place(); saveGame();
+}
+function applyPaintById(id,col){ const st=S.structures.find(s=>s.id===id); if(st) applyPaint(st,col); }
+
+/* ---------- blueprints ---------- */
+const BP_KEY='starfall_blueprints_v1', BP_MAX=60;
+let bpSelecting=false, bpDrag=null;   // {x0,y0}
+function loadBlueprints(){ try{ return JSON.parse(localStorage.getItem(BP_KEY))||{}; }catch(e){ return {}; } }
+function saveBlueprints(b){ try{ localStorage.setItem(BP_KEY,JSON.stringify(b)); }catch(e){} }
+function openBlueprints(){ renderBlueprintList(); openPanel('blueprintPanel'); }
+function renderBlueprintList(){
+  const list=$('blueprintList'); const bps=loadBlueprints(); list.innerHTML='';
+  const names=Object.keys(bps);
+  if(!names.length){ list.innerHTML='<div style="color:#7fa8c4;font-size:12.5px">No blueprints yet. Use "Select & Save" to capture structures around you.</div>'; return; }
+  for(const nm of names){
+    const bp=bps[nm];
+    const row=document.createElement('div'); row.className='bpItem';
+    row.innerHTML='<b>'+escHtml(nm)+' ('+bp.pieces.length+')</b>';
+    const stamp=document.createElement('button'); stamp.textContent='STAMP'; stamp.addEventListener('click',()=>{ startStamp(bp); });
+    const exp=document.createElement('button'); exp.textContent='EXPORT'; exp.addEventListener('click',()=>exportBlueprint(nm,bp));
+    const del=document.createElement('button'); del.textContent='✕'; del.addEventListener('click',()=>{ const b=loadBlueprints(); delete b[nm]; saveBlueprints(b); renderBlueprintList(); });
+    row.appendChild(stamp); row.appendChild(exp); row.appendChild(del);
+    list.appendChild(row);
+  }
+}
+function exportBlueprint(nm,bp){
+  const code=btoa(unescape(encodeURIComponent(JSON.stringify({n:nm,p:bp.pieces}))));
+  const done=()=>showToast('Blueprint code copied');
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(code).then(done).catch(()=>fallbackCopy(code,done));
+  else fallbackCopy(code,done);
+}
+function importBlueprint(code){
+  let o; try{ o=JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }catch(e){ showToast('Invalid blueprint code'); return; }
+  if(!o||!Array.isArray(o.p)){ showToast('Invalid blueprint code'); return; }
+  const pieces=o.p.filter(q=>q&&CAT[q.t]).slice(0,BP_MAX).map(q=>({t:q.t,dx:+q.dx,dy:+q.dy,dz:+q.dz,r:(q.r|0)%4,col:q.col}));
+  const bps=loadBlueprints(); bps[(o.n||'imported').slice(0,24)]={pieces}; saveBlueprints(bps);
+  renderBlueprintList(); showToast('Blueprint imported');
+}
+/* selection: drag a box on screen, capture structures whose screen point is inside */
+function beginBpSelect(){
+  if(S.mode!=='surface'){ showToast('Blueprints are saved on a planet surface'); return; }
+  bpSelecting=true; closeAllPanels();
+  if(document.pointerLockElement) document.exitPointerLock();
+  showToast('Drag a box over your structures, then release to name & save. Esc cancels');
+}
+const _sv2=new THREE.Vector3();
+function structScreen(st){
+  _sv2.set(st.x,st.y+1,st.z).project(camera);
+  if(_sv2.z>1) return null;
+  return { x:(_sv2.x*0.5+0.5)*window.innerWidth, y:(-_sv2.y*0.5+0.5)*window.innerHeight };
+}
+function finishBpSelect(x0,y0,x1,y1){
+  bpSelecting=false; $('bpSel').style.display='none';
+  const lx=Math.min(x0,x1), rx=Math.max(x0,x1), ty=Math.min(y0,y1), by=Math.max(y0,y1);
+  if(rx-lx<12||by-ty<12){ return; }
+  const sel=[];
+  for(const st of S.structures){
+    if(st.pl!==S.planet) continue;
+    const sc=structScreen(st); if(!sc) continue;
+    if(sc.x>=lx&&sc.x<=rx&&sc.y>=ty&&sc.y<=by) sel.push(st);
+    if(sel.length>=BP_MAX) break;
+  }
+  if(!sel.length){ showToast('No structures in selection'); return; }
+  // origin = centroid (x,z), min y
+  let cx=0,cz=0,my=1e9; for(const s of sel){ cx+=s.x; cz+=s.z; my=Math.min(my,s.y); }
+  cx/=sel.length; cz/=sel.length;
+  const pieces=sel.map(s=>({t:s.t,dx:+(s.x-cx).toFixed(2),dy:+(s.y-my).toFixed(2),dz:+(s.z-cz).toFixed(2),r:s.r,col:s.col}));
+  const nm=(prompt&&prompt('Name this blueprint ('+pieces.length+' pieces):','Home'))||('bp'+(Object.keys(loadBlueprints()).length+1));
+  const bps=loadBlueprints(); bps[nm.slice(0,24)]={pieces}; saveBlueprints(bps);
+  showToast('Saved blueprint "'+nm+'" ('+pieces.length+' pieces)'); SND.tierUp();
+}
+/* stamping: ghost the footprint at the aim point, validate cost, place all */
+let bpStamp=null, bpStampRot=0;
+function startStamp(bp){
+  closeAllPanels(); cancelBuild(); exitPaint();
+  bpStamp=bp; bpStampRot=0;
+  if(bpGhost){ surfScene.remove(bpGhost); bpGhost=null; }
+  bpGhost=new THREE.Group();
+  for(const q of bp.pieces){
+    const def=CAT[q.t]; if(!def||!def.parts.length) continue;
+    const sub=new THREE.Group(); sub.position.set(q.dx,q.dy,q.dz); sub.rotation.y=q.r*Math.PI/2;
+    for(const part of def.parts){ const m=new THREE.Mesh(GEO[part.g],MAT.ghostOk); m.position.fromArray(part.o); if(part.r) m.rotation.set(part.r[0],part.r[1],part.r[2]); m.scale.fromArray(part.s); sub.add(m); }
+    bpGhost.add(sub);
+  }
+  surfScene.add(bpGhost);
+  showToast('Stamp: aim & click to place all · R rotates · X cancels'); $('mPlace').classList.remove('hidden');
+}
+let bpGhost=null;
+function cancelStamp(){ bpStamp=null; if(bpGhost){ surfScene.remove(bpGhost); bpGhost=null; } $('mPlace').classList.add('hidden'); }
+function bpCost(bp){ const cost={}; for(const q of bp.pieces){ const c=CAT[q.t].cost; for(const k in c) cost[k]=(cost[k]||0)+c[k]; } return cost; }
+function updateStampGhost(){
+  if(!bpStamp||!bpGhost) return;
+  raycaster.setFromCamera({x:0,y:0},camera); raycaster.far=40;
+  const hits=raycaster.intersectObject(surf.terrain,false);
+  let bx,bz,by;
+  if(hits.length){ bx=Math.round(hits[0].point.x/GRID)*GRID; bz=Math.round(hits[0].point.z/GRID)*GRID; by=hits[0].point.y; }
+  else { const dir=new THREE.Vector3(); camera.getWorldDirection(dir); bx=Math.round((player.x+dir.x*8)/GRID)*GRID; bz=Math.round((player.z+dir.z*8)/GRID)*GRID; by=terrainH(bx,bz,curP()); }
+  bpGhost.position.set(bx,by,bz); bpGhost.rotation.y=bpStampRot*Math.PI/2;
+  const cost=bpCost(bpStamp);
+  const ok=canAfford(cost)&&structCount()+bpStamp.pieces.length<=MAX_STRUCT&&Math.hypot(bx,bz)<WORLD_R-10;
+  bpGhost.traverse(o=>{ if(o.isMesh) o.material=ok?MAT.ghostOk:MAT.ghostBad; });
+  bpStamp._ok=ok; bpStamp._at={x:bx,y:by,z:bz};
+}
+function placeStamp(){
+  if(!bpStamp) return;
+  const cost=bpCost(bpStamp);
+  if(!bpStamp._ok){ if(!canAfford(cost)) showToast('Need '+costStr(cost)); else showToast('Cannot stamp here'); SND.denied(); return; }
+  if(structCount()+bpStamp.pieces.length>MAX_STRUCT){ showToast('Would exceed the '+MAX_STRUCT+'-piece limit'); SND.denied(); return; }
+  payCost(cost);
+  const at=bpStamp._at, a=bpStampRot*Math.PI/2, c=Math.cos(a), s=Math.sin(a);
+  for(const q of bpStamp.pieces){
+    const wx=at.x+q.dx*c+q.dz*s, wz=at.z-q.dx*s+q.dz*c, wy=at.y+q.dy, wr=((q.r+bpStampRot)%4+4)%4;
+    if(NET.active) NET.send({t:'place',st:{t:q.t,pl:S.planet,x:+wx.toFixed(2),y:+wy.toFixed(2),z:+wz.toFixed(2),r:wr,col:q.col}});
+    else applyPlaced({t:q.t,pl:S.planet,x:wx,y:wy,z:wz,r:wr,hp:CAT[q.t].hp,col:q.col},false);
+  }
+  if(!NET.active){ refreshStructures(); SND.tierUp(); saveGame(); }
+  showToast('Stamped '+bpStamp.pieces.length+' pieces'); SND.place();
+  cancelStamp();
+}
+$('bpSelectBtn').addEventListener('click',beginBpSelect);
+$('bpImportBtn').addEventListener('click',()=>{ $('bpImportWrap').classList.toggle('hidden'); });
+$('bpImportGo').addEventListener('click',()=>{ importBlueprint($('bpImportBox').value); });
 
 /* ============================================================
    COMBAT — weapons, firing, damage, death/loot, safe zone
@@ -2556,7 +2794,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings','mpSetup'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -2581,8 +2819,12 @@ function renderBuildGrid(){
     if(!locked) d.addEventListener('click',()=>{ SND.blip(); selectBuild(key); });
     grid.appendChild(d);
   };
+  addSection('Tools');
+  const tool=(ic,nm,fn)=>{ const d=document.createElement('div'); d.className='bItem'; d.innerHTML='<div class="ic">'+ic+'</div><div class="nm">'+nm+'</div><div class="cs">free</div>'; d.addEventListener('click',()=>{ SND.blip(); fn(); }); grid.appendChild(d); };
+  tool('◑','Paint Tool',()=>{ renderPaintGrid(); openPanel('paintPanel'); });
+  tool('▤','Blueprints',openBlueprints);
   addSection('Structures');
-  for(const k of ['floor','wall','ramp','lightpole','crate','relay','shieldgen','armory','turret','rover','window','door','dome','beacon']) addItem(k);
+  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','ramp','beam','pillar','pillar2','pillar3','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
   addSection('Furniture & Interior');
@@ -2655,10 +2897,10 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyE') justE=true;
   if(e.code==='KeyB'){ if(anyPanelOpen()){closeAllPanels();} else if(S.mode==='surface'){ renderBuildGrid(); openPanel('buildMenu'); } else showToast('Land on a planet to build'); }
   if(e.code==='KeyT'){ if(anyPanelOpen()){closeAllPanels();} else { renderTierList(); openPanel('tierMenu'); } }
-  if(e.code==='KeyR'&&buildSel) ghostRot=(ghostRot+1)%4;
+  if(e.code==='KeyR'){ if(buildSel) ghostRot=(ghostRot+1)%4; else if(bpStamp) bpStampRot=(bpStampRot+1)%4; }
   if(e.code==='KeyG'&&buildSel){ toggleFreePlace(); }
-  if(e.code==='KeyX'){ if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
-  if(e.code==='Escape'){ if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
+  if(e.code==='KeyX'){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
+  if(e.code==='Escape'){ if(bpSelecting){ bpSelecting=false; $('bpSel').style.display='none'; } else if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(!$('chatInput').classList.contains('hidden')) closeChat(); else closeAllPanels(); }
   if(S.mode==='surface'&&!driving){
     if(e.code==='Digit1') setSlot(0);
     else if(e.code==='Digit2') setSlot(1);
@@ -2674,17 +2916,30 @@ window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; });
 
 const canvas=$('c');
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
+/* blueprint selection box (drag) — must run before pointer-lock handler */
+let bpStart=null;
 document.addEventListener('mousedown',e=>{
-  if(!S.running||isTouch||anyPanelOpen()) return;
+  if(bpSelecting&&e.button===0){ bpStart={x:e.clientX,y:e.clientY}; const d=$('bpSel');
+    d.style.display='block'; d.style.left=e.clientX+'px'; d.style.top=e.clientY+'px'; d.style.width='0px'; d.style.height='0px';
+    e.preventDefault(); e.stopPropagation(); }
+},true);
+document.addEventListener('mousemove',e=>{ if(bpSelecting&&bpStart){ const d=$('bpSel');
+  d.style.left=Math.min(e.clientX,bpStart.x)+'px'; d.style.top=Math.min(e.clientY,bpStart.y)+'px';
+  d.style.width=Math.abs(e.clientX-bpStart.x)+'px'; d.style.height=Math.abs(e.clientY-bpStart.y)+'px'; } });
+document.addEventListener('mouseup',e=>{ if(bpSelecting&&bpStart){ finishBpSelect(bpStart.x,bpStart.y,e.clientX,e.clientY); bpStart=null; } });
+document.addEventListener('mousedown',e=>{
+  if(!S.running||isTouch||anyPanelOpen()||bpSelecting) return;
   if(e.target!==canvas) return;
   SND.ensure();
   if(!document.pointerLockElement){
     try{ const r=canvas.requestPointerLock&&canvas.requestPointerLock(); if(r&&r.catch) r.catch(()=>{}); }catch(err){}
     return;
   }
+  if(e.button===0&&paintMode&&S.mode==='surface'){ paintAimed(); return; }
+  if(e.button===0&&bpStamp&&S.mode==='surface'){ placeStamp(); return; }
   if(e.button===0&&buildSel&&S.mode==='surface') placeStructure();
   else if(e.button===0&&!buildSel&&S.mode==='surface'&&S.slot>0&&!driving) fireHeld=true;
-  else if(e.button===2){ if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
+  else if(e.button===2){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
 });
 document.addEventListener('mouseup',e=>{ if(e.button===0) fireHeld=false; });
 document.addEventListener('mousemove',e=>{
@@ -2766,7 +3021,7 @@ let mFire=false;
 })();
 $('mMed').addEventListener('touchstart',e=>{ e.preventDefault(); useMed(); },{passive:false});
 function toggleFreePlace(){ freePlace=!freePlace; $('mFree').textContent=freePlace?'FREE':'SNAP'; showToast(freePlace?'Free placement (snap off)':'Snap-to-piece on'); SND.blip(); }
-$('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) placeStructure(); },{passive:false});
+$('mPlace').addEventListener('touchstart',e=>{ e.preventDefault(); if(paintMode) paintAimed(); else if(bpStamp) placeStamp(); else if(buildSel) placeStructure(); },{passive:false});
 $('mFree').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) toggleFreePlace(); },{passive:false});
 $('mRemove').addEventListener('touchstart',e=>{ e.preventDefault(); if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); },{passive:false});
 $('mBuild').addEventListener('touchstart',e=>{ e.preventDefault();
@@ -3090,7 +3345,15 @@ function updateSurface(dt){
   const aimed=buildSel?null:aimedStructure();
   const damaged=(aimed&&aimed.hp<CAT[aimed.t].hp&&!roverHere&&!arm)?aimed:null;
   let prompted=false; mFire=false;
-  if(buildSel){
+  if(bpStamp){
+    updateStampGhost();
+    setPrompt('<span class="key">CLICK</span>STAMP BLUEPRINT ('+bpStamp.pieces.length+') · <span class="key">R</span>ROTATE · <span class="key">X</span>CANCEL');
+    setMAct('STAMP'); prompted=true; updateMining(0,false);
+  } else if(paintMode){
+    const a=aimedStructure();
+    setPrompt(a?'<span class="key">CLICK</span>PAINT '+(CAT[a.t]?CAT[a.t].name:'piece')+' · <span class="key">X</span>EXIT':'Aim at a piece to paint · <span class="key">X</span>EXIT');
+    setMAct('PAINT'); prompted=true; updateMining(0,false);
+  } else if(buildSel){
     updateGhost();
     setPrompt(ghostOK?'<span class="key">CLICK</span>PLACE '+CAT[buildSel].name+' · <span class="key">R</span>ROTATE · <span class="key">X</span>CANCEL'
       :'<span style="color:#ff9a8a">CANNOT PLACE HERE'+(canAfford(CAT[buildSel].cost)?'':' — NEED '+costStr(CAT[buildSel].cost))+'</span>');

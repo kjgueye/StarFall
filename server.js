@@ -34,6 +34,8 @@ const SCAT = {
   floor: 100, wall: 100, ramp: 100, lightpole: 60, crate: 120, relay: 80,
   shieldgen: 150, armory: 120, window: 80, door: 100, dome: 90, beacon: 500,
   turret: 110, rover: 160,
+  foundation: 140, pillar: 90, pillar2: 90, pillar3: 90, halfwall: 60, halffloor: 70,
+  roof45: 90, roofcorner: 90, beam: 60,
   flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
   table: 50, antenna: 40,
   bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
@@ -110,6 +112,7 @@ function makeRoom(world) {
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp };
       if (s.owner !== undefined && s.owner !== null) st.owner = s.owner;
       if (isFinite(+s.ry)) st.ry = +s.ry;
+      if (isFinite(+s.col)) st.col = +s.col | 0;
       room.structures.push(st);
       if (s.t === 'beacon') room.beacon = true;
     }
@@ -249,6 +252,7 @@ function handle(ws, m) {
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: SCAT[s.t] };
       if (OWNED.has(s.t)) st.owner = ws.pid;
       if (DYNAMIC.has(s.t)) st.ry = isFinite(+s.ry) ? +s.ry : 0;
+      if (isFinite(+s.col)) st.col = +s.col | 0;
       room.structures.push(st);
       if (st.t === 'beacon') room.beacon = true;
       bcast(room, { t: 'placed', by: ws.pid, st });
@@ -267,6 +271,13 @@ function handle(ws, m) {
       if (!st) return;
       st.hp = SCAT[st.t];
       bcast(room, { t: 'hp', id: st.id, hp: st.hp });
+      return;
+    }
+    case 'paint': {
+      const st = room.structures.find(s => s.id === m.id);
+      if (!st) return;
+      st.col = +m.col | 0;
+      bcast(room, { t: 'paint', id: st.id, col: st.col });
       return;
     }
     case 'mine': {
