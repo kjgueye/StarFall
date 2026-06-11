@@ -51,20 +51,24 @@ const T_IDLE_NEXT = () => METEOR_FAST ? 4 : 170 + Math.random() * 140;
 const T_WARN = METEOR_FAST ? 2 : 20;
 const T_ACTIVE = METEOR_FAST ? 5 : 12;
 
-/* ---------- HTTP: serve the game ---------- */
-const INDEX_PATH = path.join(__dirname, 'index.html');
+/* ---------- HTTP: serve the built client (vite output in dist/) ---------- */
+const DIST = path.join(__dirname, 'dist');
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png',
+  '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.map': 'application/json' };
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (url === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); return; }
-  if (url === '/' || url === '/index.html') {
-    fs.readFile(INDEX_PATH, (err, data) => {
-      if (err) { res.writeHead(500); res.end('error'); return; }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
-      res.end(data);
-    });
-    return;
-  }
-  res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found');
+  const rel = url === '/' ? 'index.html' : url.slice(1);
+  const file = path.normalize(path.join(DIST, rel));
+  if (!file.startsWith(DIST)) { res.writeHead(403); res.end('forbidden'); return; }   // traversal guard
+  fs.readFile(file, (err, data) => {
+    if (err) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+    const ext = path.extname(file).toLowerCase();
+    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream',
+      'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable' });
+    res.end(data);
+  });
 });
 
 /* ---------- rooms ---------- */
