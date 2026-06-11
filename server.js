@@ -47,7 +47,7 @@ const NOKILL = new Set(['crate', 'beacon']);
 const SHIELD_R = 18;
 const METEOR_DMG = 35;
 const HITS_PER_SHOWER = 6;
-const PLANETS = ['rust', 'glacius', 'verdant'];
+const PLANETS = ['rust', 'glacius', 'verdant', 'pelagos'];
 const SAFE_CR = 32;               // PvP-free / critter-free radius around a Colony Beacon
 /* ---- critters (Phase 4): server owns spawns + positions, coarse sync ---- */
 const SCRIT = {
@@ -55,11 +55,13 @@ const SCRIT = {
   grazer: { hp: 14, speed: 2.6, flee: 11, ch: [2, 4] },
   floater: { hp: 6, speed: 3.2, flee: 10, ch: [1, 2] },
   hopper: { hp: 10, speed: 4.2, flee: 9, ch: [1, 3] },
+  skimmer: { hp: 7, speed: 5.5, flee: 10, ch: [1, 2] },
 };
 const PLANET_CRIT = {
   rust: ['skitterer', 'grazer', 'hopper'],
   glacius: ['skitterer', 'floater'],
   verdant: ['grazer', 'floater', 'hopper'],
+  pelagos: ['skimmer', 'floater'],
 };
 const CRIT_CAP = 12;
 const DAY_CYCLE = 600;            // seconds for a full day/night cycle

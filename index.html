@@ -152,6 +152,9 @@
     align-items:center; justify-content:center; position:relative; cursor:pointer; color:#9affc8; font-size:20px; }
   #medSlot .sa { position:absolute; bottom:0; right:3px; font-size:10px; color:#bfffd8; }
   #dmgFlash { position:fixed; inset:0; pointer-events:none; z-index:17; box-shadow:inset 0 0 150px rgba(255,30,30,0); transition:box-shadow .12s; }
+  #waterVig { position:fixed; inset:0; pointer-events:none; z-index:17; opacity:0; transition:opacity .3s;
+    box-shadow:inset 0 0 200px rgba(20,130,170,0.9);
+    background:radial-gradient(ellipse at 50% 50%, rgba(10,90,120,0) 38%, rgba(6,55,85,0.6) 100%); }
   #protRing { position:fixed; inset:0; pointer-events:none; z-index:17; box-shadow:inset 0 0 90px rgba(120,220,255,0.55);
     animation:protPulse 1s infinite alternate; }
   @keyframes protPulse { from{box-shadow:inset 0 0 70px rgba(120,220,255,0.4);} to{box-shadow:inset 0 0 110px rgba(150,240,255,0.7);} }
@@ -233,6 +236,7 @@
     <div class="resItem"><span class="resDot" style="background:#6fe0ff"></span>CRYO <b id="rCy">0</b></div>
     <div class="resItem"><span class="resDot" style="background:#7fff9a"></span>BIOLUME <b id="rBio">0</b></div>
     <div class="resItem"><span class="resDot" style="background:#d8b878"></span>CHITIN <b id="rCh">0</b></div>
+    <div class="resItem" id="resPearl"><span class="resDot" style="background:#5fe9d6"></span>PEARL <b id="rPe">0</b></div>
   </div>
   <div id="capNote"></div>
   <button id="tierBadge">TIER 1 ▸</button>
@@ -243,6 +247,7 @@
   <div id="prog" class="hidden"><div id="progFill"></div></div>
   <div id="hotbar"></div>
   <div id="dmgFlash"></div>
+  <div id="waterVig"></div>
   <div id="protRing" class="hidden"></div>
   <div id="compass" class="hidden"><div id="compassStrip"></div><div id="compassCtr">▲</div></div>
   <div id="chatLog"></div>
@@ -422,9 +427,12 @@ const PLANETS={
   verdant:{name:'VERDANT', seed:37, r:28, pos:[40,-26,-540], surfCol:0x4a8a48, surfCol2:0x2e6034, rockCol:0x3a5a3a,
            fog:0x1d4a2a, sky:0x0a2010, sun:0xd0ffd8, amp:10, res:'bio', nodeCol:0x7fff9a, nodeEmis:0x22cc55,
            floraCol:0x8a4aaa, desc:'Bio-luminous alien jungle'},
+  pelagos:{name:'PELAGOS', seed:53, r:27, pos:[-470,30,-200], surfCol:0x2f9a92, surfCol2:0x123f3c, rockCol:0x355f5b,
+           fog:0x1c6a74, sky:0x06283a, sun:0xd6fff6, amp:8, res:'pe', nodeCol:0x7fffe0, nodeEmis:0x10ccaa,
+           floraCol:0x49c8bd, desc:'Teal archipelago — cross the water', water:true},
 };
-const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin'};
-const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a',ch:'#d8b878'};
+const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin',pe:'Abyssal Pearl'};
+const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a',ch:'#d8b878',pe:'#5fe9d6'};
 
 /* ---------- tiers ---------- */
 const TIERS=[
@@ -432,6 +440,7 @@ const TIERS=[
   {n:2,cost:{fe:50,cy:25},perks:['SHIELD GENERATOR (meteor dome)','Window · Door · Dome Roof','Sprint (Shift) · O₂ tank 100 → 160']},
   {n:3,cost:{fe:120,cy:70},perks:['JETPACK — hold Jump to fly','Ship speed +75%','VERDANT signal shield DEACTIVATED']},
   {n:4,cost:{fe:150,cy:100,bio:30},perks:['COLONY BEACON — establish the colony','Victory! (game continues in sandbox)']},
+  {n:5,cost:{fe:200,cy:140,bio:70,ch:40},perks:['PELAGOS unlocked — teal ocean world','Rover Hover Module — skim across water','Suit O₂ tank 160 → 240','INFERNO THROWER recipe (Armory)']},
 ];
 
 /* ---------- structure catalog ---------- */
@@ -598,6 +607,7 @@ CAT.pillar3.sockets=[{p:[0,7,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.beam.sockets=[{p:[4,0,0],rots:[0],accept:['beam']},{p:[-4,0,0],rots:[0],accept:['beam']}];
 
 const MAX_STRUCT=400;
+const SEA_Y=0;            // Pelagos sea level (water planets)
 const GRID=4;
 const SAFE_R=32;          // PvP-free radius around a Colony Beacon
 const HP_MAX=100;
@@ -642,12 +652,12 @@ function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 /* ---------- game state ---------- */
 const S={
   running:false, mode:'space', planet:'rust',
-  tier:1, res:{fe:0,cy:0,bio:0,ch:0},
+  tier:1, res:{fe:0,cy:0,bio:0,ch:0,pe:0},
   structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
-  pendingVerdantCutscene:false,
+  pendingCutscene:null,
   weapons:{blade:false,pistol:false,rifle:false,lance:false,inferno:false,grenade:false,shield:false},  // owned
   ammo:{light:0,heavy:0,fuel:0,nade:0}, medkits:0, slot:0, headbob:true,
 };
@@ -658,7 +668,7 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='starfall_save_v1';
-const SAVE_VER=4;
+const SAVE_VER=5;
 const MP_WORLD_KEY='starfall_mp_world_v1';
 
 /* ============================================================
@@ -867,13 +877,13 @@ function structSave(s){
   return o;
 }
 function buildSaveObj(){
-  return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0},
+  return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},
     structures:S.structures.map(structSave),
     mode:S.mode==='surface'?'surface':'space', planet:S.planet,
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
-    pvc:!!S.pendingVerdantCutscene, sound:SND.on,
+    pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
     ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false};
 }
@@ -885,7 +895,7 @@ function saveGame(){
 function saveMP(){
   try{
     localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
-      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
+      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
       weapons:saveWeapons(),
       ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false}));
     if(NET.isHost){
@@ -900,8 +910,8 @@ function parseSave(json){
     /* migration: accept v1 (pre-combat) and v2; default missing fields */
     if(!d||typeof d.v!=='number'||d.v<1||d.v>SAVE_VER||typeof d.tier!=='number') return null;
     const out={
-      tier:clamp(d.tier|0,1,4),
-      res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0),ch:Math.max(0,d.res&&d.res.ch|0||0)},
+      tier:clamp(d.tier|0,1,5),
+      res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0),ch:Math.max(0,d.res&&d.res.ch|0||0),pe:Math.max(0,d.res&&d.res.pe|0||0)},
       structures:[], mode:(d.mode==='surface'?'surface':'space'),
       planet:PLANETS[d.planet]?d.planet:'rust',
       ppos:Array.isArray(d.ppos)&&d.ppos.length===3?d.ppos.map(Number):[0,0,0],
@@ -909,7 +919,8 @@ function parseSave(json){
       spos:Array.isArray(d.spos)&&d.spos.length===3?d.spos.map(Number):[300,8,100],
       syaw:Number(d.syaw)||0, spitch:clamp(Number(d.spitch)||0,-1.2,1.2),
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
-      beacon:!!d.beacon, victoryShown:!!d.victoryShown, pvc:!!d.pvc,
+      beacon:!!d.beacon, victoryShown:!!d.victoryShown,
+      pc:(d.pc&&SHIELDED[d.pc])?d.pc:(d.pvc?'verdant':null),
       sound:d.sound!==false,
       weapons:readWeapons(d.weapons),
       ammo:readAmmo(d.ammo),
@@ -942,7 +953,7 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
-  S.pendingVerdantCutscene=d.pvc; SND.on=d.sound;
+  S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
 }
 function exportSave(){
@@ -1133,7 +1144,10 @@ spaceScene.background=new THREE.Color(0x01030a);
 }
 /* planets (space view) */
 const spacePlanets={};
-let verdantShield=null;
+/* signal-interference shields: planet visible from orbit but un-landable until tier */
+const SHIELDED={ verdant:{tier:3,col:0xb05aff,wire:0xd08aff,res:'Biolume'},
+                 pelagos:{tier:5,col:0x36c6ff,wire:0x8af0ff,res:'Abyssal Pearl'} };
+const shieldGroups={};
 for(const key in PLANETS){
   const p=PLANETS[key];
   const m=new THREE.Mesh(new THREE.SphereGeometry(p.r,28,20),
@@ -1144,16 +1158,17 @@ for(const key in PLANETS){
   atmo.position.copy(m.position); spaceScene.add(atmo);
   spacePlanets[key]=m;
 }
-{ /* verdant signal-interference shield */
-  const p=PLANETS.verdant;
-  verdantShield=new THREE.Group();
+for(const key in SHIELDED){ /* signal-interference shields (verdant, pelagos) */
+  const cfg=SHIELDED[key], p=PLANETS[key];
+  const grp=new THREE.Group();
   const sh=new THREE.Mesh(new THREE.SphereGeometry(p.r*1.18,24,16),
-    new THREE.MeshBasicMaterial({color:0xb05aff,transparent:true,opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false}));
+    new THREE.MeshBasicMaterial({color:cfg.col,transparent:true,opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false}));
   const wire=new THREE.Mesh(new THREE.IcosahedronGeometry(p.r*1.2,1),
-    new THREE.MeshBasicMaterial({color:0xd08aff,wireframe:true,transparent:true,opacity:0.4,depthWrite:false}));
-  verdantShield.add(sh); verdantShield.add(wire);
-  verdantShield.position.set(p.pos[0],p.pos[1],p.pos[2]);
-  spaceScene.add(verdantShield);
+    new THREE.MeshBasicMaterial({color:cfg.wire,wireframe:true,transparent:true,opacity:0.4,depthWrite:false}));
+  sh.material.userData={o0:0.22}; wire.material.userData={o0:0.4};
+  grp.add(sh); grp.add(wire);
+  grp.position.set(p.pos[0],p.pos[1],p.pos[2]);
+  spaceScene.add(grp); shieldGroups[key]=grp;
 }
 
 /* ship (primitive-built, reused in space + landed on surface) */
@@ -1351,9 +1366,10 @@ function sendPU(){
    ============================================================ */
 const WORLD_R=380;
 let surf={built:false, planet:null, terrain:null, group:null, nodes:[], nodeMesh:null,
-          shipPos:new THREE.Vector3(), domes:[], glows:[], dirLight:null};
+          shipPos:new THREE.Vector3(), domes:[], glows:[], dirLight:null, water:null};
 
 function terrainH(x,z,p){
+  if(p.water) return terrainHWater(x,z,p);
   const d=Math.hypot(x,z);
   let h=(fbm(x*0.012,z*0.012,p.seed)-0.45)*p.amp*2.2;
   h+=(fbm(x*0.05,z*0.05,p.seed+31)-0.5)*2.6;
@@ -1362,7 +1378,27 @@ function terrainH(x,z,p){
   if(d>300) h+=(d-300)*0.09;
   return h;
 }
+/* archipelago seabed: mostly below SEA_Y with scattered island peaks + a
+   guaranteed central spawn island. Pearl nodes sit on the outer islands. */
+function terrainHWater(x,z,p){
+  const d=Math.hypot(x,z);
+  let h=(fbm(x*0.0105,z*0.0105,p.seed)-0.52)*46;      // big island blobs (>0 ⇒ land)
+  h+=(fbm(x*0.052,z*0.052,p.seed+11)-0.5)*3.0;        // shore detail
+  h=Math.max(h, 7 - d*0.3);                            // central spawn island (~r24)
+  if(d>320) h-=(d-320)*0.06;                           // deep ocean toward the edge
+  return h;
+}
 function curP(){ return PLANETS[S.planet]; }
+function isDeepWater(x,z){ return curP().water && terrainH(x,z,curP()) < SEA_Y-1.6; }
+function updateWater(){
+  if(!surf.water) return;
+  const t=performance.now()*0.001, pos=surf.water.geo.attributes.position, base=surf.water.base;
+  for(let i=0;i<pos.count;i++){
+    const x=base[i*3], z=base[i*3+2];
+    pos.setY(i, Math.sin(x*0.06+t*1.1)*0.34 + Math.sin(z*0.045+t*0.85)*0.3 + Math.sin((x+z)*0.03+t*1.6)*0.16);
+  }
+  pos.needsUpdate=true;
+}
 
 function buildSurface(planetKey){
   /* tear down previous */
@@ -1409,6 +1445,17 @@ function buildSurface(planetKey){
     new THREE.MeshBasicMaterial({color:p.fog,side:THREE.DoubleSide}));
   skirt.rotation.x=-Math.PI/2; skirt.position.y=-4; g.add(skirt);
 
+  /* water plane (Pelagos) — transparent, cheap vertex waves */
+  surf.water=null;
+  if(p.water){
+    const wseg=40, wsize=940;
+    const wg=new THREE.PlaneGeometry(wsize,wsize,wseg,wseg);
+    wg.rotateX(-Math.PI/2);
+    const water=new THREE.Mesh(wg,new THREE.MeshStandardMaterial({color:0x2bb4ae,transparent:true,opacity:0.62,roughness:0.18,metalness:0.45,side:THREE.DoubleSide}));
+    water.position.y=SEA_Y; g.add(water);
+    surf.water={mesh:water,geo:wg,base:wg.attributes.position.array.slice()};
+  }
+
   /* rocks (instanced) */
   const rng=mulberry32(p.seed*101);
   {
@@ -1449,10 +1496,19 @@ function buildSurface(planetKey){
     const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),NN);
     const d=new THREE.Object3D();
     for(let i=0;i<NN;i++){
-      const ring=i<10? (14+rng()*40) : (40+rng()*300);
-      const th=rng()*Math.PI*2;
-      const x=Math.cos(th)*ring, z=Math.sin(th)*ring;
-      const y=terrainH(x,z,p);
+      let x,z,y;
+      if(p.water){                     // Pelagos: pearls sit on outer islands across the water
+        for(let tr=0;tr<24;tr++){
+          const ring=70+rng()*230, th=rng()*Math.PI*2;
+          x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
+          if(y>SEA_Y+0.5) break;
+        }
+        if(y<=SEA_Y+0.5) y=SEA_Y+0.5;  // fallback: a shallow shoal
+      } else {
+        const ring=i<10? (14+rng()*40) : (40+rng()*300);
+        const th=rng()*Math.PI*2;
+        x=Math.cos(th)*ring; z=Math.sin(th)*ring; y=terrainH(x,z,p);
+      }
       const s=0.8+rng()*0.9;
       surf.nodes.push({x,y,z,s,alive:true,respawn:0,rot:rng()*6});
       d.position.set(x,y+s*0.45,z);
@@ -1746,7 +1802,7 @@ const tool=new THREE.Group();
 }
 surfScene.add(camera);
 
-function o2Max(){ return S.tier>=2?160:100; }
+function o2Max(){ return S.tier>=5?240:(S.tier>=2?160:100); }
 function shipNearbyOnSurface(){
   const dx=player.x-surf.shipPos.x, dz=player.z-surf.shipPos.z;
   return dx*dx+dz*dz<400;
@@ -2492,7 +2548,11 @@ function updateRover(dt){
   st.x+=fx*st._sp*dt; st.z+=fz*st._sp*dt;
   /* terrain follow + suspension */
   const pr=Math.hypot(st.x,st.z); if(pr>WORLD_R-4){ st.x*=(WORLD_R-4)/pr; st.z*=(WORLD_R-4)/pr; st._sp*=0.3; }
-  const gy=terrainH(st.x,st.z,curP())+0.7;
+  /* Hover Module (Tier 5): skim across water on Pelagos with a slight bob */
+  let baseGy=terrainH(st.x,st.z,curP());
+  const hover=curP().water&&S.tier>=5;
+  if(hover) baseGy=Math.max(baseGy,SEA_Y)+Math.sin(performance.now()*0.003)*0.12;
+  const gy=baseGy+0.7;
   st.y=lerp(st.y===undefined?gy:st.y,gy,Math.min(1,dt*8));
   /* driver shares rover location for O2/turret/meteor systems */
   player.x=st.x; player.z=st.z; player.y=st.y;
@@ -2512,7 +2572,7 @@ function updateRover(dt){
   /* exit */
   if(justE){ exitRover(); justE=false; }
   /* world timers still run while driving */
-  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateHeavyWeapons(dt);
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateHeavyWeapons(dt); updateWater();
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
   renderRoverCam();
@@ -2537,7 +2597,7 @@ function applyDamageToSelf(dmg){
 let soloLootId=1;
 function die(){
   const loot={fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0};
-  S.res={fe:0,cy:0,bio:0,ch:S.res.ch|0}; updateHUDRes();   // Chitin is kept through death
+  S.res={fe:0,cy:0,bio:0,ch:S.res.ch|0,pe:S.res.pe|0}; updateHUDRes();   // Chitin & Pearls kept through death
   spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
   spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
   SND.impact();
@@ -2730,12 +2790,14 @@ const CRITTERS={
   grazer:   {name:'Grazer',    hp:14, speed:2.6, fleeR:11, off:0.70, ch:[2,4]},
   floater:  {name:'Floater',   hp:6,  speed:3.2, fleeR:10, hover:2.2, bob:0.5, ch:[1,2]},
   hopper:   {name:'Hopper',    hp:10, speed:4.2, fleeR:9,  off:0.45, hop:true, ch:[1,3]},
+  skimmer:  {name:'Skimmer',   hp:7,  speed:5.5, fleeR:10, hover:0.7, bob:0.22, ch:[1,2]},
 };
 /* which species roam each world — varies the palette/feel per planet */
 const CRIT_BY_PLANET={
   rust:   ['skitterer','grazer','hopper'],
   glacius:['skitterer','floater'],
   verdant:['grazer','floater','hopper'],
+  pelagos:['skimmer','floater'],
 };
 const CRIT_CAP=12;
 const critters=[];                 // client entities (both solo + MP)
@@ -2750,7 +2812,7 @@ function buildCritter(type,pkey){
   const p=PLANETS[pkey], def=CRITTERS[type];
   const g=new THREE.Group();
   const mats=[], legs=[]; let head=null;
-  const bodyCol = type==='floater'? p.nodeCol : (type==='hopper'? p.floraCol : p.surfCol2);
+  const bodyCol = (type==='floater'||type==='skimmer')? p.nodeCol : (type==='hopper'? p.floraCol : p.surfCol2);
   const bMat = def.hover? emisMat(bodyCol,p.nodeEmis,0.9) : stdMat(bodyCol,{roughness:0.85,metalness:0.05});
   const eyeMat=emisMat(0xffe6a0,0xcc6600,1.6); mats.push(bMat,eyeMat);
   const eye=(ex,ey,ez,s,parent)=>{ const e=new THREE.Mesh(GEO.sphere,eyeMat); e.scale.set(s,s,s); e.position.set(ex,ey,ez); (parent||g).add(e); };
@@ -2775,6 +2837,13 @@ function buildCritter(type,pkey){
       const seg=new THREE.Mesh(GEO.cyl,bMat); seg.scale.set(0.05,0.7,0.05); seg.position.y=-0.35; t.add(seg); g.add(t); legs.push(t); }
     g.add(makeGlow('#'+new THREE.Color(p.nodeCol).getHexString(),1.9));
     eye(0,0.06,0.45,0.12);
+  } else if(type==='skimmer'){
+    const body=new THREE.Mesh(GEO.sphere,bMat); body.scale.set(0.55,0.18,0.85); g.add(body);   // flat skimming body
+    const fin=new THREE.Mesh(GEO.cone,bMat); fin.scale.set(0.2,0.45,0.2); fin.rotation.x=Math.PI/2; fin.position.set(0,0.12,-0.45); g.add(fin);
+    for(const sx of [-0.3,0.3]){ const l=new THREE.Group(); l.position.set(sx,-0.06,0.2);
+      const seg=new THREE.Mesh(GEO.cyl,bMat); seg.scale.set(0.05,0.4,0.05); seg.position.y=-0.2; l.add(seg); g.add(l); legs.push(l); }
+    g.add(makeGlow('#'+new THREE.Color(p.nodeCol).getHexString(),1.4));
+    eye(-0.13,0.06,0.42,0.08); eye(0.13,0.06,0.42,0.08);
   } else { /* hopper */
     const body=new THREE.Mesh(GEO.sphere,bMat); body.scale.set(0.45,0.52,0.45); body.position.y=def.off; g.add(body);
     for(const ex of [-0.16,0.16]){ const ear=new THREE.Mesh(GEO.cone,bMat); ear.scale.set(0.12,0.36,0.12); ear.position.set(ex,def.off+0.46,0); g.add(ear); }
@@ -2793,7 +2862,7 @@ function spawnCritterEntity(id,type,x,z){
     poofCol:def.hover?p.nodeCol:p.floraCol,
     x,z,y:0,vx:0,vz:1,spd:0,state:'wander',wanderT:Math.random()*2,idleT:0,startle:0,
     animP:Math.random()*6,bobP:Math.random()*6,hopP:0,hp:def.hp,st:0,sx:undefined,sz:undefined};
-  built.group.position.set(x,terrainH(x,z,p)+(def.hover||def.off||0.4),z);
+  built.group.position.set(x,critGroundY(x,z)+(def.hover||def.off||0.4),z);
   critters.push(c); return c;
 }
 function removeCritterEntity(id){
@@ -2827,9 +2896,11 @@ function hitCritter(c,dmg,pos){
   spawnBurst(pos[0],pos[1],pos[2],c.poofCol||0xffd0a0,6,1.6,1.6,0.3,2);
   damageCritter(c,dmg);
 }
+/* ground level a critter rides at — water creatures stay on the sea surface */
+function critGroundY(x,z){ const p=curP(); const g=terrainH(x,z,p); return p.water?Math.max(g,SEA_Y):g; }
 /* shared placement + procedural animation */
 function updateCritterMesh(c,dt,moving){
-  const gy=terrainH(c.x,c.z,curP());
+  const gy=critGroundY(c.x,c.z);
   let y;
   if(c.def.hover){ c.bobP+=dt*1.5; y=gy+c.def.hover+Math.sin(c.bobP)*c.def.bob; }
   else if(c.def.hop&&moving){ c.hopP+=dt*9; y=gy+c.def.off+Math.abs(Math.sin(c.hopP))*0.5; }
@@ -3351,7 +3422,8 @@ function showToast(msg,dur){
   toastTimer=setTimeout(()=>{t.style.opacity=0;},dur||2400);
 }
 function updateHUDRes(){
-  $('rFe').textContent=S.res.fe; $('rCy').textContent=S.res.cy; $('rBio').textContent=S.res.bio; $('rCh').textContent=S.res.ch|0;
+  $('rFe').textContent=S.res.fe; $('rCy').textContent=S.res.cy; $('rBio').textContent=S.res.bio; $('rCh').textContent=S.res.ch|0; $('rPe').textContent=S.res.pe|0;
+  $('resPearl').classList.toggle('hidden', !(S.tier>=5||(S.res.pe|0)>0));
 }
 function updateTierBadge(){ $('tierBadge').textContent='TIER '+S.tier+' ▸'; }
 function setPrompt(html){ $('prompt').innerHTML=html; }
@@ -3424,13 +3496,19 @@ function unlockTier(n){
   spawnBurst(player.x,player.y+1.5,player.z,0x9feaff,30,5,6,1.3,4);
   showToast('⬆ TIER '+n+' UNLOCKED — '+td.perks[0],3500);
   if(n>=2) S.o2=Math.max(S.o2,o2Max()*0.7);
+  if(n>=5) S.o2=Math.max(S.o2,o2Max()*0.6);     // bigger tank on tier 5
   if(n===3){
     $('fuelwrap').classList.remove('hidden');
-    S.pendingVerdantCutscene=true;
-    if(S.mode==='space') startVerdantCutscene();
+    S.pendingCutscene='verdant';
+    if(S.mode==='space') startShieldCutscene('verdant');
     else showToast('⬆ TIER 3 — Jetpack online. Verdant signal shield is collapsing... visible from orbit.',4500);
   }
-  updateTierBadge(); renderTierList(); renderBuildGrid(); saveGame();
+  if(n===5){
+    S.pendingCutscene='pelagos';
+    if(S.mode==='space') startShieldCutscene('pelagos');
+    else showToast('⬆ TIER 5 — Hover Module & O₂ tank online. Pelagos signal shield is collapsing... visible from orbit.',4500);
+  }
+  updateTierBadge(); renderTierList(); renderBuildGrid(); renderCraftGrid(); saveGame();
 }
 function triggerVictory(){
   if(S.victoryShown){ showToast('Beacon placed.'); return; }
@@ -3694,6 +3772,7 @@ function enterSpace(fromPlanetKey,fromSave){
   clearMeteors();
   clearCritters();
   clearThrowables(); clearShieldWalls();
+  $('waterVig').style.opacity=0;
   if(camera.fov!==74){ camera.fov=74; camera.updateProjectionMatrix(); }
   if(fromSave){
     ship.position.fromArray(S.spos);
@@ -3705,7 +3784,7 @@ function enterSpace(fromPlanetKey,fromSave){
     S.sspeed=6;
   }
   refreshMobileUI();
-  if(S.pendingVerdantCutscene) setTimeout(()=>{ if(S.mode==='space'&&S.running) startVerdantCutscene(); },1200);
+  if(S.pendingCutscene) setTimeout(()=>{ if(S.mode==='space'&&S.running) startShieldCutscene(S.pendingCutscene); },1200);
 }
 function doLand(planetKey){
   if(transitioning) return;
@@ -3725,28 +3804,26 @@ function doBlackout(){
 }
 
 /* ============================================================
-   VERDANT CUTSCENE
+   SIGNAL-SHIELD CUTSCENE (Verdant tier 3, Pelagos tier 5)
    ============================================================ */
-const cs={active:false,t:0};
-function startVerdantCutscene(){
-  if(cs.active||!verdantShield.parent) {
-    if(!verdantShield.parent) S.pendingVerdantCutscene=false;
-    return;
-  }
-  cs.active=true; cs.t=0;
+const cs={active:false,t:0,planet:'verdant'};
+function startShieldCutscene(key){
+  const grp=shieldGroups[key];
+  if(cs.active||!grp||!grp.parent){ if(grp&&!grp.parent&&S.pendingCutscene===key) S.pendingCutscene=null; return; }
+  cs.active=true; cs.t=0; cs.planet=key;
   document.body.classList.add('cutsceneOn');
   cs.fromPos=camera.position.clone();
   cs.fromQuat=camera.quaternion.clone();
-  const vp=new THREE.Vector3().fromArray(PLANETS.verdant.pos);
+  const vp=new THREE.Vector3().fromArray(PLANETS[key].pos);
   const dir=ship.position.clone().sub(vp).normalize();
-  cs.viewPos=vp.clone().addScaledVector(dir,PLANETS.verdant.r*3.4).add(new THREE.Vector3(0,18,0));
+  cs.viewPos=vp.clone().addScaledVector(dir,PLANETS[key].r*3.4).add(new THREE.Vector3(0,18,0));
   cs.target=vp;
-  showToast('INCOMING TELEMETRY — VERDANT SIGNAL SHIELD COLLAPSING',3000);
+  showToast('INCOMING TELEMETRY — '+PLANETS[key].name+' SIGNAL SHIELD COLLAPSING',3000);
   SND.tone&&SND.tone(180,1.2,'sine',0.08,90);
 }
 function updateCutscene(dt){
   cs.t+=dt;
-  const t=cs.t;
+  const t=cs.t, grp=shieldGroups[cs.planet];
   if(t<1.6){
     const k=smooth(0,1.6,t);
     camera.position.lerpVectors(cs.fromPos,cs.viewPos,k);
@@ -3755,25 +3832,25 @@ function updateCutscene(dt){
     camera.position.copy(cs.viewPos);
     camera.lookAt(cs.target);
     const k=smooth(2.0,4.0,t);
-    if(verdantShield.parent){
-      verdantShield.scale.setScalar(Math.max(0.001,1-k));
-      verdantShield.children.forEach(c=>{ c.material.opacity=(c.material.userData&&c.material.userData.o0||0.3)*(1-k); });
+    if(grp&&grp.parent){
+      grp.scale.setScalar(Math.max(0.001,1-k));
+      grp.children.forEach(c=>{ c.material.opacity=(c.material.userData&&c.material.userData.o0||0.3)*(1-k); });
       if(Math.random()<dt*8&&k>0.05&&k<0.95){
-        const p=PLANETS.verdant;
-        spawnBurst(p.pos[0]+(Math.random()-0.5)*60,p.pos[1]+(Math.random()-0.5)*60,p.pos[2]+(Math.random()-0.5)*60,0xd08aff,4,12,6,1,0);
+        const p=PLANETS[cs.planet];
+        spawnBurst(p.pos[0]+(Math.random()-0.5)*60,p.pos[1]+(Math.random()-0.5)*60,p.pos[2]+(Math.random()-0.5)*60,SHIELDED[cs.planet].wire,4,12,6,1,0);
       }
-      if(k>=1){ spaceScene.remove(verdantShield); }
+      if(k>=1){ spaceScene.remove(grp); }
     }
   } else if(t<6.2){
-    if(verdantShield.parent) spaceScene.remove(verdantShield);
+    if(grp&&grp.parent) spaceScene.remove(grp);
     const k=smooth(4.6,6.2,t);
     camera.position.lerpVectors(cs.viewPos,cs.fromPos,k);
     camera.quaternion.slerp(cs.fromQuat,k*0.3+0.05);
   } else {
     cs.active=false;
-    S.pendingVerdantCutscene=false;
+    S.pendingCutscene=null;
     document.body.classList.remove('cutsceneOn');
-    showToast('VERDANT IS OPEN — land there to find Biolume',4000);
+    showToast(PLANETS[cs.planet].name+' IS OPEN — land there to harvest '+SHIELDED[cs.planet].res,4000);
     saveGame();
   }
 }
@@ -3817,10 +3894,10 @@ function updateSpace(dt){
   /* prompts */
   if(landKey){
     const p=PLANETS[landKey];
-    if(landKey==='verdant'&&S.tier<3){
-      setPrompt('<span style="color:#ff9a8a">⚠ SIGNAL INTERFERENCE — VERDANT REQUIRES TIER 3</span>');
+    if(SHIELDED[landKey]&&S.tier<SHIELDED[landKey].tier){
+      setPrompt('<span style="color:#ff9a8a">⚠ SIGNAL INTERFERENCE — '+p.name+' REQUIRES TIER '+SHIELDED[landKey].tier+'</span>');
       setMAct('✕');
-      if(justE){ SND.denied(); showToast('A hostile signal shield blocks descent. Reach Tier 3.'); }
+      if(justE){ SND.denied(); showToast('A hostile signal shield blocks descent. Reach Tier '+SHIELDED[landKey].tier+'.'); }
     } else {
       setPrompt('<span class="key">E</span>LAND ON '+p.name+' — '+p.desc);
       setMAct('LAND');
@@ -3848,7 +3925,6 @@ function updateSpaceHUD(){
   $('o2bar').classList.toggle('low',false);
 }
 /* verdant shield material opacity baseline (for cutscene fade) */
-verdantShield.children.forEach(c=>{ c.material.userData={o0:c.material.opacity}; });
 
 /* ============================================================
    SURFACE UPDATE
@@ -3871,7 +3947,16 @@ function updateSurface(dt){
   const im=Math.hypot(ix,iz);
   if(im>1){ ix/=im; iz/=im; }
   const sprinting=S.tier>=2&&keys.ShiftLeft&&im>0.1;
-  const spd=sprinting?9.6:6;
+  /* --- water state (Pelagos): wading slows you, deep water sinks + drains O2 --- */
+  const water=p.water; let wading=false, deepW=false, submerged=false;
+  if(water){
+    const wdepth=SEA_Y-terrainH(player.x,player.z,p);
+    wading    = wdepth>0.3 && player.y<SEA_Y+0.2;
+    deepW     = wdepth>1.6 && player.y<SEA_Y+0.2;
+    submerged = player.y<SEA_Y-0.3;
+  }
+  const baseSpd=sprinting?9.6:6;
+  const spd=deepW?baseSpd*0.42:(wading?baseSpd*0.6:baseSpd);
   const sy=Math.sin(player.yaw), cy=Math.cos(player.yaw);
   const mx=(ix*cy+iz*sy)*spd*dt, mz=(iz*cy-ix*sy)*spd*dt;
   player.x+=mx; player.z+=mz;
@@ -3888,27 +3973,30 @@ function updateSurface(dt){
   player.grounded=player.y<=gy+0.02;
   let jetting=false;
   if(keys.Space){
-    if(player.grounded&&player.vy<=0.01){ player.vy=7.2; player.grounded=false; }
+    if(!deepW&&player.grounded&&player.vy<=0.01){ player.vy=7.2; player.grounded=false; }
     else if(S.tier>=3&&S.fuel>0.5){
       player.vy+=26*dt; S.fuel=Math.max(0,S.fuel-32*dt); jetting=true;
       if(Math.random()<dt*30) spawnBurst(player.x-sy*0.2,player.y+0.3,player.z-cy*0.2,0xffc060,2,1.2,-0.5,0.35,-3);
     }
   }
   if(player.grounded&&!keys.Space) S.fuel=Math.min(100,S.fuel+24*dt);
-  player.vy-=18*dt;
-  player.vy=clamp(player.vy,-30,9);
+  if(deepW&&!jetting){ player.vy-=4*dt; player.vy=clamp(player.vy,-1.6,2.0); }   // buoyant slow sink — no fast fall
+  else { player.vy-=18*dt; player.vy=clamp(player.vy,-30,9); }
   player.y+=player.vy*dt;
   if(player.y<=gy){ player.y=gy; player.vy=0; player.grounded=true; }
   /* head bob */
   footT+=im*dt*(sprinting?11:7);
   /* --- O2 --- */
   const safe=inO2Range();
-  if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt);
+  if(submerged) S.o2=Math.max(0,S.o2-4.6*dt);            // deep water: ~4x drain, no air
+  else if(safe) S.o2=Math.min(o2Max(),S.o2+28*dt);
   else S.o2=Math.max(0,S.o2-(sprinting?1.8:1.15)*dt*(jetting?1.4:1));
+  const lowAir=!safe||submerged;
   const o2f=S.o2/o2Max();
   $('o2bar').style.width=(o2f*100)+'%';
-  $('o2bar').classList.toggle('low',o2f<0.25&&!safe);
-  if(o2f<0.25&&!safe){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  $('o2bar').classList.toggle('low',o2f<0.25&&lowAir);
+  if(o2f<0.25&&lowAir){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  $('waterVig').style.opacity = water?(submerged?clamp((SEA_Y-0.3-player.y)/3,0.35,0.85):(wading?0.12:0)):0;
   if(S.o2<=0){ doBlackout(); justE=false; return; }
   if(S.tier>=3) $('fuelbar').style.width=S.fuel+'%';
   /* --- health --- */
@@ -4002,6 +4090,7 @@ function updateSurface(dt){
   updateRoverMeshes(dt);
   updateCritters(dt);
   updateHeavyWeapons(dt);
+  updateWater();
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
@@ -4016,13 +4105,13 @@ function renderSurfaceCam(){
    START SCREEN / NEW GAME / CONTINUE / BOOT
    ============================================================ */
 function resetState(){
-  S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0}; S.structures=[];
+  S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
   S.spos=[PLANETS.rust.pos[0]+50,PLANETS.rust.pos[1]+18,PLANETS.rust.pos[2]+55];
   S.syaw=Math.atan2(50,55); S.spitch=-0.12; S.sspeed=4;
-  S.pendingVerdantCutscene=false;
+  S.pendingCutscene=null;
   S.weapons=readWeapons(null);
   S.ammo=readAmmo(null); S.medkits=0; S.slot=0;
   player.hp=HP_MAX; player.invuln=0;
@@ -4040,7 +4129,7 @@ function startGame(fromSave){
   $('protRing').classList.add('hidden');
   updateHUDRes(); updateTierBadge(); updateCapNote(); renderHotbar(); updateViewmodel();
   $('fuelwrap').classList.toggle('hidden',S.tier<3);
-  if(S.tier>=3&&verdantShield.parent&&!S.pendingVerdantCutscene) spaceScene.remove(verdantShield);
+  for(const key in SHIELDED){ if(S.tier>=SHIELDED[key].tier&&shieldGroups[key].parent&&S.pendingCutscene!==key) spaceScene.remove(shieldGroups[key]); }
   if(fromSave&&S.mode==='surface') enterSurface(S.planet,true);
   else enterSpace(S.planet,fromSave);
   if(!fromSave) showToast('Fly to the red planet RUST and press E to LAND',5000);
@@ -4124,8 +4213,8 @@ function startMultiplayer(w){
   try{
     const p=JSON.parse(localStorage.getItem(mpPlayerKey()));
     if(p){
-      S.tier=clamp(p.tier|0,1,4);
-      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0),ch:Math.max(0,p.res&&p.res.ch|0||0)};
+      S.tier=clamp(p.tier|0,1,5);
+      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0),ch:Math.max(0,p.res&&p.res.ch|0||0),pe:Math.max(0,p.res&&p.res.pe|0||0)};
       S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
       if(p.victoryShown) S.victoryShown=true;
       S.weapons=readWeapons(p.weapons);
@@ -4133,7 +4222,7 @@ function startMultiplayer(w){
       S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
     }
   }catch(e){}
-  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999,ch:99999}; cheatMax=false; }
+  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999,ch:99999,pe:99999}; cheatMax=false; }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -4236,7 +4325,7 @@ function loop(now){
     camera.lookAt(0,0,0);
     activeScene=spaceScene;
   }
-  if(verdantShield.parent){ verdantShield.rotation.y+=dt*0.3; verdantShield.rotation.x+=dt*0.11; }
+  for(const key in shieldGroups){ const g=shieldGroups[key]; if(g.parent){ g.rotation.y+=dt*0.3; g.rotation.x+=dt*0.11; } }
   /* animated holo screens (consoles, holo-signs, armory) */
   const ho=0.55+0.3*Math.sin(now*0.005);
   MAT.screen.opacity=ho; MAT.holo.opacity=0.5+0.25*Math.sin(now*0.004+1.3);
@@ -4250,7 +4339,7 @@ requestAnimationFrame(loop);
 
 /* debug / automation hook */
 window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
-  WEAPONS,SLOT_KEYS,throwables,shieldWalls,
+  WEAPONS,SLOT_KEYS,throwables,shieldWalls,SHIELDED,shieldGroups,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
 </script>
 </body>
