@@ -611,6 +611,16 @@ CAT.pillar.sockets=[{p:[0,3,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.pillar2.sockets=[{p:[0,5,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.pillar3.sockets=[{p:[0,7,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.beam.sockets=[{p:[4,0,0],rots:[0],accept:['beam']},{p:[-4,0,0],rots:[0],accept:['beam']}];
+/* roofs chain to each other so multi-tile roofs are buildable (they already snap onto wall tops) */
+CAT.roof45.sockets=[
+  {p:[4,0,0], rots:[0], accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},  // tile sideways along the ridge
+  {p:[0,0,4], rots:[0], accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];  // extend the slope front/back
+CAT.roofcorner.sockets=[
+  {p:[2,0,0],rots:[1],accept:SNAP_ROOFS},{p:[-2,0,0],rots:[1],accept:SNAP_ROOFS},
+  {p:[0,0,2],rots:[0],accept:SNAP_ROOFS},{p:[0,0,-2],rots:[0],accept:SNAP_ROOFS}];
+CAT.dome.sockets=[
+  {p:[4,0,0],rots:[0],accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},
+  {p:[0,0,4],rots:[0],accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];
 
 const MAX_STRUCT=400;
 const SEA_Y=0;            // Pelagos sea level (water planets)
@@ -1697,15 +1707,17 @@ function refreshStructures(){
   updateCapNote();
 }
 let shieldDomes=[];   // {x,y,z,r,mesh,st}
+const structGlows=[]; // lamp/beacon glow sprites — brightened at night (own material so node/rover glows stay put)
 function rebuildAux(){
   while(auxGroup.children.length) auxGroup.remove(auxGroup.children[0]);
-  shieldDomes=[];
+  shieldDomes=[]; structGlows.length=0;
   for(const st of S.structures){
     if(st.pl!==S.planet) continue;
     const def=CAT[st.t];
     if(def.glow){
       const gl=makeGlow(def.glow.c,def.glow.s);
-      gl.position.set(st.x,st.y+def.glow.y,st.z); auxGroup.add(gl);
+      gl.material=gl.material.clone(); gl.userData._o0=gl.material.opacity;  // isolate from shared cached glowMat
+      gl.position.set(st.x,st.y+def.glow.y,st.z); auxGroup.add(gl); structGlows.push(gl);
     }
     if(st.t==='shieldgen'&&st.hp>0){
       const dome=new THREE.Mesh(new THREE.SphereGeometry(def.shieldR,20,12,0,Math.PI*2,0,Math.PI/2),
@@ -3208,6 +3220,7 @@ function shotBlocked(o,e){
 /* ---- throwing ---- */
 function throwGadget(w){
   if(w.thrown==='grenade'){
+    if(inSafeZone(player.x,player.z)){ SND.denied(); showToast('Weapons disabled in safe zone'); return; }
     if((S.ammo.nade|0)<=0){ SND.denied(); showToast('No Plasma Grenades — craft at an Armory'); return; }
     if(nadeCd>0) return; nadeCd=0.55;
     S.ammo.nade--; renderHotbar();
@@ -3303,6 +3316,13 @@ function updateNadeAim(){
 function updateHeavyWeapons(dt){
   nadeCd=Math.max(0,nadeCd-dt); shieldCd=Math.max(0,shieldCd-dt);
   updateThrowables(dt); updateShieldWalls(dt);
+  /* Lance emitter visibly winds up while the (slow) cooldown recovers — visual only */
+  const lv=weaponVM.lance;
+  if(lv&&lv.visible){
+    const w=curWeapon(); const charge=w.lance?clamp(1-weaponCd/w.cd,0,1):1;
+    const muz=lv.getObjectByName('muz');
+    if(muz){ muz.material.emissiveIntensity=0.3+1.9*charge; const s=0.05*(0.5+0.5*charge); muz.scale.set(s,s,s); }
+  }
 }
 function primaryDown(){
   if(S.mode!=='surface'||driving||buildSel||paintMode||bpStamp) return;
@@ -3345,6 +3365,9 @@ function applyDayNight(){
   surfScene.background=dnBaseSky;
   if(!meteorActiveNow()&&surfScene.fog) surfScene.fog.color.copy(dnBaseFog);
   if(surfStars) surfStars.material.opacity=clamp(1-day*1.3,0,1)*0.9;
+  /* lamps/beacons glow stronger after dark so they actually matter at night */
+  const glowK=0.45+0.95*(1-day);
+  for(const gl of structGlows) gl.material.opacity=Math.min(1,gl.userData._o0*glowK);
 }
 const _tmpC=new THREE.Color(), _tmpC2=new THREE.Color();
 
