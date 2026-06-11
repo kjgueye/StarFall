@@ -29,8 +29,10 @@ class PgStore {
   get kind() { return 'postgres'; }
   async init() {
     const { default: pg } = await import('pg');
+    /* Railway internal networking + local Postgres speak plain TCP; only
+       external/public URLs need (permissive) TLS */
     this.pool = new pg.Pool({ connectionString: this.url, max: 5,
-      ssl: /localhost|127\.0\.0\.1/.test(this.url) ? false : { rejectUnauthorized: false } });
+      ssl: /localhost|127\.0\.0\.1|\.railway\.internal/.test(this.url) ? false : { rejectUnauthorized: false } });
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
