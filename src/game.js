@@ -1,18 +1,24 @@
 "use strict";
 /* ============================================================
-   STARFALL — single-file sci-fi build & explore game
+   STARFALL — client. Game data/rules live in ../shared/ and are
+   imported by BOTH this client and the Node server.
    ============================================================ */
+import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
+  GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
+  WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
+  EVA_SPEED, STATION_REACH, STATION_SNAP } from '../shared/constants.js';
+import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LIKE, SNAP_PIECES,
+  COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
+  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
+import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
+import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater } from '../shared/world.js';
+import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
 const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
 const lerp=(a,b,t)=>a+(b-a)*t;
 const smooth=(a,b,v)=>{const t=clamp((v-a)/(b-a),0,1);return t*t*(3-2*t);};
-function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
-function hash2(x,y,s){const h=Math.sin(x*127.1+y*311.7+s*74.7)*43758.5453;return h-Math.floor(h);}
-function vnoise(x,y,s){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
-  const a=hash2(xi,yi,s),b=hash2(xi+1,yi,s),c=hash2(xi,yi+1,s),d=hash2(xi+1,yi+1,s);
-  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;}
-function fbm(x,y,s){return vnoise(x,y,s)*0.6+vnoise(x*2.3,y*2.3,s+7)*0.3+vnoise(x*5.1,y*5.1,s+13)*0.1;}
+/* mulberry32/hash2/vnoise/fbm imported from shared/world.js */
 const $=id=>document.getElementById(id);
 
 /* ---------- audio (procedural, WebAudio) ---------- */
@@ -38,298 +44,24 @@ const SND={ctx:null,on:true,
   o2warn(){this.tone(980,0.12,'sine',0.06);},
 };
 
-/* ---------- planet definitions ---------- */
-const PLANETS={
-  rust:   {name:'RUST',    seed:11, r:26, pos:[260,6,60],    surfCol:0x91502c, surfCol2:0x6b3318, rockCol:0x5a2e1c,
-           fog:0x4a2012, sky:0x2a1208, sun:0xffd9b0, amp:9,  res:'fe', nodeCol:0xff7a30, nodeEmis:0xb34400,
-           floraCol:0x7a4a30, desc:'Iron-rich starter world'},
-  glacius:{name:'GLACIUS', seed:23, r:30, pos:[-180,42,470], surfCol:0xaccde4, surfCol2:0x7fa8cc, rockCol:0x6688aa,
-           fog:0x9cc2dd, sky:0x16344e, sun:0xeaf4ff, amp:12, res:'cy', nodeCol:0x4fdfff, nodeEmis:0x0aa0cc,
-           floraCol:0xcfe8ff, desc:'Frozen cryo-crystal fields'},
-  verdant:{name:'VERDANT', seed:37, r:28, pos:[40,-26,-540], surfCol:0x4a8a48, surfCol2:0x2e6034, rockCol:0x3a5a3a,
-           fog:0x1d4a2a, sky:0x0a2010, sun:0xd0ffd8, amp:10, res:'bio', nodeCol:0x7fff9a, nodeEmis:0x22cc55,
-           floraCol:0x8a4aaa, desc:'Bio-luminous alien jungle'},
-  pelagos:{name:'PELAGOS', seed:53, r:27, pos:[-470,30,-200], surfCol:0x2f9a92, surfCol2:0x123f3c, rockCol:0x355f5b,
-           fog:0x1c6a74, sky:0x06283a, sun:0xd6fff6, amp:8, res:'pe', nodeCol:0x7fffe0, nodeEmis:0x10ccaa,
-           floraCol:0x49c8bd, desc:'Teal archipelago — cross the water', water:true},
-};
-const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin',pe:'Abyssal Pearl'};
-const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a',ch:'#d8b878',pe:'#5fe9d6'};
-
-/* ---------- tiers ---------- */
-const TIERS=[
-  {n:1,cost:null,perks:['Basic suit (100 O₂) & ship','Floor · Wall · Ramp · Light Pole','Storage Crate · O₂ Relay']},
-  {n:2,cost:{fe:50,cy:25},perks:['SHIELD GENERATOR (meteor dome)','Window · Door · Dome Roof','Sprint (Shift) · O₂ tank 100 → 160']},
-  {n:3,cost:{fe:120,cy:70},perks:['JETPACK — hold Jump to fly','Ship speed +75%','VERDANT signal shield DEACTIVATED']},
-  {n:4,cost:{fe:150,cy:100,bio:30},perks:['COLONY BEACON — establish the colony','Victory! (game continues in sandbox)']},
-  {n:5,cost:{fe:200,cy:140,bio:70,ch:40},perks:['PELAGOS unlocked — teal ocean world','Rover Hover Module — skim across water','Suit O₂ tank 160 → 240','INFERNO THROWER recipe (Armory)']},
-];
+/* PLANETS / RES_NAMES / RES_DOTS imported from shared/world.js */
+/* TIERS imported from shared/tiers.js */
 
 /* ---------- structure catalog ---------- */
-/* part: {g:geoKey, m:matKey, o:[x,y,z], s:[sx,sy,sz], r:[rx,ry,rz]} */
-const RAMP_ANG=Math.atan2(3,4);
-const CAT={
-  floor:  {name:'Floor', ic:'▦', tier:1, cost:{fe:4}, hp:100,
-    parts:[{g:'box',m:'metal',o:[0,0.15,0],s:[4,0.3,4]},{g:'box',m:'trim',o:[0,0.31,0],s:[3.7,0.02,3.7]}]},
-  wall:   {name:'Wall', ic:'▮', tier:1, cost:{fe:4}, hp:100,
-    parts:[{g:'box',m:'metal',o:[0,1.5,0],s:[4,3,0.3]},{g:'box',m:'trim',o:[0,1.5,0.16],s:[3.6,2.6,0.02]}]},
-  ramp:   {name:'Ramp', ic:'◢', tier:1, cost:{fe:5}, hp:100,
-    parts:[{g:'box',m:'metal',o:[0,1.5,0],s:[4,0.3,5],r:[RAMP_ANG,0,0]}]},
-  lightpole:{name:'Light Pole', ic:'¦', tier:1, cost:{fe:6}, hp:60,
-    parts:[{g:'cyl',m:'dark',o:[0,1.5,0],s:[0.24,3,0.24]},{g:'sphere',m:'emisW',o:[0,3.15,0],s:[0.7,0.7,0.7]}], glow:{y:3.15,c:'#dff6ff',s:5}},
-  crate:  {name:'Storage Crate', ic:'▣', tier:1, cost:{fe:10}, hp:120, capUp:150, noKill:true,
-    parts:[{g:'box',m:'dark',o:[0,0.6,0],s:[1.6,1.2,1.6]},{g:'box',m:'emisO',o:[0,1.18,0],s:[1.2,0.06,1.2]}]},
-  relay:  {name:'O₂ Relay', ic:'◍', tier:1, cost:{fe:12}, hp:80, o2r:26,
-    parts:[{g:'cyl',m:'metal',o:[0,1.2,0],s:[0.36,2.4,0.36]},{g:'torus',m:'emisC',o:[0,2.55,0],s:[1.1,1.1,1.1],r:[Math.PI/2,0,0]},
-           {g:'sphere',m:'emisC',o:[0,2.55,0],s:[0.34,0.34,0.34]}], glow:{y:2.55,c:'#8ff4ff',s:4}},
-  shieldgen:{name:'Shield Gen', ic:'◖', tier:2, cost:{fe:30,cy:15}, hp:150, shieldR:18,
-    parts:[{g:'cyl',m:'dark',o:[0,0.25,0],s:[2.8,0.5,2.8]},{g:'cyl',m:'metal',o:[0,0.8,0],s:[1.2,0.7,1.2]},
-           {g:'sphere',m:'emisC',o:[0,1.5,0],s:[1.1,1.1,1.1]}], glow:{y:1.5,c:'#7fd6ff',s:6}},
-  window: {name:'Window Wall', ic:'⊞', tier:2, cost:{fe:6,cy:2}, hp:80,
-    parts:[{g:'box',m:'metal',o:[0,2.8,0],s:[4,0.4,0.3]},{g:'box',m:'metal',o:[0,0.3,0],s:[4,0.6,0.3]},
-           {g:'box',m:'metal',o:[-1.8,1.55,0],s:[0.4,2.1,0.3]},{g:'box',m:'metal',o:[1.8,1.55,0],s:[0.4,2.1,0.3]},
-           {g:'box',m:'glass',o:[0,1.55,0],s:[3.2,2.1,0.1]}]},
-  door:   {name:'Door', ic:'◫', tier:2, cost:{fe:8,cy:3}, hp:100,
-    parts:[{g:'box',m:'metal',o:[-1.45,1.5,0],s:[1.1,3,0.3]},{g:'box',m:'metal',o:[1.45,1.5,0],s:[1.1,3,0.3]},
-           {g:'box',m:'metal',o:[0,2.8,0],s:[1.8,0.4,0.3]},{g:'box',m:'doorM',o:[0,1.3,0],s:[1.7,2.6,0.14]},
-           {g:'box',m:'emisC',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
-  dome:   {name:'Dome Roof', ic:'◠', tier:2, cost:{fe:10,cy:4}, hp:90,
-    parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisC',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
-  /* ---- Phase 2 building pieces ---- */
-  foundation:{name:'Foundation', ic:'▰', tier:1, cost:{fe:6}, hp:140,
-    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[4,1,4]},{g:'box',m:'trim',o:[0,1.01,0],s:[3.8,0.04,3.8]}]},
-  pillar:  {name:'Pillar (S)', ic:'╿', tier:1, cost:{fe:4}, hp:90,
-    parts:[{g:'cyl',m:'metal',o:[0,1.5,0],s:[0.5,3,0.5]}]},
-  pillar2: {name:'Pillar (M)', ic:'╿', tier:1, cost:{fe:6}, hp:90,
-    parts:[{g:'cyl',m:'metal',o:[0,2.5,0],s:[0.5,5,0.5]}]},
-  pillar3: {name:'Pillar (L)', ic:'╿', tier:1, cost:{fe:8}, hp:90,
-    parts:[{g:'cyl',m:'metal',o:[0,3.5,0],s:[0.5,7,0.5]}]},
-  halfwall:{name:'Half Wall', ic:'▬', tier:1, cost:{fe:2}, hp:60,
-    parts:[{g:'box',m:'metal',o:[0,0.75,0],s:[4,1.5,0.3]},{g:'box',m:'trim',o:[0,0.75,0.16],s:[3.6,1.3,0.02]}]},
-  halffloor:{name:'Half Floor', ic:'▱', tier:1, cost:{fe:2}, hp:70,
-    parts:[{g:'box',m:'metal',o:[0,0.15,0],s:[4,0.3,2]},{g:'box',m:'trim',o:[0,0.31,0],s:[3.7,0.02,1.8]}]},
-  roof45:  {name:'Angled Roof', ic:'◹', tier:2, cost:{fe:6,cy:1}, hp:90,
-    parts:[{g:'box',m:'metal',o:[0,1.5,0],s:[4,0.25,5.66],r:[Math.PI/4,0,0]}]},
-  roofcorner:{name:'Roof Corner', ic:'◸', tier:2, cost:{fe:6,cy:1}, hp:90,
-    parts:[{g:'cone',m:'metal',o:[0,1.4,0],s:[3.2,2.8,3.2]}]},
-  flatroof:{name:'Flat Roof', ic:'▤', tier:2, cost:{fe:6,cy:2}, hp:100,   // floor-footprint slab: caps walls, tiles flat, walkable second-story floor
-    parts:[{g:'box',m:'metal',o:[0,0.15,0],s:[4,0.3,4]},{g:'box',m:'trim',o:[0,0.32,0],s:[3.6,0.04,3.6]}]},
-  beam:    {name:'Beam', ic:'━', tier:1, cost:{fe:3}, hp:60,
-    parts:[{g:'box',m:'metal',o:[0,0,0],s:[4,0.3,0.3]}]},
-  armory:{name:'Armory', ic:'⚒', tier:2, cost:{fe:35,cy:15}, hp:120, interact:'armory',
-    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[2.6,1.0,1.4]},{g:'box',m:'metal',o:[0,1.06,0],s:[2.75,0.12,1.55]},
-           {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
-           {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisC',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
-    glow:{y:1.6,c:'#ffb070',s:3}},
-  rover:  {name:'Rover', ic:'⛟', tier:2, cost:{fe:60,cy:10}, hp:160, dynamic:true, parts:[], desc:'Drive — E to enter'},
-  turret: {name:'Sentry Turret', ic:'⌖', tier:3, cost:{fe:40,cy:20}, hp:110, owned:true, headParts:[2,3,4],
-    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[1.2,0.6,1.2]},{g:'cyl',m:'metal',o:[0,0.85,0],s:[0.5,0.7,0.5]},
-           {g:'box',m:'dark',o:[0,1.35,0],s:[0.9,0.5,0.7]},{g:'cyl',m:'metal',o:[0,1.35,-0.55],s:[0.12,0.7,0.12],r:[Math.PI/2,0,0]},
-           {g:'sphere',m:'emisR',o:[0,1.35,-0.22],s:[0.2,0.2,0.2]}], glow:{y:1.35,c:'#ff5a4a',s:2.6}},
-  beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
-    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
-           {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
-  /* decorations */
-  flag:   {name:'Flag', ic:'⚑', tier:0, cost:{fe:3}, hp:40, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,1.25,0],s:[0.1,2.5,0.1]},{g:'box',m:'flagM',o:[0.65,2.1,0],s:[1.2,0.7,0.05]}]},
-  planter:{name:'Planter', ic:'❀', tier:0, cost:{fe:4}, hp:40, decor:true,
-    parts:[{g:'cyl',m:'pot',o:[0,0.3,0],s:[0.9,0.6,0.9]},{g:'cone',m:'plant',o:[0,1.05,0],s:[0.7,1,0.7]},
-           {g:'sphere',m:'plant',o:[0.25,0.85,0.15],s:[0.4,0.4,0.4]}]},
-  holosign:{name:'Holo-Sign', ic:'◭', tier:0, cost:{fe:5}, hp:40, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,0.9,0],s:[0.12,1.8,0.12]},{g:'box',m:'holo',o:[0,2.3,0],s:[1.8,1,0.04]}], glow:{y:2.3,c:'#5fe0ff',s:3}},
-  lampR:  {name:'Red Lamp', ic:'●', tier:0, cost:{fe:3}, hp:30, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,0.55,0],s:[0.14,1.1,0.14]},{g:'sphere',m:'emisR',o:[0,1.25,0],s:[0.45,0.45,0.45]}], glow:{y:1.25,c:'#ff6a5a',s:3}},
-  lampG:  {name:'Green Lamp', ic:'●', tier:0, cost:{fe:3}, hp:30, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,0.55,0],s:[0.14,1.1,0.14]},{g:'sphere',m:'emisG',o:[0,1.25,0],s:[0.45,0.45,0.45]}], glow:{y:1.25,c:'#5aff8a',s:3}},
-  lampB:  {name:'Blue Lamp', ic:'●', tier:0, cost:{fe:3}, hp:30, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,0.55,0],s:[0.14,1.1,0.14]},{g:'sphere',m:'emisB',o:[0,1.25,0],s:[0.45,0.45,0.45]}], glow:{y:1.25,c:'#5a9aff',s:3}},
-  table:  {name:'Table', ic:'⊓', tier:0, cost:{fe:4}, hp:50, decor:true,
-    parts:[{g:'box',m:'trim',o:[0,0.95,0],s:[1.6,0.1,1,]},{g:'cyl',m:'dark',o:[0,0.45,0],s:[0.18,0.9,0.18]}]},
-  antenna:{name:'Antenna', ic:'⫯', tier:0, cost:{fe:5}, hp:40, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,1.6,0],s:[0.09,3.2,0.09]},{g:'box',m:'metal',o:[0,2.4,0],s:[1.4,0.06,0.06]},
-           {g:'box',m:'metal',o:[0,2.9,0],s:[0.9,0.06,0.06]},{g:'sphere',m:'emisR',o:[0,3.3,0],s:[0.16,0.16,0.16]}], glow:{y:3.3,c:'#ff5a4a',s:1.6}},
-  /* ---- furniture / interior (Phase 6) ---- */
-  bed:    {name:'Bed', ic:'▤', tier:0, cost:{fe:8}, hp:50, decor:true,
-    parts:[{g:'box',m:'dark',o:[0,0.3,0],s:[1.4,0.4,2.6]},{g:'box',m:'cloth',o:[0,0.62,0.1],s:[1.3,0.25,2.2]},
-           {g:'box',m:'trim',o:[0,0.7,-1.0],s:[1.2,0.3,0.4]}]},
-  chair:  {name:'Chair', ic:'⑁', tier:0, cost:{fe:4}, hp:30, decor:true,
-    parts:[{g:'box',m:'metal',o:[0,0.5,0],s:[0.7,0.1,0.7]},{g:'box',m:'cloth',o:[0,0.56,0],s:[0.6,0.08,0.6]},
-           {g:'box',m:'metal',o:[0,0.9,-0.3],s:[0.7,0.8,0.1]},{g:'cyl',m:'dark',o:[0,0.25,0],s:[0.13,0.5,0.13]}]},
-  console:{name:'Holo Console', ic:'▣', tier:0, cost:{fe:7}, hp:50, decor:true,
-    parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[1.6,1.0,0.7]},{g:'box',m:'metal',o:[0,1.05,0],s:[1.7,0.1,0.8]},
-           {g:'box',m:'dark',o:[0,1.55,-0.26],s:[1.4,0.95,0.1]},{g:'box',m:'screen',o:[0,1.58,-0.19],s:[1.2,0.72,0.03]}],
-    glow:{y:1.55,c:'#5fe0ff',s:2}},
-  shelf:  {name:'Wall Shelf', ic:'☰', tier:0, cost:{fe:5}, hp:30, decor:true,
-    parts:[{g:'box',m:'wood',o:[0,2.0,0],s:[1.8,0.08,0.5]},{g:'box',m:'wood',o:[0,1.5,0],s:[1.8,0.08,0.5]},
-           {g:'box',m:'wood',o:[0,1.0,0],s:[1.8,0.08,0.5]},{g:'box',m:'dark',o:[-0.85,1.5,0],s:[0.08,1.2,0.5]},
-           {g:'box',m:'dark',o:[0.85,1.5,0],s:[0.08,1.2,0.5]}]},
-  rug:    {name:'Floor Rug', ic:'▭', tier:0, cost:{fe:3}, hp:20, decor:true,
-    parts:[{g:'box',m:'rug',o:[0,0.32,0],s:[2.4,0.04,3.0]},{g:'box',m:'trim',o:[0,0.345,0],s:[2.0,0.02,2.6]}]},
-  ceilinglight:{name:'Ceiling Light', ic:'☼', tier:0, cost:{fe:5}, hp:30, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,2.6,0],s:[0.06,1.0,0.06]},{g:'box',m:'metal',o:[0,2.12,0],s:[1.0,0.12,1.0]},
-           {g:'box',m:'emisW',o:[0,2.03,0],s:[0.85,0.05,0.85]}], glow:{y:2.0,c:'#eaf6ff',s:4}},
-  locker: {name:'Locker', ic:'▯', tier:0, cost:{fe:6}, hp:50, decor:true,
-    parts:[{g:'box',m:'metal',o:[0,1.1,0],s:[0.9,2.2,0.6]},{g:'box',m:'dark',o:[0,1.1,0.31],s:[0.8,2.0,0.04]},
-           {g:'box',m:'emisC',o:[0.25,1.45,0.34],s:[0.06,0.3,0.02]}]},
-  railing:{name:'Railing', ic:'╫', tier:0, cost:{fe:4}, hp:30, decor:true,
-    parts:[{g:'box',m:'metal',o:[0,1.0,0],s:[4,0.08,0.08]},{g:'box',m:'metal',o:[0,0.6,0],s:[4,0.08,0.08]},
-           {g:'cyl',m:'dark',o:[-1.85,0.6,0],s:[0.08,1.2,0.08]},{g:'cyl',m:'dark',o:[0,0.6,0],s:[0.08,1.2,0.08]},
-           {g:'cyl',m:'dark',o:[1.85,0.6,0],s:[0.08,1.2,0.08]}]},
-};
-/* ---------- build snap sockets ---------- */
-/* A socket lives on a host piece: {p:[local x,y,z], rots:[allowed rotations 0-3],
-   accept:[piece types that may attach]}. The attaching piece's ORIGIN goes to the
-   socket world position; R cycles the allowed rotations. Transforms are arbitrary,
-   so collision/doors/save/MP all keep working unchanged. */
-const SNAP_WALLS=['wall','window','door','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner','flatroof'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
-const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
-const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam']);
-const SNAP_R=3.2;        // max distance from aim to a socket to snap
-CAT.floor.sockets=[
-  {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
-  {p:[-2,0,0],  rots:[1], accept:SNAP_WALLS},
-  {p:[0,0,2],   rots:[0], accept:SNAP_WALLS},   // +z edge wall (runs along x)
-  {p:[0,0,-2],  rots:[0], accept:SNAP_WALLS},
-  {p:[4,0,0],   rots:[0], accept:SNAP_FLOORS},  // tile floors edge to edge
-  {p:[-4,0,0],  rots:[0], accept:SNAP_FLOORS},
-  {p:[0,0,4],   rots:[0], accept:SNAP_FLOORS},
-  {p:[0,0,-4],  rots:[0], accept:SNAP_FLOORS},
-  {p:[0,3,0],   rots:[0], accept:SNAP_FLOORS.concat(SNAP_ROOFS)},  // second story / centered roof
-  {p:[4,-3,0],  rots:[1], accept:SNAP_RAMPS},   // ramp up to this floor edge
-  {p:[-4,-3,0], rots:[3], accept:SNAP_RAMPS},
-  {p:[0,-3,4],  rots:[2], accept:SNAP_RAMPS},
-  {p:[0,-3,-4], rots:[0], accept:SNAP_RAMPS},
-];
-CAT.wall.sockets=[
-  {p:[0,3,0],   rots:[0], accept:WALL_LIKE},    // stack wall / roof / floor on top
-  {p:[4,0,0],   rots:[0], accept:SNAP_WALLS},   // continue straight +x
-  {p:[-4,0,0],  rots:[0], accept:SNAP_WALLS},
-  {p:[2,0,2],   rots:[1], accept:SNAP_WALLS},   // flush corner off +x end
-  {p:[2,0,-2],  rots:[1], accept:SNAP_WALLS},
-  {p:[-2,0,2],  rots:[1], accept:SNAP_WALLS},   // flush corner off -x end
-  {p:[-2,0,-2], rots:[1], accept:SNAP_WALLS},
-];
-CAT.window.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
-CAT.door.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
-CAT.foundation.sockets=[
-  {p:[0,1,0],   rots:[0], accept:SNAP_FLOORS},          // floor/foundation on top
-  {p:[2,1,0],   rots:[1], accept:SNAP_WALLS},{p:[-2,1,0],rots:[1],accept:SNAP_WALLS},
-  {p:[0,1,2],   rots:[0], accept:SNAP_WALLS},{p:[0,1,-2],rots:[0],accept:SNAP_WALLS},
-  {p:[4,0,0],   rots:[0], accept:['foundation']},{p:[-4,0,0],rots:[0],accept:['foundation']},
-  {p:[0,0,4],   rots:[0], accept:['foundation']},{p:[0,0,-4],rots:[0],accept:['foundation']},
-];
-CAT.halffloor.sockets=[
-  {p:[2,0,0],rots:[1],accept:SNAP_WALLS},{p:[-2,0,0],rots:[1],accept:SNAP_WALLS},
-  {p:[0,0,1],rots:[0],accept:SNAP_WALLS},{p:[0,0,-1],rots:[0],accept:SNAP_WALLS},
-  {p:[0,3,0],rots:[0],accept:SNAP_ROOFS}];
-CAT.halfwall.sockets=[
-  {p:[0,1.5,0],rots:[0],accept:WALL_LIKE},
-  {p:[4,0,0],rots:[0],accept:SNAP_WALLS},{p:[-4,0,0],rots:[0],accept:SNAP_WALLS}];
-CAT.pillar.sockets=[{p:[0,3,0],rots:[0],accept:SNAP_FLOORS}];
-CAT.pillar2.sockets=[{p:[0,5,0],rots:[0],accept:SNAP_FLOORS}];
-CAT.pillar3.sockets=[{p:[0,7,0],rots:[0],accept:SNAP_FLOORS}];
-CAT.beam.sockets=[{p:[4,0,0],rots:[0],accept:['beam']},{p:[-4,0,0],rots:[0],accept:['beam']}];
-/* roofs chain to each other so multi-tile roofs are buildable (they already snap onto wall tops) */
-CAT.roof45.sockets=[
-  {p:[4,0,0], rots:[0], accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},  // tile sideways along the ridge
-  {p:[0,0,4], rots:[0], accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];  // extend the slope front/back
-CAT.roofcorner.sockets=[
-  {p:[2,0,0],rots:[1],accept:SNAP_ROOFS},{p:[-2,0,0],rots:[1],accept:SNAP_ROOFS},
-  {p:[0,0,2],rots:[0],accept:SNAP_ROOFS},{p:[0,0,-2],rots:[0],accept:SNAP_ROOFS}];
-CAT.dome.sockets=[
-  {p:[4,0,0],rots:[0],accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},
-  {p:[0,0,4],rots:[0],accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];
-/* flat roof slab — mirrors the floor: walls snap to its top-face edges (second story),
-   and it tiles edge-to-edge with other roofs to cover a multi-tile building */
-CAT.flatroof.sockets=[
-  {p:[2,0,0], rots:[1], accept:SNAP_WALLS},{p:[-2,0,0],rots:[1],accept:SNAP_WALLS},  // second-story walls on the slab edges
-  {p:[0,0,2], rots:[0], accept:SNAP_WALLS},{p:[0,0,-2],rots:[0],accept:SNAP_WALLS},
-  {p:[4,0,0], rots:[0], accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},  // tile the flat roof across the building
-  {p:[0,0,4], rots:[0], accept:SNAP_ROOFS},{p:[0,0,-4],rots:[0],accept:SNAP_ROOFS}];
+/* RAMP_ANG, CAT (with sockets), SNAP_* sets, build-rule constants:
+   imported from shared/catalog.js + shared/constants.js */
 
-const MAX_STRUCT=400;
-const SEA_Y=0;            // Pelagos sea level (water planets)
-const GRID=4;
-const SAFE_R=32;          // PvP-free radius around a Colony Beacon
-const HP_MAX=100;
-const SPAWN_PROT=4;       // seconds of spawn protection
-
-/* ---------- weapons (viewmodels built from primitives) ---------- */
-/* slot 0 = mining tool (default). melee uses arc; ranged is hitscan. */
-const WEAPONS={
-  tool:  {slot:0, name:'Mining Tool'},
-  blade: {slot:1, name:'Energy Blade', melee:true, dmg:34, range:3.4, cd:0.5,  arc:0.45},
-  pistol:{slot:2, name:'Blaster Pistol', dmg:20, range:65, cd:0.33, ammo:'light', col:0xffd060},
-  rifle: {slot:3, name:'Pulse Rifle', dmg:14, range:85, cd:0.12, ammo:'heavy', col:0x7fff9a},
-  lance: {slot:4, name:'Lance Beam', dmg:90, range:220, cd:1.6, ammo:'heavy', ammoUse:3, col:0xb060ff, lance:true, scope:50},
-  inferno:{slot:5, name:'Inferno Thrower', cone:true, dmg:6, range:11, coneCos:0.86, cd:0.05, ammo:'fuel', col:0xff7020},
-  grenade:{slot:6, name:'Plasma Grenade', thrown:'grenade', ammo:'nade'},
-  shield:{slot:7, name:'Deployable Shield', thrown:'shield', owned:true},
-};
-const SLOT_KEYS=['tool','blade','pistol','rifle','lance','inferno','grenade','shield'];
-const SLOT_ICONS=['⛏','╱','┍','╤','➹','♨','✸','⬡'];
-const AMMO_NAMES={light:'Light Cells',heavy:'Heavy Cells',fuel:'Fuel',nade:'Plasma Grenades'};
+/* WEAPONS / SLOT_KEYS / SLOT_ICONS / AMMO_NAMES imported from shared/tiers.js */
 /* ---------- Armory craft recipes ---------- */
-const CRAFT={
-  blade:  {kind:'weapon', name:'Energy Blade',   ic:'╱', cost:{fe:15},        tier:1, desc:'Melee · no ammo'},
-  pistol: {kind:'weapon', name:'Blaster Pistol', ic:'┍', cost:{fe:30,cy:10},  tier:2, desc:'Uses Light Cells'},
-  rifle:  {kind:'weapon', name:'Pulse Rifle',    ic:'╤', cost:{fe:50,cy:25},  tier:3, desc:'Uses Heavy Cells'},
-  light:  {kind:'ammo',   name:'Light Cells ×20',ic:'▪', cost:{fe:8},          give:20, ammo:'light', tier:1},
-  heavy:  {kind:'ammo',   name:'Heavy Cells ×20',ic:'▫', cost:{fe:10,cy:6},    give:20, ammo:'heavy', tier:2},
-  medpack:{kind:'med',    name:'Med-Pack (+50 HP)',ic:'+', cost:{cy:10}, costT3:{cy:6,bio:3}, tier:1, desc:'Heals 50'},
-  /* ---- Chitin recipes (Phase 4): hunting pays off ---- */
-  medChit:{kind:'med',    name:'Chitin Med-Pack',  ic:'✚', cost:{ch:6},        tier:1, desc:'Heals 50 · cheaper from hunting'},
-  lightC: {kind:'ammo',   name:'Light Cells ×24',  ic:'▪', cost:{ch:5},        give:24, ammo:'light', tier:1, desc:'From Chitin'},
-  heavyC: {kind:'ammo',   name:'Heavy Cells ×24',  ic:'▫', cost:{fe:6,ch:6},    give:24, ammo:'heavy', tier:2, desc:'From Chitin'},
-  /* ---- Heavy ordnance (Phase 5) ---- */
-  grenade:{kind:'throwable',name:'Plasma Grenade ×3',ic:'✸', cost:{fe:12,ch:8}, give:3, own:'grenade', ammo:'nade', tier:2, desc:'3s fuse AoE · throw arc · no structure dmg'},
-  shield: {kind:'gadget',  name:'Deployable Shield', ic:'⬡', cost:{fe:45,cy:30}, own:'shield', tier:3, desc:'Throw an energy wall — blocks shots 20s'},
-  lance:  {kind:'weapon',  name:'Lance Beam',        ic:'➹', cost:{fe:80,cy:60,bio:20}, tier:4, desc:'Sniper hitscan · scope · 3 Heavy Cells/shot'},
-  inferno:{kind:'weapon',  name:'Inferno Thrower',   ic:'♨', cost:{fe:90,bio:40,ch:25}, tier:5, desc:'Short-range cone · burns Fuel'},
-  fuel:   {kind:'ammo',    name:'Fuel ×90',          ic:'⛽', cost:{fe:10,bio:6}, give:90, ammo:'fuel', tier:5, desc:'Inferno fuel'},
-};
+/* CRAFT imported from shared/tiers.js */
 function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 
 /* ============================================================
-   ORBITAL STATION (Phase 7) — built in EVA near Rust at Tier 5.
-   Pieces snap to 3D sockets on the core and on each other. `out`
-   = sockets a piece exposes (local offset p + outward dir d); a
-   piece's origin connects INTO the socket it was placed on, body
-   extends along +Z. Costs are steep (all planet resources + pearls).
+   ORBITAL STATION (Phase 7) — data imported from shared/catalog.js;
+   THREE.Vector3 forms hydrated here from the pure arrays.
    ============================================================ */
-const STATION={
-  corridor:{name:'Corridor Tube', ic:'▭', cost:{fe:40,cy:20},
-    parts:[{g:'cyl',m:'metal',o:[0,0,2.5],s:[1.5,5,1.5],r:[Math.PI/2,0,0]},
-           {g:'torus',m:'emisC',o:[0,0,0.15],s:[1.6,1.6,1.6]},{g:'torus',m:'emisC',o:[0,0,4.85],s:[1.6,1.6,1.6]}],
-    out:[{p:[0,0,5],d:[0,0,1]}]},
-  habitat:{name:'Habitat Module', ic:'⬢', cost:{fe:80,cy:50,bio:20,pe:8},
-    parts:[{g:'cyl',m:'metal',o:[0,0,2],s:[4.4,4,4.4],r:[Math.PI/2,0,0]},
-           {g:'cyl',m:'dark',o:[0,0,2],s:[4.7,1.0,4.7],r:[Math.PI/2,0,0]},
-           {g:'box',m:'glass',o:[0,2.05,2],s:[1.5,0.6,1.7]},{g:'torus',m:'emisC',o:[0,0,0.15],s:[4.4,4.4,4.4]}],
-    out:[{p:[0,0,4],d:[0,0,1]},{p:[2.2,0,2],d:[1,0,0]},{p:[-2.2,0,2],d:[-1,0,0]},{p:[0,2.2,2],d:[0,1,0]},{p:[0,-2.2,2],d:[0,-1,0]}]},
-  solar:{name:'Solar Wing', ic:'❉', cost:{fe:50,cy:30,pe:5},
-    parts:[{g:'cyl',m:'metal',o:[0,0,1],s:[0.3,2,0.3],r:[Math.PI/2,0,0]},
-           {g:'box',m:'solar',o:[0,0,2.4],s:[6.5,0.1,2.8]},{g:'box',m:'dark',o:[0,0,2.4],s:[0.2,0.14,2.8]}],
-    out:[]},
-  dome:{name:'Observation Dome', ic:'◓', cost:{fe:40,cy:40,bio:15,pe:6},
-    parts:[{g:'dome',m:'glass',o:[0,0,0.2],s:[2.4,2.4,2.4],r:[-Math.PI/2,0,0]},
-           {g:'torus',m:'metal',o:[0,0,0.15],s:[4.6,4.6,4.6]},{g:'sphere',m:'emisC',o:[0,0,1.4],s:[0.3,0.3,0.3]}],
-    out:[]},
-  dock:{name:'Docking Ring', ic:'◎', cost:{fe:60,cy:30,ch:20,pe:6},
-    parts:[{g:'torus',m:'metal',o:[0,0,1],s:[5,5,5]},{g:'cyl',m:'dark',o:[0,0,1],s:[3,2,3],r:[Math.PI/2,0,0]},
-           {g:'torus',m:'emisG',o:[0,0,1.9],s:[5,5,5]}],
-    out:[{p:[0,0,2.6],d:[0,0,1]}]},
-  comms:{name:'Comms Dish', ic:'☄', cost:{fe:50,cy:25,bio:20,pe:5},
-    parts:[{g:'cyl',m:'metal',o:[0,0,1],s:[0.3,2,0.3],r:[Math.PI/2,0,0]},
-           {g:'cone',m:'metal',o:[0,0,2.5],s:[3,1.4,3],r:[-Math.PI/2,0,0]},{g:'sphere',m:'emisR',o:[0,0,2.0],s:[0.32,0.32,0.32]}],
-    out:[]},
-};
-const STATION_KEYS=['corridor','habitat','solar','dome','dock','comms'];
-const STATION_POS=new THREE.Vector3(330,40,30);     // orbit near Rust [260,6,60]
-const CORE_R=7;
-const CORE_DIRS=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].map(d=>new THREE.Vector3(d[0],d[1],d[2]));
-const STATION_MAX=60;
-const STATION_MIN_PIECES=10;
+const STATION_POS=new THREE.Vector3(...STATION_POS_ARR);   // orbit near Rust
+const CORE_DIRS=CORE_DIRS_ARR.map(d=>new THREE.Vector3(d[0],d[1],d[2]));
 
 /* ---------- game state ---------- */
 const S={
@@ -344,8 +76,7 @@ const S={
   weapons:{blade:false,pistol:false,rifle:false,lance:false,inferno:false,grenade:false,shield:false},  // owned
   ammo:{light:0,heavy:0,fuel:0,nade:0}, medkits:0, slot:0, headbob:true,
 };
-const WEP_KEYS=['blade','pistol','rifle','lance','inferno','grenade','shield'];
-const AMMO_KEYS=['light','heavy','fuel','nade'];
+/* WEP_KEYS / AMMO_KEYS imported from shared/tiers.js */
 function readWeapons(w){ w=w||{}; const o={}; for(const k of WEP_KEYS) o[k]=!!w[k]; return o; }
 function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.max(0,a[k]|0); return o; }
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
@@ -1091,30 +822,10 @@ function sendPU(){
 /* ============================================================
    SURFACE SCENE (rebuilt per landing)
    ============================================================ */
-const WORLD_R=380;
+/* WORLD_R imported from shared/constants.js; terrainH/terrainHWater from
+   shared/world.js — same deterministic heightfield on client and server */
 let surf={built:false, planet:null, terrain:null, group:null, nodes:[], nodeMesh:null,
           shipPos:new THREE.Vector3(), domes:[], glows:[], dirLight:null, water:null};
-
-function terrainH(x,z,p){
-  if(p.water) return terrainHWater(x,z,p);
-  const d=Math.hypot(x,z);
-  let h=(fbm(x*0.012,z*0.012,p.seed)-0.45)*p.amp*2.2;
-  h+=(fbm(x*0.05,z*0.05,p.seed+31)-0.5)*2.6;
-  const flat=clamp((d-22)/60,0,1);
-  h*=0.1+0.9*flat;
-  if(d>300) h+=(d-300)*0.09;
-  return h;
-}
-/* archipelago seabed: mostly below SEA_Y with scattered island peaks + a
-   guaranteed central spawn island. Pearl nodes sit on the outer islands. */
-function terrainHWater(x,z,p){
-  const d=Math.hypot(x,z);
-  let h=(fbm(x*0.0105,z*0.0105,p.seed)-0.52)*46;      // big island blobs (>0 ⇒ land)
-  h+=(fbm(x*0.052,z*0.052,p.seed+11)-0.5)*3.0;        // shore detail
-  h=Math.max(h, 7 - d*0.3);                            // central spawn island (~r24)
-  if(d>320) h-=(d-320)*0.06;                           // deep ocean toward the edge
-  return h;
-}
 function curP(){ return PLANETS[S.planet]; }
 function isDeepWater(x,z){ return curP().water && terrainH(x,z,curP()) < SEA_Y-1.6; }
 function updateWater(){
@@ -1367,44 +1078,13 @@ function rebuildAux(){
 }
 function structCount(){ return S.structures.length; }
 function crateCount(){ return S.structures.filter(s=>s.t==='crate'&&s.hp>0).length; }
-function carryCap(){ return 300+150*crateCount(); }
+function carryCap(){ return R.carryCap(S.structures); }
 function updateCapNote(){ $('capNote').textContent='CARRY CAP '+carryCap()+' / RESOURCE · PIECES '+structCount()+'/'+MAX_STRUCT; }
 
 /* ---------- player collision vs structures ---------- */
 const PR=0.35;           // player body radius
 const _loc={lx:0,lz:0,c:1,s:0};
-const COLLIDERS={
-  wall:   {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
-  window: {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
-  door:   {door:true,h:3,step:0.3},
-  crate:  {boxes:[{cx:0,hx:0.8,hz:0.8}],h:1.2,step:0.55},
-  ramp:   {ramp:true},
-  shieldgen:{r:1.55,h:1.7},
-  armory: {boxes:[{cx:0,hx:1.35,hz:0.72}],h:1.5,step:0.6},
-  turret: {r:0.8,h:1.6},
-  beacon: {r:1.4,h:5},
-  lightpole:{r:0.22,h:3},
-  relay:  {r:0.35,h:2.4},
-  flag:   {r:0.14,h:2.5},
-  planter:{r:0.5,h:1.0},
-  holosign:{r:0.18,h:1.9},
-  lampR:  {r:0.18,h:1.25},
-  lampG:  {r:0.18,h:1.25},
-  lampB:  {r:0.18,h:1.25},
-  table:  {r:0.8,h:1.0},
-  antenna:{r:0.15,h:3.2},
-  bed:    {boxes:[{cx:0,hx:0.7,hz:1.3}],h:0.7,step:0.5},
-  console:{boxes:[{cx:0,hx:0.8,hz:0.35}],h:1.1,step:0.6},
-  locker: {r:0.5,h:2.2},
-  chair:  {r:0.4,h:0.9},
-  railing:{boxes:[{cx:0,hx:2,hz:0.06}],h:1.1,step:0.3},
-  foundation:{boxes:[{cx:0,hx:2,hz:2}],h:1,step:0.45},
-  halfwall:{boxes:[{cx:0,hx:2,hz:0.16}],h:1.5,step:0.3},
-  pillar:  {r:0.55,h:3},
-  pillar2: {r:0.55,h:5},
-  pillar3: {r:0.55,h:7},
-  beam:    {boxes:[{cx:0,hx:2,hz:0.16}],h:0.3,step:0.3},
-};
+/* COLLIDERS (collision data) imported from shared/catalog.js */
 function doorBoxes(st){
   const b=[{cx:1.45,hx:0.56,hz:0.16},{cx:-1.45,hx:0.56,hz:0.16}];
   if((st.open||0)<0.5) b.push({cx:0,hx:0.9,hz:0.12});
@@ -1531,7 +1211,7 @@ const tool=new THREE.Group();
 }
 surfScene.add(camera);
 
-function o2Max(){ return S.tier>=5?240:(S.tier>=2?160:100); }
+function o2Max(){ return R.o2Max(S.tier); }
 function shipNearbyOnSurface(){
   const dx=player.x-surf.shipPos.x, dz=player.z-surf.shipPos.z;
   return dx*dx+dz*dz<400;
@@ -1630,8 +1310,8 @@ const snapMarker=new THREE.Mesh(new THREE.TorusGeometry(0.55,0.09,6,18),
 snapMarker.rotation.x=-Math.PI/2; snapMarker.visible=false; snapMarker.renderOrder=999;
 surfScene.add(snapMarker);
 
-function canAfford(cost){ for(const k in cost){ if(S.res[k]<cost[k]) return false; } return true; }
-function payCost(cost){ for(const k in cost){ S.res[k]=Math.max(0,S.res[k]-cost[k]); } updateHUDRes(); }
+function canAfford(cost){ return R.canAfford(S.res,cost); }
+function payCost(cost){ R.payCost(S.res,cost); updateHUDRes(); }
 function costStr(cost){ return Object.keys(cost).map(k=>cost[k]+' '+RES_NAMES[k]).join(' + '); }
 
 function selectBuild(t){
@@ -1795,7 +1475,7 @@ function applyRemovedById(id,byMe){
 function applyRemoved(st,byMe){
   const def=CAT[st.t];
   if(byMe){
-    for(const k in def.cost) S.res[k]=Math.min(carryCap(),S.res[k]+Math.floor(def.cost[k]/2));
+    const rf=R.refundFor(def.cost); for(const k in rf) S.res[k]=Math.min(carryCap(),S.res[k]+rf[k]);
     updateHUDRes();
   }
   S.structures.splice(S.structures.indexOf(st),1);
@@ -1842,7 +1522,7 @@ function updateRepair(dt,interactHeld,target){
 /* ============================================================
    PAINT TOOL + BLUEPRINTS (Phase 2)
    ============================================================ */
-const PAINT_COLORS=[0xff5050,0xff9a4a,0xffd24a,0x9ee84a,0x4adf8a,0x4adfff,0x4a9aff,0x9a6aff,0xff6ad0,0xffffff,0x8fa0b0,0x2a2f38];
+/* PAINT_COLORS imported from shared/catalog.js */
 let paintMode=false, paintColor=0xff5050;
 function renderPaintGrid(){
   const g=$('paintGrid'); g.innerHTML='';
@@ -1873,7 +1553,7 @@ function applyPaint(st,col){
 function applyPaintById(id,col){ const st=S.structures.find(s=>s.id===id); if(st) applyPaint(st,col); }
 
 /* ---------- blueprints ---------- */
-const BP_KEY='starfall_blueprints_v1', BP_MAX=60;
+const BP_KEY='starfall_blueprints_v1';   /* BP_MAX imported from shared/constants.js */
 let bpSelecting=false, bpDrag=null;   // {x0,y0}
 function loadBlueprints(){ try{ return JSON.parse(localStorage.getItem(BP_KEY))||{}; }catch(e){ return {}; } }
 function saveBlueprints(b){ try{ localStorage.setItem(BP_KEY,JSON.stringify(b)); }catch(e){} }
@@ -2063,7 +1743,7 @@ function setSlot(i){
 }
 /* safe zone */
 function beaconOnPlanet(pl){ pl=pl||S.planet; for(const st of S.structures){ if(st.t==='beacon'&&st.pl===pl) return st; } return null; }
-function inSafeZone(x,z){ const b=beaconOnPlanet(S.planet); if(!b) return false; const dx=x-b.x,dz=z-b.z; return dx*dx+dz*dz<SAFE_R*SAFE_R; }
+function inSafeZone(x,z){ return R.inSafeZone(S.structures,S.planet,x,z); }
 
 /* transient visual fx (tracers, muzzle flashes) */
 const transientFx=[];
@@ -2454,7 +2134,7 @@ function renderHotbar(){
 /* ============================================================
    SENTRY TURRETS — track & shoot non-owner players
    ============================================================ */
-const TURRET_R=25, TURRET_DMG=8, TURRET_CD=1.0;
+/* TURRET_* imported from shared/constants.js */
 function structMatrixHead(st,part,out,yawAbs){
   _e.set(0,yawAbs,0); _q.setFromEuler(_e);
   _m1.compose(_v.set(st.x,st.y,st.z),_q,_sv.set(1,1,1));
@@ -2513,22 +2193,7 @@ function updateTurrets(dt){
    Solo simulates locally; in co-op the server owns spawns/positions
    (coarse snapshots) and we interpolate, exactly like remote players.
    ============================================================ */
-const CRITTERS={
-  /* off = body-centre height above ground; ch = [min,max] Chitin drop */
-  skitterer:{name:'Skitterer', hp:8,  speed:5.0, fleeR:9,  off:0.35, ch:[1,2]},
-  grazer:   {name:'Grazer',    hp:14, speed:2.6, fleeR:11, off:0.70, ch:[2,4]},
-  floater:  {name:'Floater',   hp:6,  speed:3.2, fleeR:10, hover:2.2, bob:0.5, ch:[1,2]},
-  hopper:   {name:'Hopper',    hp:10, speed:4.2, fleeR:9,  off:0.45, hop:true, ch:[1,3]},
-  skimmer:  {name:'Skimmer',   hp:7,  speed:5.5, fleeR:10, hover:0.7, bob:0.22, ch:[1,2]},
-};
-/* which species roam each world — varies the palette/feel per planet */
-const CRIT_BY_PLANET={
-  rust:   ['skitterer','grazer','hopper'],
-  glacius:['skitterer','floater'],
-  verdant:['grazer','floater','hopper'],
-  pelagos:['skimmer','floater'],
-};
-const CRIT_CAP=12;
+/* CRITTERS / CRIT_BY_PLANET imported from shared/catalog.js; CRIT_CAP from shared/constants.js */
 const critters=[];                 // client entities (both solo + MP)
 let critSpawnT=3, soloCritId=1;
 
@@ -2741,7 +2406,7 @@ SND.boom=function(){ this.tone(70,0.5,'sawtooth',0.14,28); setTimeout(()=>this.t
 SND.shieldUp=function(){ [330,494,659].forEach((f,i)=>setTimeout(()=>this.tone(f,0.16,'sine',0.06),i*55)); };
 SND.shieldHit=function(){ this.tone(720,0.12,'sine',0.05,420); };
 
-const GREN_R=6, GREN_DMG=70, GREN_FUSE=3, SHIELD_LIFE=20, SHIELD_CD=22;
+/* GREN_* / SHIELD_LIFE / SHIELD_CD imported from shared/constants.js */
 let nadeCd=0, shieldCd=0, infDmgT=0, infFlameT=0, infNetT=0;
 const throwables=[];     // {kind,mesh,x,y,z,vx,vy,vz,fuse,owned,yaw0}
 const shieldWalls=[];    // {x,y,z,yaw,hw,h,t,owned,mesh}
@@ -2962,7 +2627,7 @@ function primaryDown(){
 /* ============================================================
    DAY / NIGHT CYCLE (Phase 3) — shared ~10 min cycle per planet
    ============================================================ */
-const CYCLE_S=600;
+/* CYCLE_S imported from shared/constants.js */
 let dayClock=300;                 // seconds; start near noon (tod 0.5)
 const dnBaseFog=new THREE.Color(), dnBaseSky=new THREE.Color();
 const _ngSky=new THREE.Color(0x05070d), _ngFog=new THREE.Color(0x080c16);
@@ -2975,7 +2640,7 @@ let surfStars=null;
   surfStars=new THREE.Points(g,new THREE.PointsMaterial({color:0xcfe0ff,size:2,sizeAttenuation:false,transparent:true,opacity:0,depthWrite:false}));
   surfStars.frustumCulled=false; surfScene.add(surfStars);
 })();
-function todNow(){ return (((dayClock%CYCLE_S)+CYCLE_S)%CYCLE_S)/CYCLE_S; }
+function todNow(){ return R.todOf(dayClock); }
 function meteorActiveNow(){
   if(NET.active){ const m=NET.meteor[S.planet]; return !!(m&&m.phase&&m.phase!=='idle'); }
   return meteorState.phase==='warning'||meteorState.phase==='active';
@@ -3611,7 +3276,7 @@ function updateCutscene(dt){
    ============================================================ */
 const _zAxis=new THREE.Vector3(0,0,1), _evf=new THREE.Vector3(), _evr=new THREE.Vector3(),
       _qa=new THREE.Quaternion(), _qb=new THREE.Quaternion(), _vst=new THREE.Vector3(), _aim=new THREE.Vector3();
-const STATION_REACH=15, STATION_SNAP=13, EVA_SPEED=14;
+/* STATION_REACH / STATION_SNAP / EVA_SPEED imported from shared/constants.js */
 let stationSel=null, stationRoll=0, stationGhost=null, stationGhostOK=false, stationSnap=null;
 let evaPos=new THREE.Vector3(), evaYaw=0, evaPitch=0;
 
@@ -3663,7 +3328,7 @@ function updateStationVisibility(){
   stationGlow.visible=vis&&S.stationOnline;
   const b=stationCore.getObjectByName('coreBeacon'); if(b) b.material=S.stationOnline?MAT.emisG:MAT.emisC;
 }
-function stationComplete(){ const types=new Set(S.station.map(p=>p.t)); return S.station.length>=STATION_MIN_PIECES && types.size>=STATION_KEYS.length; }
+function stationComplete(){ return R.stationComplete(S.station); }
 function checkStationComplete(){
   if(!S.stationOnline && stationComplete()){ S.stationOnline=true; stationOnlineCelebration(); saveGame(); }
   updateStationVisibility();
