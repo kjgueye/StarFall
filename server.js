@@ -5,12 +5,12 @@
    PROTOCOL (JSON frames, server is authoritative for shared-world objects):
    client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
      place{st}, remove{id}, repair{id}, mine{pl,i},
-     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, died{by,pos,loot}, lootClaim{id},
+     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, nade{o,v}, shield{o,v}, died{by,pos,loot}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
    server->client: welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats}},
      err, pjoin, pleave, pu, placed, removed, hp, destroyed,
      nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
-     fire, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
+     fire, nade, shield, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
      lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
    Damage is client-authoritative (victim applies); loot containers,
    turret ownership and rover seats are server-authoritative.
@@ -314,6 +314,14 @@ function handle(ws, m) {
     /* ---- combat (client-authoritative damage; server relays) ---- */
     case 'fire': {
       bcast(room, { t: 'fire', by: ws.pid, wp: m.wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
+      return;
+    }
+    case 'nade': {
+      bcast(room, { t: 'nade', by: ws.pid, o: m.o, v: m.v }, ws.pid);
+      return;
+    }
+    case 'shield': {
+      bcast(room, { t: 'shield', by: ws.pid, o: m.o, v: m.v }, ws.pid);
       return;
     }
     case 'critHit': {

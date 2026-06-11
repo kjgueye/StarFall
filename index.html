@@ -137,7 +137,10 @@
   /* ---------- Combat / weapons ---------- */
   #hpbar { background:linear-gradient(90deg,#ff5060,#ff9aa6); }
   #hpbar.low { animation:o2flash .5s infinite alternate; }
-  #hotbar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:7px; z-index:22; pointer-events:auto; }
+  #hotbar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:7px; z-index:22; pointer-events:auto;
+    flex-wrap:wrap; justify-content:center; max-width:96vw; }
+  body.touch #hotbar { gap:5px; bottom:12px; }
+  body.touch .slot, body.touch #medSlot { width:42px; height:42px; font-size:18px; }
   .slot { width:50px; height:50px; border:1px solid rgba(110,210,250,0.45); background:rgba(8,22,34,0.72); display:flex;
     align-items:center; justify-content:center; position:relative; cursor:pointer; color:#bfe6f6; font-size:21px; }
   .slot.sel { border-color:#7fefff; box-shadow:0 0 12px rgba(80,220,255,0.55); background:rgba(22,64,94,0.8); }
@@ -607,9 +610,14 @@ const WEAPONS={
   blade: {slot:1, name:'Energy Blade', melee:true, dmg:34, range:3.4, cd:0.5,  arc:0.45},
   pistol:{slot:2, name:'Blaster Pistol', dmg:20, range:65, cd:0.33, ammo:'light', col:0xffd060},
   rifle: {slot:3, name:'Pulse Rifle', dmg:14, range:85, cd:0.12, ammo:'heavy', col:0x7fff9a},
+  lance: {slot:4, name:'Lance Beam', dmg:90, range:220, cd:1.6, ammo:'heavy', ammoUse:3, col:0xb060ff, lance:true, scope:50},
+  inferno:{slot:5, name:'Inferno Thrower', cone:true, dmg:6, range:11, coneCos:0.86, cd:0.05, ammo:'fuel', col:0xff7020},
+  grenade:{slot:6, name:'Plasma Grenade', thrown:'grenade', ammo:'nade'},
+  shield:{slot:7, name:'Deployable Shield', thrown:'shield', owned:true},
 };
-const SLOT_KEYS=['tool','blade','pistol','rifle'];
-const AMMO_NAMES={light:'Light Cells',heavy:'Heavy Cells'};
+const SLOT_KEYS=['tool','blade','pistol','rifle','lance','inferno','grenade','shield'];
+const SLOT_ICONS=['⛏','╱','┍','╤','➹','♨','✸','⬡'];
+const AMMO_NAMES={light:'Light Cells',heavy:'Heavy Cells',fuel:'Fuel',nade:'Plasma Grenades'};
 /* ---------- Armory craft recipes ---------- */
 const CRAFT={
   blade:  {kind:'weapon', name:'Energy Blade',   ic:'╱', cost:{fe:15},        tier:1, desc:'Melee · no ammo'},
@@ -622,6 +630,12 @@ const CRAFT={
   medChit:{kind:'med',    name:'Chitin Med-Pack',  ic:'✚', cost:{ch:6},        tier:1, desc:'Heals 50 · cheaper from hunting'},
   lightC: {kind:'ammo',   name:'Light Cells ×24',  ic:'▪', cost:{ch:5},        give:24, ammo:'light', tier:1, desc:'From Chitin'},
   heavyC: {kind:'ammo',   name:'Heavy Cells ×24',  ic:'▫', cost:{fe:6,ch:6},    give:24, ammo:'heavy', tier:2, desc:'From Chitin'},
+  /* ---- Heavy ordnance (Phase 5) ---- */
+  grenade:{kind:'throwable',name:'Plasma Grenade ×3',ic:'✸', cost:{fe:12,ch:8}, give:3, own:'grenade', ammo:'nade', tier:2, desc:'3s fuse AoE · throw arc · no structure dmg'},
+  shield: {kind:'gadget',  name:'Deployable Shield', ic:'⬡', cost:{fe:45,cy:30}, own:'shield', tier:3, desc:'Throw an energy wall — blocks shots 20s'},
+  lance:  {kind:'weapon',  name:'Lance Beam',        ic:'➹', cost:{fe:80,cy:60,bio:20}, tier:4, desc:'Sniper hitscan · scope · 3 Heavy Cells/shot'},
+  inferno:{kind:'weapon',  name:'Inferno Thrower',   ic:'♨', cost:{fe:90,bio:40,ch:25}, tier:5, desc:'Short-range cone · burns Fuel'},
+  fuel:   {kind:'ammo',    name:'Fuel ×90',          ic:'⛽', cost:{fe:10,bio:6}, give:90, ammo:'fuel', tier:5, desc:'Inferno fuel'},
 };
 function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 
@@ -634,9 +648,15 @@ const S={
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingVerdantCutscene:false,
-  weapons:{blade:false,pistol:false,rifle:false},  // owned
-  ammo:{light:0,heavy:0}, medkits:0, slot:0, headbob:true,
+  weapons:{blade:false,pistol:false,rifle:false,lance:false,inferno:false,grenade:false,shield:false},  // owned
+  ammo:{light:0,heavy:0,fuel:0,nade:0}, medkits:0, slot:0, headbob:true,
 };
+const WEP_KEYS=['blade','pistol','rifle','lance','inferno','grenade','shield'];
+const AMMO_KEYS=['light','heavy','fuel','nade'];
+function readWeapons(w){ w=w||{}; const o={}; for(const k of WEP_KEYS) o[k]=!!w[k]; return o; }
+function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.max(0,a[k]|0); return o; }
+function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
+function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='starfall_save_v1';
 const SAVE_VER=4;
 const MP_WORLD_KEY='starfall_mp_world_v1';
@@ -724,6 +744,8 @@ function netHandle(m){
     case 'clock': if(typeof m.tod==='number') dayClock=m.tod*CYCLE_S; break;
     case 'critSnap': applyCritSnap(m.pl,m.crit||[]); break;
     case 'critDead': onCritDead(m); break;
+    case 'nade': onRemoteNade(m); break;
+    case 'shield': onRemoteShield(m); break;
   }
 }
 /* chat / system message overlay (also used by Phase 5) */
@@ -847,8 +869,8 @@ function buildSaveObj(){
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
     pvc:!!S.pendingVerdantCutscene, sound:SND.on,
-    weapons:{blade:!!S.weapons.blade,pistol:!!S.weapons.pistol,rifle:!!S.weapons.rifle},
-    ammo:{light:S.ammo.light|0,heavy:S.ammo.heavy|0}, medkits:S.medkits|0, headbob:S.headbob!==false};
+    weapons:saveWeapons(),
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false};
 }
 function saveGame(){
   if(!S.running) return;
@@ -859,8 +881,8 @@ function saveMP(){
   try{
     localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
       res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
-      weapons:{blade:!!S.weapons.blade,pistol:!!S.weapons.pistol,rifle:!!S.weapons.rifle},
-      ammo:{light:S.ammo.light|0,heavy:S.ammo.heavy|0}, medkits:S.medkits|0, headbob:S.headbob!==false}));
+      weapons:saveWeapons(),
+      ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false}));
     if(NET.isHost){
       localStorage.setItem(MP_WORLD_KEY,JSON.stringify({v:1,worldId:NET.worldId,savedAt:Date.now(),beacon:!!S.beacon,
         structures:S.structures.map(structSave)}));
@@ -872,7 +894,6 @@ function parseSave(json){
     const d=JSON.parse(json);
     /* migration: accept v1 (pre-combat) and v2; default missing fields */
     if(!d||typeof d.v!=='number'||d.v<1||d.v>SAVE_VER||typeof d.tier!=='number') return null;
-    const w=d.weapons||{}, am=d.ammo||{};
     const out={
       tier:clamp(d.tier|0,1,4),
       res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0),ch:Math.max(0,d.res&&d.res.ch|0||0)},
@@ -885,8 +906,8 @@ function parseSave(json){
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown, pvc:!!d.pvc,
       sound:d.sound!==false,
-      weapons:{blade:!!w.blade,pistol:!!w.pistol,rifle:!!w.rifle},
-      ammo:{light:Math.max(0,am.light|0),heavy:Math.max(0,am.heavy|0)},
+      weapons:readWeapons(d.weapons),
+      ammo:readAmmo(d.ammo),
       medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
@@ -2211,7 +2232,31 @@ function buildWeaponVMs(){
   const rsc=new THREE.Mesh(GEO.box,MAT.metal); rsc.scale.set(0.04,0.06,0.12); rsc.position.set(0,0.08,-0.05); rifle.add(rsc);
   const rmz=new THREE.Mesh(GEO.sphere,emisMat(0x7fff9a,0x10cc44,1.9)); rmz.scale.set(0.04,0.04,0.04); rmz.position.set(0,0,-0.52); rmz.name='muz'; rifle.add(rmz);
   rifle.position.set(0.28,-0.25,-0.4); weaponVM.rifle=rifle;
-  for(const g of [blade,pistol,rifle]){ g.visible=false; camera.add(g); }
+  /* Lance Beam — long sniper rail with scope + emitter */
+  const lance=new THREE.Group();
+  const lbd=new THREE.Mesh(GEO.box,MAT.dark); lbd.scale.set(0.07,0.1,0.62); lbd.position.set(0,-0.02,-0.18); lance.add(lbd);
+  const lrail=new THREE.Mesh(GEO.cyl,MAT.metal); lrail.scale.set(0.028,0.6,0.028); lrail.rotation.x=Math.PI/2; lrail.position.set(0,0.04,-0.4); lance.add(lrail);
+  const lsc=new THREE.Mesh(GEO.box,MAT.dark); lsc.scale.set(0.05,0.07,0.18); lsc.position.set(0,0.1,-0.06); lance.add(lsc);
+  const lmz=new THREE.Mesh(GEO.sphere,emisMat(0xb060ff,0x6010aa,1.9)); lmz.scale.set(0.05,0.05,0.05); lmz.position.set(0,0.04,-0.7); lmz.name='muz'; lance.add(lmz);
+  lance.position.set(0.27,-0.24,-0.38); weaponVM.lance=lance;
+  /* Inferno Thrower — bulky nozzle + tank */
+  const inferno=new THREE.Group();
+  const ibd=new THREE.Mesh(GEO.box,MAT.dark); ibd.scale.set(0.1,0.12,0.4); ibd.position.set(0,-0.02,-0.1); inferno.add(ibd);
+  const inoz=new THREE.Mesh(GEO.cyl,MAT.metal); inoz.scale.set(0.06,0.3,0.06); inoz.rotation.x=Math.PI/2; inoz.position.set(0,0,-0.34); inferno.add(inoz);
+  const itank=new THREE.Mesh(GEO.cyl,stdMat(0xb5481f,{roughness:0.6,metalness:0.4})); itank.scale.set(0.09,0.26,0.09); itank.position.set(-0.02,-0.12,0.06); inferno.add(itank);
+  const ipilot=new THREE.Mesh(GEO.sphere,emisMat(0xff7020,0xcc3000,2.0)); ipilot.scale.set(0.04,0.04,0.04); ipilot.position.set(0,0.03,-0.5); ipilot.name='muz'; inferno.add(ipilot);
+  inferno.position.set(0.28,-0.26,-0.4); weaponVM.inferno=inferno;
+  /* Plasma Grenade in hand */
+  const gren=new THREE.Group();
+  const gb=new THREE.Mesh(GEO.sphere,stdMat(0x355a3a,{roughness:0.5,metalness:0.4})); gb.scale.set(0.09,0.11,0.09); gren.add(gb);
+  const gr1=new THREE.Mesh(GEO.cyl,emisMat(0x7fff9a,0x20cc55,1.8)); gr1.scale.set(0.1,0.03,0.1); gr1.position.y=0.02; gren.add(gr1);
+  gren.position.set(0.3,-0.32,-0.4); weaponVM.grenade=gren;
+  /* Deployable Shield disc in hand */
+  const shd=new THREE.Group();
+  const sdisc=new THREE.Mesh(GEO.cyl,stdMat(0x3a5a72,{roughness:0.4,metalness:0.6})); sdisc.scale.set(0.16,0.05,0.16); sdisc.rotation.x=Math.PI/2; shd.add(sdisc);
+  const score=new THREE.Mesh(GEO.sphere,emisMat(0x7fdcff,0x1080cc,1.8)); score.scale.set(0.06,0.06,0.06); score.position.z=-0.03; shd.add(score);
+  shd.position.set(0.3,-0.3,-0.42); weaponVM.shield=shd;
+  for(const g of [blade,pistol,rifle,lance,inferno,gren,shd]){ g.visible=false; camera.add(g); }
 }
 buildWeaponVMs();
 function curWeapon(){ return WEAPONS[SLOT_KEYS[S.slot]]; }
@@ -2219,12 +2264,10 @@ function ownsSlot(i){ const k=SLOT_KEYS[i]; return i===0 || !!S.weapons[k]; }
 function updateViewmodel(){
   const surf2=S.mode==='surface'&&!driving;
   tool.visible=(S.slot===0&&surf2);
-  weaponVM.blade.visible=(S.slot===1&&surf2);
-  weaponVM.pistol.visible=(S.slot===2&&surf2);
-  weaponVM.rifle.visible=(S.slot===3&&surf2);
+  for(const k of WEP_KEYS){ if(weaponVM[k]) weaponVM[k].visible=(SLOT_KEYS[S.slot]===k&&surf2); }
 }
 function setSlot(i){
-  if(i<0||i>3) return;
+  if(i<0||i>=SLOT_KEYS.length) return;
   if(!ownsSlot(i)){ showToast(WEAPONS[SLOT_KEYS[i]].name+' — craft it at an Armory'); SND.denied(); return; }
   S.slot=i; updateViewmodel(); renderHotbar(); SND.blip();
 }
@@ -2245,12 +2288,12 @@ function updateFx(dt){
 }
 const _cw=new THREE.Vector3(), _cf=new THREE.Vector3();
 function camWorld(){ camera.getWorldPosition(_cw); camera.getWorldDirection(_cf); }
-function tracerFx(a,b,col){
+function tracerFx(a,b,col,width){
   const len=Math.hypot(b[0]-a[0],b[1]-a[1],b[2]-a[2])||0.01;
   const m=new THREE.Mesh(GEO.box,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
   m.position.set((a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2);
-  m.scale.set(0.05,0.05,len); m.lookAt(b[0],b[1],b[2]);
-  pushFx(m,0.08,0.9);
+  const wd=width||0.05; m.scale.set(wd,wd,len); m.lookAt(b[0],b[1],b[2]);
+  pushFx(m,width?0.16:0.08,0.9);
 }
 function muzzleFlash(col){
   camWorld();
@@ -2262,19 +2305,19 @@ function muzzleFlash(col){
 function aimPoint(dist){ camWorld(); return [_cw.x+_cf.x*dist,_cw.y+_cf.y*dist,_cw.z+_cf.z*dist]; }
 function avatarHitCenter(r){ return [r.avatar.position.x,r.avatar.position.y+1,r.avatar.position.z]; }
 function fireWeapon(){
-  if(weaponCd>0||driving||S.mode!=='surface') return;
+  if(driving||S.mode!=='surface') return;
   const w=curWeapon();
-  if(w.melee){
-    weaponCd=w.cd; swingT=0.26; SND.swing();
-    doAttack(w,1,'melee');
-  } else {
-    if(S.ammo[w.ammo]<=0){ SND.denied(); showToast('Out of '+AMMO_NAMES[w.ammo]); weaponCd=0.3; renderHotbar(); return; }
-    S.ammo[w.ammo]--; weaponCd=w.cd;
-    (w.ammo==='heavy'?SND.shootHvy:SND.shoot).call(SND);
-    muzzleFlash(w.col);
-    doAttack(w,S.slot,'ranged');
-    renderHotbar();
-  }
+  if(w.thrown) return;                 // grenade/shield throw on a fresh press (throwGadget)
+  if(weaponCd>0) return;
+  if(w.melee){ weaponCd=w.cd; swingT=0.26; SND.swing(); doAttack(w,S.slot,'melee'); return; }
+  if(w.cone){ fireInferno(w); return; }
+  const use=w.ammoUse||1;
+  if(S.ammo[w.ammo]<use){ SND.denied(); showToast('Out of '+AMMO_NAMES[w.ammo]); weaponCd=0.3; renderHotbar(); return; }
+  S.ammo[w.ammo]-=use; weaponCd=w.cd;
+  (w.lance?SND.lance:(w.ammo==='heavy'?SND.shootHvy:SND.shoot)).call(SND);
+  muzzleFlash(w.col);
+  doAttack(w,S.slot,'ranged');
+  renderHotbar();
 }
 function doAttack(w,wp,kind){
   camWorld();
@@ -2317,10 +2360,15 @@ function doAttack(w,wp,kind){
       hitDist=tca; critTarget=c; hitPid=null;
     }
   }
-  const end = critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
+  let end = critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
             : hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
             : (kind==='ranged' ? aimPoint(w.range) : aimPoint(w.range*0.7));
-  if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col);
+  /* deployable shield walls block ranged shots */
+  if(kind==='ranged'){
+    const b=shotBlocked([_cw.x,_cw.y,_cw.z],end);
+    if(b){ end=b; hitPid=null; critTarget=null; spawnBurst(b[0],b[1],b[2],0x7fdcff,9,2.4,2.4,0.4,2); SND.shieldHit(); }
+  }
+  if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col,w.lance?0.16:0);
   else spawnBurst(end[0],end[1],end[2],0x9feaff,5,2,2,0.3,1);
   if(hitPid!==null) spawnBurst(end[0],end[1],end[2],0xffd0a0,9,2,2,0.4,3);
   if(NET.active){
@@ -2334,9 +2382,16 @@ function muzzleAt(pos,col){
   sp.scale.set(0.6,0.6,1); sp.position.set(pos[0],pos[1],pos[2]); pushFx(sp,0.06,0.85);
 }
 function onRemoteFire(m){
-  if(!m.p) {}
-  else if(m.wp>=2){ const col=m.wp===2?0xffd060:0x7fff9a; if(m.o){ tracerFx(m.o,m.p,col); muzzleAt(m.o,col); } }
-  else { spawnBurst(m.p[0],m.p[1],m.p[2],0x9feaff,5,2,2,0.3,1); const r=remotes.get(m.by); if(r) r.swingT=0.26; }
+  if(m.p){
+    if(m.wp===5){            // inferno cone flame
+      if(m.o){ const ox=m.o[0],oy=m.o[1],oz=m.o[2], dx=m.p[0]-ox,dy=m.p[1]-oy,dz=m.p[2]-oz, d=Math.hypot(dx,dy,dz)||1;
+        for(let i=0;i<4;i++){ const sp=2+Math.random()*9; spawnBurst(ox+dx/d*sp,oy+dy/d*sp,oz+dz/d*sp,i%2?0xff7020:0xffb050,1,1.6,1.0,0.4,-1.5); } }
+    } else if(m.wp===4){     // lance beam
+      if(m.o){ tracerFx(m.o,m.p,0xb060ff,0.16); muzzleAt(m.o,0xb060ff); }
+    } else if(m.wp>=2){
+      const col=m.wp===2?0xffd060:0x7fff9a; if(m.o){ tracerFx(m.o,m.p,col); muzzleAt(m.o,col); }
+    } else { spawnBurst(m.p[0],m.p[1],m.p[2],0x9feaff,5,2,2,0.3,1); const r=remotes.get(m.by); if(r) r.swingT=0.26; }
+  }
   if(m.target===NET.pid&&m.dmg){ NET.lastHitBy=m.by; applyDamageToSelf(m.dmg); }
 }
 function openCraftMenu(){ renderCraftGrid(); openPanel('craftMenu'); }
@@ -2452,7 +2507,7 @@ function updateRover(dt){
   /* exit */
   if(justE){ exitRover(); justE=false; }
   /* world timers still run while driving */
-  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt);
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateHeavyWeapons(dt);
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
   renderRoverCam();
@@ -2543,7 +2598,7 @@ function renderCraftGrid(){
     const c=CRAFT[key];
     const cost = key==='medpack'?medCost():c.cost;
     const locked = c.tier>S.tier;
-    const owned = c.kind==='weapon'&&S.weapons[key];
+    const owned = (c.kind==='weapon'||c.kind==='gadget')&&S.weapons[c.own||key];
     const d=document.createElement('div');
     d.className='cItem'+(locked?' locked':'')+(owned?' owned':'');
     d.innerHTML='<div class="cn">'+c.ic+' '+c.name+'</div>'+(c.desc?'<div class="cd">'+c.desc+'</div>':'')+
@@ -2552,20 +2607,23 @@ function renderCraftGrid(){
     if(!locked&&!owned) d.addEventListener('click',()=>craft(key));
     grid.appendChild(d);
   };
-  sec('Weapons'); ['blade','pistol','rifle'].forEach(item);
-  sec('Ammo'); ['light','heavy','lightC','heavyC'].forEach(item);
+  sec('Weapons'); ['blade','pistol','rifle','lance','inferno'].forEach(item);
+  sec('Heavy Ordnance'); ['grenade','shield'].forEach(item);
+  sec('Ammo'); ['light','heavy','lightC','heavyC','fuel'].forEach(item);
   sec('Medical'); ['medpack','medChit'].forEach(item);
 }
 function craft(key){
   const c=CRAFT[key];
   if(c.tier>S.tier){ SND.denied(); return; }
-  if(c.kind==='weapon'&&S.weapons[key]){ showToast('Already crafted'); return; }
+  if((c.kind==='weapon'||c.kind==='gadget')&&S.weapons[c.own||key]){ showToast('Already crafted'); return; }
   const cost=key==='medpack'?medCost():c.cost;
   if(!canAfford(cost)){ SND.denied(); showToast('Need '+costStr(cost)); return; }
   payCost(cost);
   if(c.kind==='weapon'){ S.weapons[key]=true; showToast(c.name+' crafted — equip from hotbar'); }
   else if(c.kind==='ammo'){ S.ammo[c.ammo]+=c.give; showToast('+'+c.give+' '+AMMO_NAMES[c.ammo]); }
   else if(c.kind==='med'){ S.medkits++; showToast('Med-Pack crafted ('+S.medkits+')'); }
+  else if(c.kind==='throwable'){ S.weapons[c.own]=true; S.ammo[c.ammo]+=c.give; showToast('+'+c.give+' '+c.name.replace(/ ×\d+$/,'')+'s'); }
+  else if(c.kind==='gadget'){ S.weapons[c.own]=true; showToast(c.name+' crafted — equip from hotbar'); }
   SND.craft();
   renderCraftGrid(); renderHotbar(); saveGame();
 }
@@ -2579,11 +2637,11 @@ function useMed(){
 /* ---------- hotbar HUD ---------- */
 function renderHotbar(){
   const hb=$('hotbar'); hb.innerHTML='';
-  for(let i=0;i<4;i++){
+  for(let i=0;i<SLOT_KEYS.length;i++){
     const k=SLOT_KEYS[i], w=WEAPONS[k];
     const d=document.createElement('div');
     d.className='slot'+(i===S.slot?' sel':'')+(ownsSlot(i)?'':' locked');
-    const ic=['⛏','╱','┍','╤'][i];        // pick · blade · pistol · rifle (font-safe glyphs)
+    const ic=SLOT_ICONS[i];
     let amm='';
     if(w.ammo) amm='<span class="sa">'+(S.ammo[w.ammo]|0)+'</span>';
     d.innerHTML='<span class="sk">'+(i+1)+'</span><span class="si">'+ic+'</span>'+amm;
@@ -2750,15 +2808,19 @@ function startleCritters(x,z,r){
   if(NET.active) return; const r2=r*r;
   for(const c of critters){ const dx=c.x-x,dz=c.z-z; if(dx*dx+dz*dz<r2){ c.startle=Math.max(c.startle,1.8); c.state='flee'; } }
 }
-/* called by doAttack when a critter is the aim target */
-function hitCritter(c,dmg,pos){
-  spawnBurst(pos[0],pos[1],pos[2],c.poofCol||0xffd0a0,6,1.6,1.6,0.3,2);
+/* apply damage to a critter (server-authoritative in MP) — shared by gun/grenade/flame */
+function damageCritter(c,dmg){
   if(NET.active){ NET.send({t:'critHit',id:c.id,dmg}); c.startle=2; c.st=1; c.state='flee'; return; }
   c.hp-=dmg; c.startle=2.5; c.state='flee';
   if(c.hp<=0){
     const n=c.def.ch[0]+Math.floor(Math.random()*(c.def.ch[1]-c.def.ch[0]+1));
     critterPoof(c.x,c.y,c.z,c.poofCol); addChitin(n); removeCritterEntity(c.id);
   }
+}
+/* called by doAttack when a critter is the aim target */
+function hitCritter(c,dmg,pos){
+  spawnBurst(pos[0],pos[1],pos[2],c.poofCol||0xffd0a0,6,1.6,1.6,0.3,2);
+  damageCritter(c,dmg);
 }
 /* shared placement + procedural animation */
 function updateCritterMesh(c,dt,moving){
@@ -2858,6 +2920,230 @@ function soloSpawnInitial(){
   const n=Math.min(CRIT_CAP,6+Math.floor(Math.random()*3));
   for(let i=0;i<n;i++) critSpawnSolo();
   critSpawnT=4+Math.random()*6;
+}
+
+/* ============================================================
+   HEAVY WEAPONS (Phase 5) — Plasma Grenade, Deployable Shield,
+   Lance Beam, Inferno Thrower. Throwables + shield walls are
+   client-relayed (transient combat fx); damage stays client-
+   authoritative (each victim applies to itself), critters go
+   through the server like all other critter damage.
+   ============================================================ */
+SND.lance=function(){ this.tone(220,0.5,'sawtooth',0.09,1400); setTimeout(()=>this.tone(900,0.18,'square',0.05,300),30); };
+SND.flame=function(){ this.tone(120+Math.random()*60,0.16,'sawtooth',0.035,70); };
+SND.throwG=function(){ this.tone(360,0.12,'triangle',0.06,180); };
+SND.boom=function(){ this.tone(70,0.5,'sawtooth',0.14,28); setTimeout(()=>this.tone(140,0.3,'square',0.07,40),20); };
+SND.shieldUp=function(){ [330,494,659].forEach((f,i)=>setTimeout(()=>this.tone(f,0.16,'sine',0.06),i*55)); };
+SND.shieldHit=function(){ this.tone(720,0.12,'sine',0.05,420); };
+
+const GREN_R=6, GREN_DMG=70, GREN_FUSE=3, SHIELD_LIFE=20, SHIELD_CD=22;
+let nadeCd=0, shieldCd=0, infDmgT=0, infFlameT=0, infNetT=0;
+const throwables=[];     // {kind,mesh,x,y,z,vx,vy,vz,fuse,owned,yaw0}
+const shieldWalls=[];    // {x,y,z,yaw,hw,h,t,owned,mesh}
+
+/* ---- viewmodel meshes for thrown devices ---- */
+function makeGrenadeProj(){
+  const g=new THREE.Group();
+  const b=new THREE.Mesh(GEO.sphere,stdMat(0x2f5238,{roughness:0.5,metalness:0.4})); b.scale.set(0.22,0.26,0.22); g.add(b);
+  const r=new THREE.Mesh(GEO.cyl,emisMat(0x7fff9a,0x20cc55,2.0)); r.scale.set(0.26,0.06,0.26); g.add(r); g.userData.ring=r;
+  return g;
+}
+function makeShieldProj(){
+  const g=new THREE.Group();
+  const d=new THREE.Mesh(GEO.cyl,stdMat(0x3a5a72,{roughness:0.4,metalness:0.6})); d.scale.set(0.34,0.12,0.34); d.rotation.z=Math.PI/2; g.add(d);
+  const c=new THREE.Mesh(GEO.sphere,emisMat(0x7fdcff,0x1080cc,1.9)); c.scale.set(0.14,0.14,0.14); g.add(c);
+  return g;
+}
+function addThrowable(kind,o,v,owned){
+  const mesh=kind==='grenade'?makeGrenadeProj():makeShieldProj();
+  mesh.position.set(o[0],o[1],o[2]); surfScene.add(mesh);
+  throwables.push({kind,mesh,x:o[0],y:o[1],z:o[2],vx:v[0],vy:v[1],vz:v[2],fuse:GREN_FUSE,owned:!!owned,yaw0:Math.atan2(v[0],v[2])});
+}
+function removeThrowable(i){ const t=throwables[i]; if(t){ surfScene.remove(t.mesh); throwables.splice(i,1); } }
+function clearThrowables(){ for(let i=throwables.length-1;i>=0;i--) removeThrowable(i); }
+function updateThrowables(dt){
+  for(let i=throwables.length-1;i>=0;i--){
+    const t=throwables[i];
+    t.vy-=18*dt;
+    t.x+=t.vx*dt; t.y+=t.vy*dt; t.z+=t.vz*dt;
+    const gy=groundYAt(t.x,t.z,1e9);
+    if(t.y<=gy+0.22){
+      if(t.kind==='shield'){ deployShieldWall(t); removeThrowable(i); continue; }
+      t.y=gy+0.22; t.vy*=-0.4; t.vx*=0.55; t.vz*=0.55;
+      if(Math.abs(t.vy)<1.2){ t.vy=0; t.vx*=0.6; t.vz*=0.6; }
+    }
+    const r=Math.hypot(t.x,t.z); if(r>WORLD_R-2){ t.x*=(WORLD_R-2)/r; t.z*=(WORLD_R-2)/r; t.vx*=-0.4; t.vz*=-0.4; }
+    t.mesh.position.set(t.x,t.y,t.z); t.mesh.rotation.x+=dt*4; t.mesh.rotation.y+=dt*3;
+    if(t.kind==='grenade'){
+      t.fuse-=dt;
+      const blink=t.fuse<1?(Math.sin(performance.now()*0.02*(2-t.fuse))>0):true;
+      if(t.mesh.userData.ring) t.mesh.userData.ring.visible=blink;
+      if(Math.random()<dt*8) spawnBurst(t.x,t.y+0.1,t.z,0x7fff9a,1,0.6,0.6,0.3,2);
+      if(t.fuse<=0){ explodeGrenade(t); removeThrowable(i); }
+    }
+  }
+}
+function explodeGrenade(t){
+  const fl=makeGlow('#ffd070',14); fl.position.set(t.x,t.y+0.6,t.z); pushFx(fl,0.18,0.95);
+  spawnBurst(t.x,t.y+0.3,t.z,0xff8020,34,8,8,0.9,4);
+  spawnBurst(t.x,t.y+0.3,t.z,0xffe070,16,5,6,0.6,2);
+  spawnBurst(t.x,t.y+0.2,t.z,0x553028,14,5,4,1.4,2);
+  SND.boom();
+  /* players: each client applies blast to ITSELF (safe zone / invuln respected) */
+  const dx=player.x-t.x, dy=(player.y+1)-t.y, dz=player.z-t.z, d=Math.hypot(dx,dy,dz);
+  if(d<GREN_R){ const dmg=Math.round(GREN_DMG*(1-d/GREN_R)); if(dmg>0) applyDamageToSelf(dmg); }
+  /* critters: only the owner's grenade deals damage (avoids double in MP) */
+  if(t.owned){
+    for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
+      const cd=Math.hypot(c.x-t.x,(c.y+0.4)-t.y,c.z-t.z);
+      if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)));
+    }
+  }
+  /* grenades do NOT damage structures (by design) */
+}
+/* ---- deployable shield walls ---- */
+function deployShieldWall(t){ addShieldWall(t.x,terrainH(t.x,t.z,curP()),t.z,t.yaw0,t.owned); }
+function addShieldWall(x,baseY,z,yaw,owned){
+  const W=5, H=3.2;
+  const g=new THREE.Group();
+  const panel=new THREE.Mesh(GEO.box,new THREE.MeshBasicMaterial({color:0x4fc9ff,transparent:true,opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  panel.scale.set(W,H,0.12); panel.position.y=H/2; g.add(panel);
+  const wire=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.12),new THREE.MeshBasicMaterial({color:0x9fe6ff,wireframe:true,transparent:true,opacity:0.5,depthWrite:false}));
+  wire.position.y=H/2; g.add(wire);
+  for(const sx of [-W/2,W/2]){ const post=new THREE.Mesh(GEO.cyl,MAT.metal); post.scale.set(0.12,H,0.12); post.position.set(sx,H/2,0); g.add(post); }
+  g.position.set(x,baseY,z); g.rotation.y=yaw; surfScene.add(g);
+  shieldWalls.push({x,y:baseY,z,yaw,hw:W/2,h:H,t:SHIELD_LIFE,owned:!!owned,mesh:g,panel});
+  SND.shieldUp();
+  spawnBurst(x,baseY+H*0.5,z,0x7fdcff,18,3,4,0.7,1);
+}
+function removeShieldWall(i){ const w=shieldWalls[i]; if(w){ surfScene.remove(w.mesh); shieldWalls.splice(i,1); } }
+function clearShieldWalls(){ for(let i=shieldWalls.length-1;i>=0;i--) removeShieldWall(i); }
+function updateShieldWalls(dt){
+  for(let i=shieldWalls.length-1;i>=0;i--){
+    const w=shieldWalls[i]; w.t-=dt;
+    if(w.t<=0){ removeShieldWall(i); continue; }
+    w.panel.material.opacity=0.12+0.12*Math.abs(Math.sin(performance.now()*0.004))*(w.t<3?w.t/3:1);
+  }
+}
+/* segment(o->e) vs shield-wall rectangles; returns the hit point or null */
+function shotBlocked(o,e){
+  for(const w of shieldWalls){
+    const nx=Math.sin(w.yaw), nz=Math.cos(w.yaw);
+    const denom=(e[0]-o[0])*nx+(e[2]-o[2])*nz;
+    if(Math.abs(denom)<1e-6) continue;
+    const t=((w.x-o[0])*nx+(w.z-o[2])*nz)/denom;
+    if(t<=0.02||t>=1) continue;
+    const hx=o[0]+(e[0]-o[0])*t, hy=o[1]+(e[1]-o[1])*t, hz=o[2]+(e[2]-o[2])*t;
+    const tx=Math.cos(w.yaw), tz=-Math.sin(w.yaw);
+    const u=(hx-w.x)*tx+(hz-w.z)*tz, v=hy-w.y;
+    if(Math.abs(u)<=w.hw&&v>=-0.2&&v<=w.h) return [hx,hy,hz];
+  }
+  return null;
+}
+/* ---- throwing ---- */
+function throwGadget(w){
+  if(w.thrown==='grenade'){
+    if((S.ammo.nade|0)<=0){ SND.denied(); showToast('No Plasma Grenades — craft at an Armory'); return; }
+    if(nadeCd>0) return; nadeCd=0.55;
+    S.ammo.nade--; renderHotbar();
+    camWorld();
+    const o=[_cw.x+_cf.x*0.5,_cw.y+_cf.y*0.5,_cw.z+_cf.z*0.5];
+    const v=[_cf.x*22,_cf.y*22+3.5,_cf.z*22];
+    addThrowable('grenade',o,v,true); SND.throwG();
+    if(NET.active) NET.send({t:'nade',o:o.map(n=>+n.toFixed(2)),v:v.map(n=>+n.toFixed(2))});
+  } else { /* shield */
+    if(shieldCd>0){ SND.denied(); showToast('Shield recharging — '+Math.ceil(shieldCd)+'s'); return; }
+    shieldCd=SHIELD_CD;
+    camWorld();
+    const o=[_cw.x+_cf.x*0.5,_cw.y+_cf.y*0.5,_cw.z+_cf.z*0.5];
+    const v=[_cf.x*16,_cf.y*16+2.5,_cf.z*16];
+    addThrowable('shield',o,v,true); SND.throwG();
+    if(NET.active) NET.send({t:'shield',o:o.map(n=>+n.toFixed(2)),v:v.map(n=>+n.toFixed(2))});
+    showToast('Shield deployed'); renderHotbar();
+  }
+}
+function onRemoteNade(m){
+  const r=remotes.get(m.by); if(S.mode!=='surface'||(r&&r.pl!==S.planet)) return;
+  if(Array.isArray(m.o)&&Array.isArray(m.v)) addThrowable('grenade',m.o,m.v,false);
+}
+function onRemoteShield(m){
+  const r=remotes.get(m.by); if(S.mode!=='surface'||(r&&r.pl!==S.planet)) return;
+  if(Array.isArray(m.o)&&Array.isArray(m.v)) addThrowable('shield',m.o,m.v,false);
+}
+/* ---- inferno cone ---- */
+function fireInferno(w){
+  if(weaponCd>0) return; weaponCd=w.cd;
+  if(S.ammo.fuel<=0){ SND.denied(); showToast('Out of Fuel'); weaponCd=0.4; renderHotbar(); return; }
+  camWorld();
+  /* flame visual every shot */
+  for(let i=0;i<3;i++){ const sp=1.5+Math.random()*(w.range-1.5);
+    const px=_cw.x+_cf.x*sp+(Math.random()-0.5)*sp*0.18, py=_cw.y+_cf.y*sp+(Math.random()-0.5)*sp*0.14, pz=_cw.z+_cf.z*sp+(Math.random()-0.5)*sp*0.18;
+    spawnBurst(px,py,pz,i%2?0xff7020:0xffb050,1,1.6,1.0,0.4,-1.5); }
+  infFlameT-=w.cd; if(infFlameT<=0){ infFlameT=0.11; SND.flame(); }
+  /* fuel + damage on a slower cadence to keep network/damage sane */
+  infDmgT-=w.cd;
+  if(infDmgT<=0){
+    infDmgT=0.12;
+    S.ammo.fuel=Math.max(0,S.ammo.fuel-1); renderHotbar();
+    const safe=inSafeZone(player.x,player.z);
+    for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
+      const dx=c.x-_cw.x, dy=(c.y+0.4)-_cw.y, dz=c.z-_cw.z, d=Math.hypot(dx,dy,dz);
+      if(d>w.range||d<0.1) continue;
+      if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
+      damageCritter(c,w.dmg);
+    }
+    if(NET.active){
+      const tip=aimPoint(w.range);
+      let sent=false;
+      if(!safe) for(const [pid,r] of remotes){ if(!r.avatar.visible) continue;
+        const ctr=avatarHitCenter(r), dx=ctr[0]-_cw.x,dy=ctr[1]-_cw.y,dz=ctr[2]-_cw.z, d=Math.hypot(dx,dy,dz);
+        if(d>w.range||d<0.1) continue;
+        if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
+        if(inSafeZone(r.avatar.position.x,r.avatar.position.z)) continue;
+        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+ctr[0].toFixed(2),+ctr[1].toFixed(2),+ctr[2].toFixed(2)],target:pid,dmg:w.dmg}); sent=true;
+      }
+      const nw=performance.now();
+      if(!sent&&nw-infNetT>150){ infNetT=nw;
+        NET.send({t:'fire',wp:5,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+tip[0].toFixed(2),+tip[1].toFixed(2),+tip[2].toFixed(2)]}); }
+    }
+  }
+}
+/* ---- grenade throw arc preview ---- */
+let nadeArc=null, nadeRing=null;
+(function(){
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(22*3),3));
+  nadeArc=new THREE.Line(g,new THREE.LineBasicMaterial({color:0x7fff9a,transparent:true,opacity:0.8,depthTest:false}));
+  nadeArc.frustumCulled=false; nadeArc.renderOrder=998; nadeArc.visible=false; surfScene.add(nadeArc);
+  nadeRing=new THREE.Mesh(new THREE.TorusGeometry(0.7,0.07,6,18),new THREE.MeshBasicMaterial({color:0x7fff9a,transparent:true,opacity:0.9,depthTest:false}));
+  nadeRing.rotation.x=-Math.PI/2; nadeRing.renderOrder=998; nadeRing.visible=false; surfScene.add(nadeRing);
+})();
+function updateNadeAim(){
+  const show=S.mode==='surface'&&!driving&&!buildSel&&!paintMode&&!bpStamp&&SLOT_KEYS[S.slot]==='grenade'&&(S.ammo.nade|0)>0;
+  nadeArc.visible=show; nadeRing.visible=show;
+  if(!show) return;
+  camWorld();
+  let x=_cw.x+_cf.x*0.5, y=_cw.y+_cf.y*0.5, z=_cw.z+_cf.z*0.5;
+  let vx=_cf.x*22, vy=_cf.y*22+3.5, vz=_cf.z*22;
+  const pos=nadeArc.geometry.attributes.position.array;
+  const step=0.05; let n=0, lx=x,ly=y,lz=z;
+  for(let i=0;i<22;i++){
+    pos[i*3]=x; pos[i*3+1]=y; pos[i*3+2]=z; lx=x; ly=y; lz=z; n=i;
+    vy-=18*step; x+=vx*step; y+=vy*step; z+=vz*step;
+    if(y<=groundYAt(x,z,1e9)+0.2){ pos[(i+1>21?21:i+1)*3]=x; break; }
+  }
+  for(let i=n+1;i<22;i++){ pos[i*3]=lx; pos[i*3+1]=ly; pos[i*3+2]=lz; }
+  nadeArc.geometry.attributes.position.needsUpdate=true;
+  nadeRing.position.set(lx,groundYAt(lx,lz,1e9)+0.08,lz);
+}
+function updateHeavyWeapons(dt){
+  nadeCd=Math.max(0,nadeCd-dt); shieldCd=Math.max(0,shieldCd-dt);
+  updateThrowables(dt); updateShieldWalls(dt);
+}
+function primaryDown(){
+  if(S.mode!=='surface'||driving||buildSel||paintMode||bpStamp) return;
+  if(S.slot<=0) return;
+  const w=curWeapon();
+  if(w.thrown) throwGadget(w); else fireHeld=true;
 }
 
 /* ============================================================
@@ -3180,7 +3466,12 @@ document.addEventListener('keydown',e=>{
     else if(e.code==='Digit2') setSlot(1);
     else if(e.code==='Digit3') setSlot(2);
     else if(e.code==='Digit4') setSlot(3);
+    else if(e.code==='Digit5') setSlot(4);
+    else if(e.code==='Digit6') setSlot(5);
+    else if(e.code==='Digit7') setSlot(6);
+    else if(e.code==='Digit8') setSlot(7);
     else if(e.code==='KeyH') useMed();
+    else if(e.code==='KeyQ'){ let n=S.slot; for(let k=0;k<SLOT_KEYS.length;k++){ n=(n+1)%SLOT_KEYS.length; if(ownsSlot(n)){ setSlot(n); break; } } }
   }
   if(e.code==='KeyM'&&S.mode==='surface') toggleMap();
   if(e.code==='Enter'&&NET.active&&!anyPanelOpen()) openChat();
@@ -3212,7 +3503,7 @@ document.addEventListener('mousedown',e=>{
   if(e.button===0&&paintMode&&S.mode==='surface'){ paintAimed(); return; }
   if(e.button===0&&bpStamp&&S.mode==='surface'){ placeStamp(); return; }
   if(e.button===0&&buildSel&&S.mode==='surface') placeStructure();
-  else if(e.button===0&&!buildSel&&S.mode==='surface'&&S.slot>0&&!driving) fireHeld=true;
+  else if(e.button===0&&!buildSel&&S.mode==='surface'&&S.slot>0&&!driving) primaryDown();
   else if(e.button===2){ if(paintMode) exitPaint(); else if(bpStamp) cancelStamp(); else if(buildSel) cancelBuild(); else if(S.mode==='surface') removeStructure(); }
 });
 document.addEventListener('mouseup',e=>{ if(e.button===0) fireHeld=false; });
@@ -3289,7 +3580,7 @@ bindHold('mThrust','KeyW'); bindHold('mBrake','KeyS');
 let mFire=false;
 (function(){
   const el=$('mAct');
-  el.addEventListener('touchstart',e=>{ e.preventDefault(); if(mFire&&S.mode==='surface'&&!driving){ fireHeld=true; } else { keys.KeyE=true; justE=true; } },{passive:false});
+  el.addEventListener('touchstart',e=>{ e.preventDefault(); if(mFire&&S.mode==='surface'&&!driving){ primaryDown(); } else { keys.KeyE=true; justE=true; } },{passive:false});
   el.addEventListener('touchend',e=>{ e.preventDefault(); keys.KeyE=false; fireHeld=false; },{passive:false});
   el.addEventListener('touchcancel',()=>{ keys.KeyE=false; fireHeld=false; });
 })();
@@ -3369,6 +3660,7 @@ function enterSurface(planetKey,fromSave){
   updateViewmodel();
   clearMeteors();
   clearCritters(); soloSpawnInitial();
+  clearThrowables(); clearShieldWalls();
   if(fromSave&&S.ppos&&Math.hypot(S.ppos[0],S.ppos[2])<WORLD_R){
     player.x=S.ppos[0]; player.z=S.ppos[2];
     player.y=Math.max(S.ppos[1],groundYAt(player.x,player.z,S.ppos[1]+2));
@@ -3393,6 +3685,8 @@ function enterSpace(fromPlanetKey,fromSave){
   cancelBuild();
   clearMeteors();
   clearCritters();
+  clearThrowables(); clearShieldWalls();
+  if(camera.fov!==74){ camera.fov=74; camera.updateProjectionMatrix(); }
   if(fromSave){
     ship.position.fromArray(S.spos);
   } else {
@@ -3657,7 +3951,8 @@ function updateSurface(dt){
   } else {
     updateRepair(0,false,null);
     if(S.slot>0){
-      mFire=true; setMAct(curWeapon().melee?'SWING':'FIRE'); prompted=true;
+      const cw=curWeapon();
+      mFire=true; setMAct(cw.thrown?'THROW':(cw.melee?'SWING':'FIRE')); prompted=true;
       setPrompt(inSafeZone(player.x,player.z)?'<span style="color:#8fefb0">SAFE ZONE — weapons disabled near Beacon</span>':'');
     } else {
       updateMining(dt,!!keys.KeyE);
@@ -3683,6 +3978,13 @@ function updateSurface(dt){
   const kick=weaponCd>0&&S.slot>=2?Math.min(0.12,weaponCd):0;
   if(weaponVM.pistol.visible) weaponVM.pistol.position.z=-0.45+kick;
   if(weaponVM.rifle.visible) weaponVM.rifle.position.z=-0.4+kick;
+  if(weaponVM.lance.visible) weaponVM.lance.position.z=-0.38+Math.min(0.18,weaponCd*0.12);
+  if(weaponVM.inferno.visible){ const sh=fireHeld?Math.sin(performance.now()*0.05)*0.01:0; weaponVM.inferno.position.set(0.28+sh,-0.26,-0.4); }
+  /* Lance Beam scope — brief FOV zoom while equipped */
+  const wantFov=(curWeapon().scope&&!driving)?curWeapon().scope:74;
+  if(Math.abs(camera.fov-wantFov)>0.15){ camera.fov+=(wantFov-camera.fov)*Math.min(1,dt*9); camera.updateProjectionMatrix(); }
+  /* grenade throw arc preview */
+  updateNadeAim();
   justE=false;
   /* timers */
   updateNodes(dt);
@@ -3691,6 +3993,7 @@ function updateSurface(dt){
   updateTurrets(dt);
   updateRoverMeshes(dt);
   updateCritters(dt);
+  updateHeavyWeapons(dt);
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
@@ -3712,8 +4015,8 @@ function resetState(){
   S.spos=[PLANETS.rust.pos[0]+50,PLANETS.rust.pos[1]+18,PLANETS.rust.pos[2]+55];
   S.syaw=Math.atan2(50,55); S.spitch=-0.12; S.sspeed=4;
   S.pendingVerdantCutscene=false;
-  S.weapons={blade:false,pistol:false,rifle:false};
-  S.ammo={light:0,heavy:0}; S.medkits=0; S.slot=0;
+  S.weapons=readWeapons(null);
+  S.ammo=readAmmo(null); S.medkits=0; S.slot=0;
   player.hp=HP_MAX; player.invuln=0;
 }
 function showGameUI(){
@@ -3817,9 +4120,8 @@ function startMultiplayer(w){
       S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0),ch:Math.max(0,p.res&&p.res.ch|0||0)};
       S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
       if(p.victoryShown) S.victoryShown=true;
-      const w=p.weapons||{}, am=p.ammo||{};
-      S.weapons={blade:!!w.blade,pistol:!!w.pistol,rifle:!!w.rifle};
-      S.ammo={light:Math.max(0,am.light|0),heavy:Math.max(0,am.heavy|0)};
+      S.weapons=readWeapons(p.weapons);
+      S.ammo=readAmmo(p.ammo);
       S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
     }
   }catch(e){}
@@ -3940,6 +4242,7 @@ requestAnimationFrame(loop);
 
 /* debug / automation hook */
 window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
+  WEAPONS,SLOT_KEYS,throwables,shieldWalls,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
 </script>
 </body>
