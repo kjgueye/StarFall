@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared rule constants — imported by BOTH the browser
+   ASTRAVOX shared rule constants — imported by BOTH the browser
    client and the Node server. Pure data: no THREE, no DOM, no
    side effects. This is the single source of truth for gameplay
    numbers; neither side may keep a private copy.

@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared rules — pure validators/formulas used by BOTH
+   ASTRAVOX shared rules — pure validators/formulas used by BOTH
    the browser client (for prediction/UI) and the Node server
    (for authority/validation). All state is passed as arguments;
    nothing here reads globals or has side effects beyond the

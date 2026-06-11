@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared catalog — every buildable/spawnable thing.
+   ASTRAVOX shared catalog — every buildable/spawnable thing.
    Imported by BOTH the browser client and the Node server.
    Pure data: parts reference GEO/MAT by string key; positions
    are plain arrays (the client hydrates THREE objects itself).

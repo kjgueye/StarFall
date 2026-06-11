@@ -2,7 +2,7 @@
   "name": "starfall",
   "version": "1.0.0",
   "private": true,
-  "description": "Starfall — sci-fi build & explore game with 1-4 player co-op",
+  "description": "Astravox (formerly Starfall) — sci-fi build & explore game with 1-4 player co-op",
   "type": "module",
   "main": "server.js",
   "scripts": {

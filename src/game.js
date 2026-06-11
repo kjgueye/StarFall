@@ -1,7 +1,7 @@
 "use strict";
 /* ============================================================
-   STARFALL — client. Game data/rules live in ../shared/ and are
-   imported by BOTH this client and the Node server.
+   ASTRAVOX (formerly Starfall) — client. Game data/rules live in
+   ../shared/ and are imported by BOTH this client and the Node server.
    ============================================================ */
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
@@ -81,9 +81,9 @@ function readWeapons(w){ w=w||{}; const o={}; for(const k of WEP_KEYS) o[k]=!!w[
 function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.max(0,a[k]|0); return o; }
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
-const SAVE_KEY='starfall_save_v1';
+const SAVE_KEY='astravox_save_v1';
 const SAVE_VER=6;
-const MP_WORLD_KEY='starfall_mp_world_v1';
+const MP_WORLD_KEY='astravox_mp_world_v1';
 
 /* ============================================================
    NETWORK — co-op client. Every MP behavior is gated on NET.active;
@@ -123,7 +123,7 @@ const NET={
 };
 function mpStatus(s){ const el=$('mpStatus'); if(el) el.textContent=s; }
 function myPid(){ return NET.active?NET.pid:'self'; }
-function mpPlayerKey(){ return 'starfall_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
+function mpPlayerKey(){ return 'astravox_mp_p_'+NET.worldId+'_'+NET.name.toLowerCase(); }
 function updateRoomBadge(){
   const b=$('roomBadge');
   b.classList.toggle('hidden',!NET.active);
@@ -504,7 +504,7 @@ try{
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
   renderer.setSize(window.innerWidth,window.innerHeight);
 }catch(e){
-  document.body.innerHTML='<div style="color:#9fdcf5;padding:40px;font-size:18px">Starfall requires WebGL, which this browser does not support.</div>';
+  document.body.innerHTML='<div style="color:#9fdcf5;padding:40px;font-size:18px">Astravox requires WebGL, which this browser does not support.</div>';
   throw e;
 }
 camera=new THREE.PerspectiveCamera(74,window.innerWidth/window.innerHeight,0.1,3000);
@@ -1576,7 +1576,7 @@ function applyPaint(st,col){
 function applyPaintById(id,col){ const st=S.structures.find(s=>s.id===id); if(st) applyPaint(st,col); }
 
 /* ---------- blueprints ---------- */
-const BP_KEY='starfall_blueprints_v1';   /* BP_MAX imported from shared/constants.js */
+const BP_KEY='astravox_blueprints_v1';   /* BP_MAX imported from shared/constants.js */
 let bpSelecting=false, bpDrag=null;   // {x0,y0}
 function loadBlueprints(){ try{ return JSON.parse(localStorage.getItem(BP_KEY))||{}; }catch(e){ return {}; } }
 function saveBlueprints(b){ try{ localStorage.setItem(BP_KEY,JSON.stringify(b)); }catch(e){} }
@@ -3357,7 +3357,7 @@ function checkStationComplete(){
   updateStationVisibility();
 }
 function stationOnlineCelebration(){
-  SND.victory(); showToast('★ STARFALL STATION ONLINE ★',6000); flashFx();
+  SND.victory(); showToast('★ ASTRAVOX STATION ONLINE ★',6000); flashFx();
   for(let i=0;i<18;i++) setTimeout(()=>{
     if(!S.running) return;
     const a=Math.random()*6.28, b=Math.random()*6.28, r=14+Math.random()*18;
@@ -3800,14 +3800,14 @@ function openMpSetup(mode){
   let snap=null;
   try{ snap=JSON.parse(localStorage.getItem(MP_WORLD_KEY)); }catch(e){}
   $('mpHostPrev').classList.toggle('hidden',!(mode==='host'&&snap&&snap.v===1));
-  try{ $('mpName').value=localStorage.getItem('starfall_name')||''; }catch(e){}
+  try{ $('mpName').value=localStorage.getItem('astravox_name')||''; }catch(e){}
   mpStatus('');
   openPanel('mpSetup');
 }
 function mpBegin(world){
   const name=$('mpName').value.trim().slice(0,16);
   if(!name){ mpStatus('Enter a name first'); return; }
-  try{ localStorage.setItem('starfall_name',name); }catch(e){}
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
   NET.name=name;
   SND.ensure();
   if(mpMode==='host'){
@@ -3936,7 +3936,7 @@ let secretTaps=0, secretT=0;
 function secretHost(){
   if(S.running) return;
   NET.isHost=true;
-  let name=''; try{ name=localStorage.getItem('starfall_name')||''; }catch(e){}
+  let name=''; try{ name=localStorage.getItem('astravox_name')||''; }catch(e){}
   NET.name=name||'COMMANDER';
   SND.ensure(); SND.tierUp();
   showToast('⚡ COMMANDER MODE — hosting a new world with maxed resources');

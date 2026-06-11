@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL co-op server — SERVER-AUTHORITATIVE simulation (Phase 2)
+   ASTRAVOX (formerly Starfall) co-op server — SERVER-AUTHORITATIVE simulation (Phase 2)
    Serves the built client (dist/) over HTTP and the game protocol
    over WS. Clients send INTENTS; the server validates them against
    the shared rule modules (shared/) and broadcasts results. Nothing
@@ -914,4 +914,4 @@ setInterval(() => {
   }
 }, 15000);
 
-server.listen(PORT, () => console.log('Starfall server on :' + PORT + (METEOR_FAST ? ' (METEOR_FAST)' : '')));
+server.listen(PORT, () => console.log('Astravox server on :' + PORT + (METEOR_FAST ? ' (METEOR_FAST)' : '')));

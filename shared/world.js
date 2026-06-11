@@ -1,5 +1,5 @@
 /* ============================================================
-   STARFALL shared world — planets + the deterministic terrain
+   ASTRAVOX shared world — planets + the deterministic terrain
    stack. Imported by BOTH the browser client and the Node
    server: given the same (x, z, planet) both sides compute the
    exact same height, so the server can validate positions and
