@@ -5,12 +5,13 @@
    PROTOCOL (JSON frames, server is authoritative for shared-world objects):
    client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
      place{st}, remove{id}, repair{id}, mine{pl,i},
-     fire{wp,o,p,target?,dmg?}, died{by,pos,loot}, lootClaim{id},
+     fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, died{by,pos,loot}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
    server->client: welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats}},
      err, pjoin, pleave, pu, placed, removed, hp, destroyed,
      nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
-     fire, lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
+     fire, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
+     lootSpawn, lootGone, lootGot, sys, chat, roverSeat, roverMove
    Damage is client-authoritative (victim applies); loot containers,
    turret ownership and rover seats are server-authoritative.
    ============================================================ */
@@ -47,6 +48,20 @@ const SHIELD_R = 18;
 const METEOR_DMG = 35;
 const HITS_PER_SHOWER = 6;
 const PLANETS = ['rust', 'glacius', 'verdant'];
+const SAFE_CR = 32;               // PvP-free / critter-free radius around a Colony Beacon
+/* ---- critters (Phase 4): server owns spawns + positions, coarse sync ---- */
+const SCRIT = {
+  skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
+  grazer: { hp: 14, speed: 2.6, flee: 11, ch: [2, 4] },
+  floater: { hp: 6, speed: 3.2, flee: 10, ch: [1, 2] },
+  hopper: { hp: 10, speed: 4.2, flee: 9, ch: [1, 3] },
+};
+const PLANET_CRIT = {
+  rust: ['skitterer', 'grazer', 'hopper'],
+  glacius: ['skitterer', 'floater'],
+  verdant: ['grazer', 'floater', 'hopper'],
+};
+const CRIT_CAP = 12;
 const DAY_CYCLE = 600;            // seconds for a full day/night cycle
 let worldClock = 300;             // shared time-of-day (seconds)
 function worldTod() { return ((worldClock % DAY_CYCLE) + DAY_CYCLE) % DAY_CYCLE / DAY_CYCLE; }
@@ -103,8 +118,10 @@ function makeRoom(world) {
     loot: new Map(),                    // lootId -> {id,pl,pos,loot,expireAt}
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
+    crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
     emptySince: 0,
   };
+  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; }
   if (world && Array.isArray(world.structures)) {
     for (const s of world.structures) {
       if (room.structures.length >= MAX_STRUCT) break;
@@ -299,6 +316,19 @@ function handle(ws, m) {
       bcast(room, { t: 'fire', by: ws.pid, wp: m.wp, o: m.o, p: m.p, target: m.target, dmg: m.dmg }, ws.pid);
       return;
     }
+    case 'critHit': {
+      const arr = room.crit[me.pl]; if (!arr) return;
+      const c = arr.find(k => k.id === m.id); if (!c) return;
+      c.hp -= Math.max(0, Math.min(200, +m.dmg || 0));
+      c.st = 1; c.idle = 0; c.hd = Math.atan2(c.z - me.pos[2], c.x - me.pos[0]);   // flee the shooter
+      if (c.hp <= 0) {
+        arr.splice(arr.indexOf(c), 1);
+        const r = SCRIT[c.type].ch;
+        const ch = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
+        bcast(room, { t: 'critDead', id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), by: ws.pid, ch });
+      }
+      return;
+    }
     case 'died': {
       const loot = m.loot || {};
       const drop = { fe: Math.max(0, loot.fe | 0), cy: Math.max(0, loot.cy | 0), bio: Math.max(0, loot.bio | 0) };
@@ -384,6 +414,49 @@ function resolveImpact(room, pl, tx, tz) {
     if (ms.hits >= HITS_PER_SHOWER) break;
   }
 }
+function beaconOnPlanetS(room, pl) {
+  for (const s of room.structures) if (s.t === 'beacon' && s.pl === pl) return s;
+  return null;
+}
+/* simulate one planet's critters; only runs while that surface is occupied */
+function simCritters(room, pl, dt) {
+  const arr = room.crit[pl];
+  const ps = [];
+  for (const p of room.players.values()) if (p.mode === 'surface' && p.pl === pl) ps.push(p);
+  const beacon = beaconOnPlanetS(room, pl);
+  /* respawn up to cap */
+  room.critT[pl] -= dt;
+  if (arr.length < CRIT_CAP && room.critT[pl] <= 0) {
+    room.critT[pl] = 4 + Math.random() * 6;
+    const types = PLANET_CRIT[pl];
+    const type = types[Math.floor(Math.random() * types.length)];
+    for (let tries = 0; tries < 10; tries++) {
+      const ang = Math.random() * Math.PI * 2, rad = 50 + Math.random() * 260;
+      const x = Math.cos(ang) * rad, z = Math.sin(ang) * rad;
+      if (beacon) { const dx = x - beacon.x, dz = z - beacon.z; if (dx * dx + dz * dz < (SAFE_CR + 4) * (SAFE_CR + 4)) continue; }
+      arr.push({ id: 'c' + (room.nextCrit++), type, x, z, hp: SCRIT[type].hp, hd: Math.random() * 6.283, wt: 1 + Math.random() * 3, idle: 0, st: 0 });
+      break;
+    }
+  }
+  for (const c of arr) {
+    const def = SCRIT[c.type];
+    let near = null, nd = 1e9;
+    for (const p of ps) { const dx = c.x - p.pos[0], dz = c.z - p.pos[2], d = dx * dx + dz * dz; if (d < nd) { nd = d; near = p; } }
+    let sp;
+    if (near && nd < def.flee * def.flee) {
+      c.hd = Math.atan2(c.z - near.pos[2], c.x - near.pos[0]); c.st = 1; c.idle = 0; sp = def.speed * 1.4;
+    } else {
+      c.st = 0; c.wt -= dt;
+      if (c.wt <= 0) { c.wt = 1.5 + Math.random() * 3; if (Math.random() < 0.3) c.idle = 0.6 + Math.random() * 1.2; else c.hd += (Math.random() - 0.5) * 2; }
+      if (c.idle > 0) { c.idle -= dt; sp = 0; } else sp = def.speed * 0.5;
+    }
+    c.x += Math.cos(c.hd) * sp * dt; c.z += Math.sin(c.hd) * sp * dt;
+    const r = Math.hypot(c.x, c.z);
+    if (r > 360) { c.x *= 360 / r; c.z *= 360 / r; c.hd += Math.PI; }
+    if (beacon) { const dx = c.x - beacon.x, dz = c.z - beacon.z, d = Math.hypot(dx, dz); if (d < SAFE_CR + 2) { const f = (SAFE_CR + 2) / (d || 1); c.x = beacon.x + dx * f; c.z = beacon.z + dz * f; c.hd = Math.atan2(dz, dx); } }
+  }
+}
+
 let lastTick = Date.now(), lastClockBcast = 0;
 setInterval(() => {
   const now = Date.now();
@@ -414,6 +487,7 @@ setInterval(() => {
       let occupied = false;
       for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
       if (!occupied) continue;
+      simCritters(room, pl, dt);
       const ms = room.meteor[pl];
       ms.t -= dt;
       if (ms.phase === 'idle') {
@@ -432,6 +506,18 @@ setInterval(() => {
           setTimeout(() => { if (rooms.has(code)) resolveImpact(room, pl, tx, tz); }, 2200);
         }
         if (ms.t <= 0) { ms.phase = 'idle'; ms.t = T_IDLE_NEXT(); bcast(room, { t: 'meteorEnd', pl }); }
+      }
+    }
+    /* coarse critter position snapshots (~every tick) for occupied planets */
+    room.critBcast += dt;
+    if (room.critBcast >= 0.2) {
+      room.critBcast = 0;
+      for (const pl of PLANETS) {
+        if (!room.crit[pl].length) continue;
+        let occ = false;
+        for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occ = true; break; } }
+        if (!occ) continue;
+        bcast(room, { t: 'critSnap', pl, crit: room.crit[pl].map(c => ({ id: c.id, ty: c.type, x: +c.x.toFixed(1), z: +c.z.toFixed(1), st: c.st })) });
       }
     }
   }

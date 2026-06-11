@@ -229,6 +229,7 @@
     <div class="resItem"><span class="resDot" style="background:#ff8a4a"></span>FERRITE <b id="rFe">0</b></div>
     <div class="resItem"><span class="resDot" style="background:#6fe0ff"></span>CRYO <b id="rCy">0</b></div>
     <div class="resItem"><span class="resDot" style="background:#7fff9a"></span>BIOLUME <b id="rBio">0</b></div>
+    <div class="resItem"><span class="resDot" style="background:#d8b878"></span>CHITIN <b id="rCh">0</b></div>
   </div>
   <div id="capNote"></div>
   <button id="tierBadge">TIER 1 ▸</button>
@@ -419,8 +420,8 @@ const PLANETS={
            fog:0x1d4a2a, sky:0x0a2010, sun:0xd0ffd8, amp:10, res:'bio', nodeCol:0x7fff9a, nodeEmis:0x22cc55,
            floraCol:0x8a4aaa, desc:'Bio-luminous alien jungle'},
 };
-const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume'};
-const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a'};
+const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin'};
+const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a',ch:'#d8b878'};
 
 /* ---------- tiers ---------- */
 const TIERS=[
@@ -617,13 +618,17 @@ const CRAFT={
   light:  {kind:'ammo',   name:'Light Cells ×20',ic:'▪', cost:{fe:8},          give:20, ammo:'light', tier:1},
   heavy:  {kind:'ammo',   name:'Heavy Cells ×20',ic:'▫', cost:{fe:10,cy:6},    give:20, ammo:'heavy', tier:2},
   medpack:{kind:'med',    name:'Med-Pack (+50 HP)',ic:'+', cost:{cy:10}, costT3:{cy:6,bio:3}, tier:1, desc:'Heals 50'},
+  /* ---- Chitin recipes (Phase 4): hunting pays off ---- */
+  medChit:{kind:'med',    name:'Chitin Med-Pack',  ic:'✚', cost:{ch:6},        tier:1, desc:'Heals 50 · cheaper from hunting'},
+  lightC: {kind:'ammo',   name:'Light Cells ×24',  ic:'▪', cost:{ch:5},        give:24, ammo:'light', tier:1, desc:'From Chitin'},
+  heavyC: {kind:'ammo',   name:'Heavy Cells ×24',  ic:'▫', cost:{fe:6,ch:6},    give:24, ammo:'heavy', tier:2, desc:'From Chitin'},
 };
 function medCost(){ return S.tier>=3?CRAFT.medpack.costT3:CRAFT.medpack.cost; }
 
 /* ---------- game state ---------- */
 const S={
   running:false, mode:'space', planet:'rust',
-  tier:1, res:{fe:0,cy:0,bio:0},
+  tier:1, res:{fe:0,cy:0,bio:0,ch:0},
   structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
   ppos:[0,0,0], pyaw:0,
@@ -633,7 +638,7 @@ const S={
   ammo:{light:0,heavy:0}, medkits:0, slot:0, headbob:true,
 };
 const SAVE_KEY='starfall_save_v1';
-const SAVE_VER=3;
+const SAVE_VER=4;
 const MP_WORLD_KEY='starfall_mp_world_v1';
 
 /* ============================================================
@@ -717,6 +722,8 @@ function netHandle(m){
     case 'roverMove': onRoverMove(m); break;
     case 'paint': applyPaintById(m.id,m.col); break;
     case 'clock': if(typeof m.tod==='number') dayClock=m.tod*CYCLE_S; break;
+    case 'critSnap': applyCritSnap(m.pl,m.crit||[]); break;
+    case 'critDead': onCritDead(m); break;
   }
 }
 /* chat / system message overlay (also used by Phase 5) */
@@ -833,7 +840,7 @@ function structSave(s){
   return o;
 }
 function buildSaveObj(){
-  return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},
+  return {v:SAVE_VER, tier:S.tier, res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0},
     structures:S.structures.map(structSave),
     mode:S.mode==='surface'?'surface':'space', planet:S.planet,
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
@@ -851,7 +858,7 @@ function saveGame(){
 function saveMP(){
   try{
     localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
-      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
+      res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
       weapons:{blade:!!S.weapons.blade,pistol:!!S.weapons.pistol,rifle:!!S.weapons.rifle},
       ammo:{light:S.ammo.light|0,heavy:S.ammo.heavy|0}, medkits:S.medkits|0, headbob:S.headbob!==false}));
     if(NET.isHost){
@@ -868,7 +875,7 @@ function parseSave(json){
     const w=d.weapons||{}, am=d.ammo||{};
     const out={
       tier:clamp(d.tier|0,1,4),
-      res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0)},
+      res:{fe:Math.max(0,d.res&&d.res.fe|0||0),cy:Math.max(0,d.res&&d.res.cy|0||0),bio:Math.max(0,d.res&&d.res.bio|0||0),ch:Math.max(0,d.res&&d.res.ch|0||0)},
       structures:[], mode:(d.mode==='surface'?'surface':'space'),
       planet:PLANETS[d.planet]?d.planet:'rust',
       ppos:Array.isArray(d.ppos)&&d.ppos.length===3?d.ppos.map(Number):[0,0,0],
@@ -2182,6 +2189,7 @@ SND.shootHvy=function(){ this.tone(540,0.07,'square',0.05,240); };
 SND.hurt=function(){ this.tone(200,0.16,'square',0.08,90); };
 SND.heal=function(){ [440,660,880].forEach((f,i)=>setTimeout(()=>this.tone(f,0.12,'sine',0.07),i*70)); };
 SND.craft=function(){ [330,494,660].forEach((f,i)=>setTimeout(()=>this.tone(f,0.13,'triangle',0.08),i*80)); };
+SND.poof=function(){ this.tone(300,0.18,'sine',0.05,90); setTimeout(()=>this.tone(170,0.16,'triangle',0.04,70),40); };
 
 let driving=null;          // rover entity when seated (Phase 4)
 let weaponCd=0, swingT=0, fireHeld=false;
@@ -2270,6 +2278,7 @@ function fireWeapon(){
 }
 function doAttack(w,wp,kind){
   camWorld();
+  startleCritters(player.x,player.z,16);
   let hitPid=null, hitDist=w.range;
   const safe=inSafeZone(player.x,player.z);
   if(NET.active&&!safe){
@@ -2290,7 +2299,26 @@ function doAttack(w,wp,kind){
       }
     }
   }
-  const end = hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
+  /* critters (solo + MP) — compete with any player hit on distance; nearest wins */
+  let critTarget=null;
+  for(const c of critters){
+    if(c.pl!==S.planet) continue;
+    const cx=c.x-_cw.x, cyv=(c.y+0.4)-_cw.y, cz=c.z-_cw.z;
+    const tca=cx*_cf.x+cyv*_cf.y+cz*_cf.z;
+    if(tca<0||tca>hitDist) continue;
+    if(kind==='melee'){
+      const d=Math.hypot(cx,cyv,cz)||1;
+      if((cx/d)*_cf.x+(cyv/d)*_cf.y+(cz/d)*_cf.z<1-w.arc) continue;
+      if(d>w.range) continue;
+      hitDist=d; critTarget=c; hitPid=null;
+    } else {
+      const perp2=cx*cx+cyv*cyv+cz*cz-tca*tca;
+      if(perp2>0.9*0.9) continue;
+      hitDist=tca; critTarget=c; hitPid=null;
+    }
+  }
+  const end = critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
+            : hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
             : (kind==='ranged' ? aimPoint(w.range) : aimPoint(w.range*0.7));
   if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col);
   else spawnBurst(end[0],end[1],end[2],0x9feaff,5,2,2,0.3,1);
@@ -2299,6 +2327,7 @@ function doAttack(w,wp,kind){
     NET.send({t:'fire',wp,o:[+_cw.x.toFixed(2),+_cw.y.toFixed(2),+_cw.z.toFixed(2)],p:[+end[0].toFixed(2),+end[1].toFixed(2),+end[2].toFixed(2)],
       target:hitPid!==null?hitPid:undefined,dmg:hitPid!==null?w.dmg:undefined});
   }
+  if(critTarget) hitCritter(critTarget,w.dmg,end);
 }
 function muzzleAt(pos,col){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW_TEX,color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -2423,7 +2452,7 @@ function updateRover(dt){
   /* exit */
   if(justE){ exitRover(); justE=false; }
   /* world timers still run while driving */
-  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt);
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt);
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
   renderRoverCam();
@@ -2448,7 +2477,7 @@ function applyDamageToSelf(dmg){
 let soloLootId=1;
 function die(){
   const loot={fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0};
-  S.res={fe:0,cy:0,bio:0}; updateHUDRes();
+  S.res={fe:0,cy:0,bio:0,ch:S.res.ch|0}; updateHUDRes();   // Chitin is kept through death
   spawnBurst(player.x,player.y+1,player.z,0xff5050,32,5,6,1.2,3);
   spawnBurst(player.x,player.y+1,player.z,0x553030,16,4,4,1.8,2);
   SND.impact();
@@ -2524,8 +2553,8 @@ function renderCraftGrid(){
     grid.appendChild(d);
   };
   sec('Weapons'); ['blade','pistol','rifle'].forEach(item);
-  sec('Ammo'); ['light','heavy'].forEach(item);
-  sec('Medical'); item('medpack');
+  sec('Ammo'); ['light','heavy','lightC','heavyC'].forEach(item);
+  sec('Medical'); ['medpack','medChit'].forEach(item);
 }
 function craft(key){
   const c=CRAFT[key];
@@ -2624,6 +2653,211 @@ function updateTurrets(dt){
     } else st._tfire=0.4;
   }
   for(const pi of def.headParts) structMeshes.turret[pi].instanceMatrix.needsUpdate=true;
+}
+
+/* ============================================================
+   CRITTERS & HUNTING (Phase 4) — passive fauna, zero threat.
+   They wander, flee on approach/fire, and drop Chitin when defeated.
+   Solo simulates locally; in co-op the server owns spawns/positions
+   (coarse snapshots) and we interpolate, exactly like remote players.
+   ============================================================ */
+const CRITTERS={
+  /* off = body-centre height above ground; ch = [min,max] Chitin drop */
+  skitterer:{name:'Skitterer', hp:8,  speed:5.0, fleeR:9,  off:0.35, ch:[1,2]},
+  grazer:   {name:'Grazer',    hp:14, speed:2.6, fleeR:11, off:0.70, ch:[2,4]},
+  floater:  {name:'Floater',   hp:6,  speed:3.2, fleeR:10, hover:2.2, bob:0.5, ch:[1,2]},
+  hopper:   {name:'Hopper',    hp:10, speed:4.2, fleeR:9,  off:0.45, hop:true, ch:[1,3]},
+};
+/* which species roam each world — varies the palette/feel per planet */
+const CRIT_BY_PLANET={
+  rust:   ['skitterer','grazer','hopper'],
+  glacius:['skitterer','floater'],
+  verdant:['grazer','floater','hopper'],
+};
+const CRIT_CAP=12;
+const critters=[];                 // client entities (both solo + MP)
+let critSpawnT=3, soloCritId=1;
+
+function addChitin(n){
+  n=Math.max(0,n|0); if(!n) return;
+  S.res.ch=Math.min(carryCap(),(S.res.ch|0)+n);
+  updateHUDRes(); SND.collect(); showToast('+'+n+' Chitin');
+}
+function buildCritter(type,pkey){
+  const p=PLANETS[pkey], def=CRITTERS[type];
+  const g=new THREE.Group();
+  const mats=[], legs=[]; let head=null;
+  const bodyCol = type==='floater'? p.nodeCol : (type==='hopper'? p.floraCol : p.surfCol2);
+  const bMat = def.hover? emisMat(bodyCol,p.nodeEmis,0.9) : stdMat(bodyCol,{roughness:0.85,metalness:0.05});
+  const eyeMat=emisMat(0xffe6a0,0xcc6600,1.6); mats.push(bMat,eyeMat);
+  const eye=(ex,ey,ez,s,parent)=>{ const e=new THREE.Mesh(GEO.sphere,eyeMat); e.scale.set(s,s,s); e.position.set(ex,ey,ez); (parent||g).add(e); };
+  const leg=(hx,hz,len)=>{ const grp=new THREE.Group(); grp.position.set(hx,def.off,hz);
+    const seg=new THREE.Mesh(GEO.cyl,bMat); seg.scale.set(0.08,len,0.08); seg.position.y=-len/2; grp.add(seg); g.add(grp); legs.push(grp); };
+  if(type==='skitterer'){
+    const body=new THREE.Mesh(GEO.sphere,bMat); body.scale.set(0.5,0.32,0.7); body.position.y=def.off; g.add(body);
+    const carap=new THREE.Mesh(GEO.dome,bMat); carap.scale.set(0.55,0.42,0.78); carap.position.y=def.off; g.add(carap);
+    for(const sx of [-0.32,0.32]) for(const sz of [-0.3,0,0.3]) leg(sx,sz,def.off+0.12);
+    eye(-0.14,def.off+0.12,0.34,0.08); eye(0.14,def.off+0.12,0.34,0.08);
+  } else if(type==='grazer'){
+    const body=new THREE.Mesh(GEO.box,bMat); body.scale.set(0.9,0.7,1.5); body.position.y=def.off; g.add(body);
+    head=new THREE.Group(); head.position.set(0,def.off+0.12,0.78);
+    const hm=new THREE.Mesh(GEO.box,bMat); hm.scale.set(0.5,0.45,0.5); hm.position.set(0,0,0.15); head.add(hm);
+    eye(-0.15,0.05,0.4,0.07,head); eye(0.15,0.05,0.4,0.07,head);
+    g.add(head);
+    for(const sx of [-0.35,0.35]) for(const sz of [-0.55,0.55]) leg(sx,sz,def.off+0.05);
+  } else if(type==='floater'){
+    const body=new THREE.Mesh(GEO.dome,bMat); body.scale.set(0.7,0.62,0.7); g.add(body);
+    const under=new THREE.Mesh(GEO.sphere,bMat); under.scale.set(0.55,0.3,0.55); under.position.y=-0.08; g.add(under);
+    for(let i=0;i<5;i++){ const a=i/5*6.283; const t=new THREE.Group(); t.position.set(Math.cos(a)*0.26,-0.12,Math.sin(a)*0.26);
+      const seg=new THREE.Mesh(GEO.cyl,bMat); seg.scale.set(0.05,0.7,0.05); seg.position.y=-0.35; t.add(seg); g.add(t); legs.push(t); }
+    g.add(makeGlow('#'+new THREE.Color(p.nodeCol).getHexString(),1.9));
+    eye(0,0.06,0.45,0.12);
+  } else { /* hopper */
+    const body=new THREE.Mesh(GEO.sphere,bMat); body.scale.set(0.45,0.52,0.45); body.position.y=def.off; g.add(body);
+    for(const ex of [-0.16,0.16]){ const ear=new THREE.Mesh(GEO.cone,bMat); ear.scale.set(0.12,0.36,0.12); ear.position.set(ex,def.off+0.46,0); g.add(ear); }
+    for(const sx of [-0.18,0.18]) leg(sx,0,def.off);
+    eye(-0.13,def.off+0.15,0.3,0.07); eye(0.13,def.off+0.15,0.3,0.07);
+  }
+  return {group:g,legs,head,mats};
+}
+function critterById(id){ for(const c of critters) if(c.id===id) return c; return null; }
+function spawnCritterEntity(id,type,x,z){
+  const def=CRITTERS[type]; if(!def) return null;
+  const built=buildCritter(type,S.planet);
+  surfScene.add(built.group);
+  const p=PLANETS[S.planet];
+  const c={id,type,def,pl:S.planet,group:built.group,legs:built.legs,head:built.head,mats:built.mats,
+    poofCol:def.hover?p.nodeCol:p.floraCol,
+    x,z,y:0,vx:0,vz:1,spd:0,state:'wander',wanderT:Math.random()*2,idleT:0,startle:0,
+    animP:Math.random()*6,bobP:Math.random()*6,hopP:0,hp:def.hp,st:0,sx:undefined,sz:undefined};
+  built.group.position.set(x,terrainH(x,z,p)+(def.hover||def.off||0.4),z);
+  critters.push(c); return c;
+}
+function removeCritterEntity(id){
+  const i=critters.findIndex(c=>c.id===id); if(i<0) return;
+  const c=critters[i]; surfScene.remove(c.group);
+  if(c.mats) for(const m of c.mats){ if(m&&m.dispose) m.dispose(); }
+  critters.splice(i,1);
+}
+function clearCritters(){ for(let i=critters.length-1;i>=0;i--) removeCritterEntity(critters[i].id); critters.length=0; }
+function critterPoof(x,y,z,col){
+  spawnBurst(x,y+0.3,z,col||0xcfe0d8,16,2.6,2.6,0.7,3);
+  spawnBurst(x,y+0.3,z,0xffffff,6,1.6,1.6,0.4,2);
+  SND.poof();
+}
+/* nudge nearby critters into flight when shots go off near them (solo) */
+function startleCritters(x,z,r){
+  if(NET.active) return; const r2=r*r;
+  for(const c of critters){ const dx=c.x-x,dz=c.z-z; if(dx*dx+dz*dz<r2){ c.startle=Math.max(c.startle,1.8); c.state='flee'; } }
+}
+/* called by doAttack when a critter is the aim target */
+function hitCritter(c,dmg,pos){
+  spawnBurst(pos[0],pos[1],pos[2],c.poofCol||0xffd0a0,6,1.6,1.6,0.3,2);
+  if(NET.active){ NET.send({t:'critHit',id:c.id,dmg}); c.startle=2; c.st=1; c.state='flee'; return; }
+  c.hp-=dmg; c.startle=2.5; c.state='flee';
+  if(c.hp<=0){
+    const n=c.def.ch[0]+Math.floor(Math.random()*(c.def.ch[1]-c.def.ch[0]+1));
+    critterPoof(c.x,c.y,c.z,c.poofCol); addChitin(n); removeCritterEntity(c.id);
+  }
+}
+/* shared placement + procedural animation */
+function updateCritterMesh(c,dt,moving){
+  const gy=terrainH(c.x,c.z,curP());
+  let y;
+  if(c.def.hover){ c.bobP+=dt*1.5; y=gy+c.def.hover+Math.sin(c.bobP)*c.def.bob; }
+  else if(c.def.hop&&moving){ c.hopP+=dt*9; y=gy+c.def.off+Math.abs(Math.sin(c.hopP))*0.5; }
+  else { y=gy+c.def.off; }
+  c.y=y; c.group.position.set(c.x,y,c.z);
+  if(moving){
+    const yaw=Math.atan2(c.vx,c.vz);
+    let d=yaw-c.group.rotation.y; d=((d+Math.PI)%6.283+6.283)%6.283-Math.PI;
+    c.group.rotation.y+=d*Math.min(1,dt*8);
+  }
+  if(c.legs&&c.legs.length){
+    if(moving){ c.animP+=dt*(c.state==='flee'?16:9);
+      for(let i=0;i<c.legs.length;i++) c.legs[i].rotation.x=Math.sin(c.animP+i*1.1)*0.6; }
+    else for(const l of c.legs) l.rotation.x*=0.9;
+  }
+  if(c.head) c.head.rotation.x=moving?Math.sin(c.animP*0.5)*0.12:Math.sin(performance.now()*0.002)*0.1;
+}
+function critSpawnSolo(){
+  const types=CRIT_BY_PLANET[S.planet]||['skitterer'];
+  for(let tries=0;tries<12;tries++){
+    const ang=Math.random()*6.283, rad=50+Math.random()*260;
+    const x=Math.cos(ang)*rad, z=Math.sin(ang)*rad;
+    if(Math.hypot(x,z)>WORLD_R-10) continue;
+    if(inSafeZone(x,z)) continue;
+    const dx=x-player.x, dz=z-player.z; if(dx*dx+dz*dz<900) continue;   // spawn out of immediate view
+    spawnCritterEntity('cs'+(soloCritId++),types[Math.floor(Math.random()*types.length)],x,z);
+    return;
+  }
+}
+function updateCrittersSolo(dt){
+  if(S.mode!=='surface'||!surf.built) return;
+  critSpawnT-=dt;
+  if(critters.length<CRIT_CAP&&critSpawnT<=0){ critSpawnT=4+Math.random()*6; critSpawnSolo(); }
+  const px=player.x, pz=player.z, b=beaconOnPlanet(S.planet);
+  for(const c of critters){
+    const def=c.def;
+    const dx=c.x-px, dz=c.z-pz, pdist=Math.hypot(dx,dz);
+    if(c.startle>0) c.startle-=dt;
+    if(pdist<def.fleeR){
+      const inv=1/(pdist||1); c.vx=dx*inv; c.vz=dz*inv; c.spd=def.speed*1.5; c.state='flee'; c.idleT=0;
+    } else if(c.startle>0){
+      const inv=1/(pdist||1); c.vx=dx*inv; c.vz=dz*inv; c.spd=def.speed*1.4; c.state='flee';
+    } else {
+      c.state='wander'; c.wanderT-=dt;
+      if(c.wanderT<=0){ c.wanderT=1.5+Math.random()*3;
+        if(Math.random()<0.3) c.idleT=0.6+Math.random()*1.2;
+        else { const a=Math.random()*6.283; c.vx=Math.cos(a); c.vz=Math.sin(a); } }
+      if(c.idleT>0){ c.idleT-=dt; c.spd=0; } else c.spd=def.speed*0.5;
+    }
+    c.x+=c.vx*c.spd*dt; c.z+=c.vz*c.spd*dt;
+    const r=Math.hypot(c.x,c.z);
+    if(r>WORLD_R-6){ c.x*=(WORLD_R-6)/r; c.z*=(WORLD_R-6)/r; c.vx=-c.vx; c.vz=-c.vz; }
+    if(b){ const bx=c.x-b.x, bz=c.z-b.z, bd=Math.hypot(bx,bz);
+      if(bd<SAFE_R+2){ const f=(SAFE_R+2)/(bd||1); c.x=b.x+bx*f; c.z=b.z+bz*f; c.vx=bx/(bd||1); c.vz=bz/(bd||1); } }
+    updateCritterMesh(c,dt,c.spd>0.1);
+  }
+}
+function applyCritSnap(pl,list){
+  if(!NET.active) return;
+  /* ignore snapshots for other planets — transitions clear critters explicitly */
+  if(pl!==S.planet||S.mode!=='surface') return;
+  const seen=new Set();
+  for(const it of list){
+    if(!CRITTERS[it.ty]) continue;
+    seen.add(it.id);
+    let c=critterById(it.id);
+    if(!c) c=spawnCritterEntity(it.id,it.ty,it.x,it.z);
+    if(c){ c.sx=it.x; c.sz=it.z; c.st=it.st|0; }
+  }
+  for(let i=critters.length-1;i>=0;i--) if(!seen.has(critters[i].id)) removeCritterEntity(critters[i].id);
+}
+function updateCrittersMP(dt){
+  for(const c of critters){
+    if(c.sx===undefined) continue;
+    const ox=c.x, oz=c.z, k=Math.min(1,dt*6);
+    c.x=lerp(c.x,c.sx,k); c.z=lerp(c.z,c.sz,k);
+    const mvx=c.x-ox, mvz=c.z-oz, ms=Math.hypot(mvx,mvz);
+    if(ms>0.001){ c.vx=mvx/ms; c.vz=mvz/ms; }
+    c.state=c.st===1?'flee':'wander';
+    updateCritterMesh(c,dt,ms>dt*0.4);
+  }
+}
+function onCritDead(m){
+  const c=critterById(m.id);
+  const x=c?c.x:m.x, z=c?c.z:m.z, y=c?c.y:terrainH(m.x,m.z,curP())+0.4;
+  critterPoof(x,y,z,c?c.poofCol:0xcfe0d8);
+  if(c) removeCritterEntity(m.id);
+  if(m.by===NET.pid&&m.ch) addChitin(m.ch);
+}
+function updateCritters(dt){ if(NET.active) updateCrittersMP(dt); else updateCrittersSolo(dt); }
+function soloSpawnInitial(){
+  if(NET.active) return;
+  const n=Math.min(CRIT_CAP,6+Math.floor(Math.random()*3));
+  for(let i=0;i<n;i++) critSpawnSolo();
+  critSpawnT=4+Math.random()*6;
 }
 
 /* ============================================================
@@ -2826,7 +3060,7 @@ function showToast(msg,dur){
   toastTimer=setTimeout(()=>{t.style.opacity=0;},dur||2400);
 }
 function updateHUDRes(){
-  $('rFe').textContent=S.res.fe; $('rCy').textContent=S.res.cy; $('rBio').textContent=S.res.bio;
+  $('rFe').textContent=S.res.fe; $('rCy').textContent=S.res.cy; $('rBio').textContent=S.res.bio; $('rCh').textContent=S.res.ch|0;
 }
 function updateTierBadge(){ $('tierBadge').textContent='TIER '+S.tier+' ▸'; }
 function setPrompt(html){ $('prompt').innerHTML=html; }
@@ -3134,6 +3368,7 @@ function enterSurface(planetKey,fromSave){
   ship.getObjectByName('legs').visible=true;
   updateViewmodel();
   clearMeteors();
+  clearCritters(); soloSpawnInitial();
   if(fromSave&&S.ppos&&Math.hypot(S.ppos[0],S.ppos[2])<WORLD_R){
     player.x=S.ppos[0]; player.z=S.ppos[2];
     player.y=Math.max(S.ppos[1],groundYAt(player.x,player.z,S.ppos[1]+2));
@@ -3157,6 +3392,7 @@ function enterSpace(fromPlanetKey,fromSave){
   updateViewmodel();
   cancelBuild();
   clearMeteors();
+  clearCritters();
   if(fromSave){
     ship.position.fromArray(S.spos);
   } else {
@@ -3454,6 +3690,7 @@ function updateSurface(dt){
   updateLoot(dt);
   updateTurrets(dt);
   updateRoverMeshes(dt);
+  updateCritters(dt);
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=player.yaw;
   renderSurfaceCam();
@@ -3468,7 +3705,7 @@ function renderSurfaceCam(){
    START SCREEN / NEW GAME / CONTINUE / BOOT
    ============================================================ */
 function resetState(){
-  S.tier=1; S.res={fe:0,cy:0,bio:0}; S.structures=[];
+  S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
@@ -3562,6 +3799,7 @@ function installWorld(world){
     NET.meteor[pl]={phase:world.meteor[pl].phase,endAt:performance.now()+world.meteor[pl].secs*1000};
   }
   clearLoot();
+  clearCritters();
   for(const c of (world.loot||[])) spawnLootBox(c.id,c.pl,c.pos,c.loot);
   NET.seats=new Map(world.seats||[]);
   if(typeof world.tod==='number') dayClock=world.tod*CYCLE_S;
@@ -3576,7 +3814,7 @@ function startMultiplayer(w){
     const p=JSON.parse(localStorage.getItem(mpPlayerKey()));
     if(p){
       S.tier=clamp(p.tier|0,1,4);
-      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0)};
+      S.res={fe:Math.max(0,p.res&&p.res.fe|0||0),cy:Math.max(0,p.res&&p.res.cy|0||0),bio:Math.max(0,p.res&&p.res.bio|0||0),ch:Math.max(0,p.res&&p.res.ch|0||0)};
       S.o2=clamp(+p.o2||100,5,200); S.fuel=clamp(+p.fuel||100,0,100);
       if(p.victoryShown) S.victoryShown=true;
       const w=p.weapons||{}, am=p.ammo||{};
@@ -3585,7 +3823,7 @@ function startMultiplayer(w){
       S.medkits=Math.max(0,p.medkits|0); S.headbob=p.headbob!==false;
     }
   }catch(e){}
-  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999}; cheatMax=false; }
+  if(cheatMax){ S.res={fe:99999,cy:99999,bio:99999,ch:99999}; cheatMax=false; }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -3701,7 +3939,7 @@ function loop(now){
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
 </script>
 </body>
