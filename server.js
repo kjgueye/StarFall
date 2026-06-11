@@ -204,9 +204,11 @@ function serializeRoom(room) {
   };
 }
 function progRow(p) {
-  return { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo },
+  const row = { res: { ...p.res }, tier: p.tier, weapons: { ...p.weapons }, ammo: { ...p.ammo },
     medkits: p.medkits, o2: Math.round(p.o2), fuel: Math.round(p.fuel),
     loc: { mode: p.mode, pl: p.pl, pos: p.pos.map(v => +(+v).toFixed(1)), yaw: +(+p.yaw).toFixed(2) } };
+  if (p.spawn) row.spawn = p.spawn;     // cryopod respawn point {pl,x,y,z}
+  return row;
 }
 function saveProgressOf(room, p) {
   if (p.gone || !p.guestId) return;     // `gone`: replaced by a newer session — never overwrite it
@@ -437,6 +439,10 @@ async function joinRoom(ws, room, name, opts) {
       player.res = s.res; player.tier = s.tier; player.weapons = s.weapons; player.ammo = s.ammo; player.medkits = s.medkits;
       player.o2 = Math.max(5, Math.min(o2Max(s.tier), +saved.o2 || 100));
       player.fuel = Math.max(0, Math.min(100, +saved.fuel || 100));
+      if (saved.spawn && PLANETS.includes(saved.spawn.pl)
+          && [saved.spawn.x, saved.spawn.y, saved.spawn.z].every(v => isFinite(+v))) {
+        player.spawn = { pl: saved.spawn.pl, x: +saved.spawn.x, y: +saved.spawn.y, z: +saved.spawn.z };
+      }
       if (saved.loc && Array.isArray(saved.loc.pos) && saved.loc.pos.length === 3 && saved.loc.pos.every(v => isFinite(+v))) {
         loc = { mode: saved.loc.mode === 'surface' ? 'surface' : 'space',
           pl: PLANETS.includes(saved.loc.pl) ? saved.loc.pl : 'rust',
@@ -454,6 +460,7 @@ async function joinRoom(ws, room, name, opts) {
   const w = welcomeMsg(room, pid);
   w.fresh = player.fresh;
   if (loc) w.loc = loc;
+  if (player.spawn) w.spawn = player.spawn;
   if (guest && guest.tok) w.guest = { id: guest.id, tok: guest.tok };
   sendTo(ws, w);
   bcast(room, { t: 'pjoin', pid, name, slot }, pid);
@@ -724,6 +731,20 @@ async function handle(ws, m) {
       me.medkits--;
       me.hp = Math.min(HP_MAX, me.hp + 50);
       sendProg(room, ws.pid, { type: 'med' });
+      return;
+    }
+    case 'setSpawn': {
+      /* cryopod respawn point: persisted per player per world. Respawn
+         POSITIONING stays client-side (trust model); the server only
+         verifies a live cryopod actually stands there and stores it. */
+      const x = +m.x, y = +m.y, z = +m.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+      if (me.mode !== 'surface') return;
+      const pod = room.structures.find(s => s.t === 'cryopod' && s.pl === me.pl && s.hp > 0
+        && Math.abs(s.x - x) < 4 && Math.abs(s.z - z) < 4);
+      if (!pod) return;
+      me.spawn = { pl: me.pl, x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2) };
+      saveProgressOf(room, me);
       return;
     }
     case 'stationPlace': {

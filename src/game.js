@@ -82,7 +82,7 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='astravox_save_v1';
-const SAVE_VER=6;
+const SAVE_VER=7;   // v7: + rsp (cryopod respawn point); older saves load with it null
 const MP_WORLD_KEY='astravox_mp_world_v1';
 /* Phase 3 — guest identity + persistent worlds */
 const GUEST_KEY='astravox_guest_v1';            // server-minted {id,tok}; our passwordless identity
@@ -320,6 +320,7 @@ function renderCompass(dt){
   mk(px,pz-D,'N','#cfe8ff'); mk(px+D,pz,'E'); mk(px,pz+D,'S'); mk(px-D,pz,'W');
   if(surf.built) mk(surf.shipPos.x,surf.shipPos.z,'⌂','#7fd6f5');
   const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
+  for(const s of placedByType.navbeacon||[]){ if(s.hp>0) mk(s.x,s.z,'✧','#'+new THREE.Color(s.col!=null?s.col:0xff7a5a).getHexString()); }
   if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
   /* nearest critter — points the way to the hunt */
   if(critters.length){ let best=null,bd=1e9; for(const c of critters){ const dx=c.x-px,dz=c.z-pz,d=dx*dx+dz*dz; if(d<bd){bd=d;best=c;} }
@@ -348,8 +349,9 @@ function drawMinimap(){
   const dot=(wx,wz,col,rad)=>{ const m=w2m(wx,wz); g.fillStyle=col; g.beginPath(); g.arc(m[0],m[1],rad||2,0,Math.PI*2); g.fill(); };
   // resource nodes (alive)
   if(surf.built) for(const nd of surf.nodes){ if(nd.alive) dot(nd.x,nd.z,'#'+new THREE.Color(p.nodeCol).getHexString(),1.6); }
-  // structures
+  // structures (nav beacons pop in their paint colour)
   for(const s of S.structures){ if(s.pl!==S.planet) continue;
+    if(s.t==='navbeacon'){ dot(s.x,s.z,'#'+new THREE.Color(s.col!=null?s.col:0xff7a5a).getHexString(),3.2); continue; }
     dot(s.x,s.z, s.t==='beacon'?'#aef9c8':(s.t==='turret'?'#ff7a6a':(s.t==='rover'?'#ffd060':'#8fb6cc')), s.t==='beacon'?3:2); }
   // wildlife (critters — hunt for Chitin)
   for(const c of critters) dot(c.x,c.z,'#d8b878',1.8);
@@ -401,6 +403,7 @@ function buildSaveObj(){
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
+    rsp:S.respawnPt||null,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
     ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false};
@@ -439,6 +442,8 @@ function parseSave(json){
       syaw:Number(d.syaw)||0, spitch:clamp(Number(d.spitch)||0,-1.2,1.2),
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown,
+      rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
+        ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
       pc:(d.pc&&SHIELDED[d.pc])?d.pc:(d.pvc?'verdant':null),
       sound:d.sound!==false,
       weapons:readWeapons(d.weapons),
@@ -481,6 +486,7 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
+  S.respawnPt=d.rsp||null;
   S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
@@ -558,6 +564,7 @@ const MAT={
   emisG:emisMat(0x8affa8,0x10cc44,1.7),
   emisB:emisMat(0x7aa8ff,0x1040cc,1.7),
   beam:new THREE.MeshBasicMaterial({color:0x9fffc8,transparent:true,opacity:0.28,blending:THREE.AdditiveBlending,depthWrite:false}),
+  lightcone:new THREE.MeshBasicMaterial({color:0xeaf6ff,transparent:true,opacity:0.14,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   holo:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   flagM:emisMat(0xff6a4a,0x661505,0.6),
   pot:stdMat(0x7a5a40,{roughness:0.9,metalness:0.05}),
@@ -1084,12 +1091,12 @@ for(const t in CAT){
 const _m1=new THREE.Matrix4(), _m2=new THREE.Matrix4(), _q=new THREE.Quaternion(),
       _e=new THREE.Euler(), _v=new THREE.Vector3(), _sv=new THREE.Vector3(), _pc=new THREE.Color();
 
-function structMatrix(st,part,out,slideX){
+function structMatrix(st,part,out,slideX,offY){
   _e.set(0,st.r*Math.PI/2,0); _q.setFromEuler(_e);
   _m1.compose(_v.set(st.x,st.y,st.z),_q,_sv.set(1,1,1));
   const pr=part.r||[0,0,0];
   _e.set(pr[0],pr[1],pr[2]);
-  _m2.compose(_v.set(part.o[0]+(slideX||0),part.o[1],part.o[2]),_q.setFromEuler(_e),_sv.set(part.s[0],part.s[1],part.s[2]));
+  _m2.compose(_v.set(part.o[0]+(slideX||0),part.o[1]+(offY||0),part.o[2]),_q.setFromEuler(_e),_sv.set(part.s[0],part.s[1],part.s[2]));
   out.multiplyMatrices(_m1,_m2);
 }
 /* world->local for a structure rotated by r*90° (matches three.js R_y) */
@@ -1100,7 +1107,11 @@ function toLocal(st,wx,wz,out){
 }
 function refreshStructures(){
   for(const t in CAT) placedByType[t]=[];
-  for(const st of S.structures){ if(st.pl===S.planet) placedByType[st.t].push(st); if(st.t==='door') st.open=0; }
+  for(const st of S.structures){
+    if(st.pl===S.planet) placedByType[st.t].push(st);
+    if(CAT[st.t].doorParts) st.open=0;     // door-like pieces re-animate from closed
+    if(st.t==='lift') st.lift=0;           // lift platforms re-animate from down
+  }
   const M=new THREE.Matrix4();
   for(const t in CAT){
     const def=CAT[t];
@@ -1219,31 +1230,74 @@ function collidePlayer(){
     }
   }
 }
-/* doors slide open when the player is near */
+/* anyone (local player or a remote avatar) within rSq of (x,z)? */
+function anyoneNear(x,z,rSq){
+  const dx=player.x-x, dz=player.z-z;
+  if(dx*dx+dz*dz<rSq) return true;
+  if(NET.active){
+    for(const r of remotes.values()){
+      if(!r.avatar.visible) continue;
+      const ax=r.avatar.position.x-x, az=r.avatar.position.z-z;
+      if(ax*ax+az*az<rSq) return true;
+    }
+  }
+  return false;
+}
+/* door-like pieces slide open when someone is near — data-driven via
+   CAT[t].doorParts (panel part indices) / doorSlide (per-panel x offset at
+   open=1) / doorSpeed. Covers door + airlock. */
+const DOOR_TYPES=Object.keys(CAT).filter(t=>CAT[t].doorParts);
 const _doorM=new THREE.Matrix4();
 function updateDoors(dt){
-  const list=placedByType.door||[];
-  const def=CAT.door;
-  for(let i=0;i<list.length;i++){
-    const st=list[i];
-    const dx=player.x-st.x, dz=player.z-st.z;
-    let near=dx*dx+dz*dz<7.5;
-    if(!near&&NET.active){
-      for(const r of remotes.values()){
-        if(!r.avatar.visible) continue;
-        const ax=r.avatar.position.x-st.x, az=r.avatar.position.z-st.z;
-        if(ax*ax+az*az<7.5){ near=true; break; }
+  for(const t of DOOR_TYPES){
+    const list=placedByType[t]||[];
+    const def=CAT[t];
+    for(let i=0;i<list.length;i++){
+      const st=list[i];
+      const target=anyoneNear(st.x,st.z,7.5)?1:0;
+      const cur=st.open||0;
+      if(Math.abs(target-cur)<0.005) continue;
+      st.open=cur+(target-cur)*Math.min(1,dt*def.doorSpeed);
+      for(let k=0;k<def.doorParts.length;k++){
+        const pi=def.doorParts[k];
+        structMatrix(st,def.parts[pi],_doorM,st.open*def.doorSlide[k]);
+        structMeshes[t][pi].setMatrixAt(i,_doorM);
+        structMeshes[t][pi].instanceMatrix.needsUpdate=true;
       }
     }
-    const target=near?1:0;
-    const cur=st.open||0;
-    if(Math.abs(target-cur)<0.005) continue;
-    st.open=cur+(target-cur)*Math.min(1,dt*6);
-    const slide=st.open*1.55;
-    for(const pi of [3,4]){
-      structMatrix(st,def.parts[pi],_doorM,slide);
-      structMeshes.door[pi].setMatrixAt(i,_doorM);
-      structMeshes.door[pi].instanceMatrix.needsUpdate=true;
+  }
+}
+/* lift platforms rise while someone stands on them, sink when empty.
+   The platform's walkable top lives in shared groundYAt (st.lift), so the
+   rising surface carries the player via the normal landing snap; remotes
+   stay consistent because their positions arrive via pu. */
+function updateLifts(dt){
+  const list=placedByType.lift||[];
+  const def=CAT.lift;
+  for(let i=0;i<list.length;i++){
+    const st=list[i];
+    const cur=st.lift||0;
+    const top=st.y+0.64+cur*def.liftH;
+    /* occupied = someone in the footprint at platform height */
+    let occ=false;
+    const check=(x,y,z)=>{ const dx=x-st.x,dz=z-st.z; return dx*dx+dz*dz<1.7&&y>top-0.8&&y<top+2.4; };
+    if(check(player.x,player.y,player.z)) occ=true;
+    if(!occ&&NET.active){
+      for(const r of remotes.values()){
+        if(!r.avatar.visible) continue;
+        if(check(r.avatar.position.x,r.avatar.position.y,r.avatar.position.z)){ occ=true; break; }
+      }
+    }
+    if(occ){ st._liftIdle=0; } else { st._liftIdle=(st._liftIdle||0)+dt; }
+    const target=occ?1:(st._liftIdle>1?0:cur>0.999?1:0);   // 1s grace at the top before descending
+    if(Math.abs(target-cur)<0.002) continue;
+    const dir=target>cur?1:-1;
+    st.lift=clamp(cur+dir*dt*0.35,0,1);
+    const offY=st.lift*def.liftH;
+    for(const pi of def.liftParts){
+      structMatrix(st,def.parts[pi],_doorM,0,offY);
+      structMeshes.lift[pi].setMatrixAt(i,_doorM);
+      structMeshes.lift[pi].instanceMatrix.needsUpdate=true;
     }
   }
 }
@@ -1431,7 +1485,8 @@ function updateGhost(){
     }
   }
   if(!snapped){
-    if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover','pillar','pillar2','pillar3','beam'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
+    if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover','pillar','pillar2','pillar3','beam',
+                   'telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
     else { gx=Math.round(pt.x/GRID)*GRID; gz=Math.round(pt.z/GRID)*GRID; }
     gy=(stackY!==null)?Math.round(stackY/0.5)*0.5:groundYAt(gx,gz,1e9);
     ghostPlaceRot=ghostRot;
@@ -2055,11 +2110,13 @@ function die(){
 }
 function respawnPlayer(){
   if(driving) exitRover();
-  player.x=surf.shipPos.x-3; player.z=surf.shipPos.z+3;
+  const rp=respawnPointHere();   // a set Cryopod wins over the default ship spawn
+  if(rp){ player.x=rp.x+1.2; player.z=rp.z+1.2; }
+  else { player.x=surf.shipPos.x-3; player.z=surf.shipPos.z+3; }
   player.y=groundYAt(player.x,player.z,1e9); player.vy=0;
   player.hp=HP_MAX; S.o2=o2Max(); player.invuln=SPAWN_PROT;
   $('protRing').classList.remove('hidden');
-  showToast('Recovered at base — '+SPAWN_PROT+'s spawn protection',3000);
+  showToast('Recovered at '+(rp?'Cryopod':'base')+' — '+SPAWN_PROT+'s spawn protection',3000);
 }
 /* loot containers */
 const lootBoxes=new Map();
@@ -2098,6 +2155,75 @@ function updateLoot(dt){
       if(NET.active){ NET.send({t:'lootClaim',id}); removeLootBox(id); }
       else { addLoot(c.loot); removeLootBox(id); spawnBurst(c.pos[0],c.pos[1]+0.6,c.pos[2],0xffd070,10,2,2,0.5,2); }
     }
+  }
+}
+
+/* ---------- Outpost functional pieces (teleporter / cryopod / jump pad) ---------- */
+function nearTelepad(){
+  for(const st of placedByType.telepad||[]){
+    if(st.hp<=0) continue;
+    const dx=player.x-st.x, dz=player.z-st.z;
+    if(dx*dx+dz*dz<1.7&&Math.abs(player.y-(st.y+0.36))<1.2) return st;   // standing on the pad
+  }
+  return null;
+}
+/* pads link by paint colour (unpainted = white); destination = nearest other same-colour pad */
+function telepadDest(pad){
+  const col=pad.col!=null?pad.col:0xffffff;
+  let best=null, bd=1e18;
+  for(const st of placedByType.telepad||[]){
+    if(st===pad||st.hp<=0) continue;
+    if((st.col!=null?st.col:0xffffff)!==col) continue;
+    const dx=st.x-pad.x, dz=st.z-pad.z, d=dx*dx+dz*dz;
+    if(d<bd){ bd=d; best=st; }
+  }
+  return best;
+}
+let teleCd=0;
+function doTeleport(pad,dest){
+  if(performance.now()<teleCd) return;
+  dest=dest||telepadDest(pad); if(!dest) return;
+  teleCd=performance.now()+1500;
+  spawnBurst(player.x,player.y+1,player.z,0x6fe8ff,18,2.5,3,0.7,1);
+  player.x=dest.x; player.z=dest.z;
+  player.y=groundYAt(dest.x,dest.z,dest.y+2); player.vy=0;
+  spawnBurst(player.x,player.y+1,player.z,0x6fe8ff,24,2.5,3,0.8,1);
+  if(SND.teleport) SND.teleport(); else SND.collect();
+  if(NET.active) sendPU();          // position is client-authoritative; tell everyone now
+}
+function nearCryopod(){
+  for(const st of placedByType.cryopod||[]){ if(st.hp<=0) continue; const dx=player.x-st.x,dz=player.z-st.z; if(dx*dx+dz*dz<6.5) return st; }
+  return null;
+}
+function setRespawnPoint(pod){
+  S.respawnPt={pl:S.planet,x:+pod.x.toFixed(2),y:+pod.y.toFixed(2),z:+pod.z.toFixed(2)};
+  showToast('Respawn point set — you will recover at this Cryopod');
+  SND.blip();
+  if(NET.active) NET.send({t:'setSpawn',x:S.respawnPt.x,y:S.respawnPt.y,z:S.respawnPt.z});
+  else saveGame();
+}
+/* the saved respawn point counts only while its cryopod still stands on this planet */
+function respawnPointHere(){
+  const rp=S.respawnPt;
+  if(!rp||rp.pl!==S.planet) return null;
+  for(const st of placedByType.cryopod||[]){
+    if(st.hp>0&&Math.abs(st.x-rp.x)<3&&Math.abs(st.z-rp.z)<3) return rp;
+  }
+  return null;
+}
+function checkJumpPad(){
+  for(const st of placedByType.jumppad||[]){
+    if(st.hp<=0) continue;
+    const dx=player.x-st.x, dz=player.z-st.z;
+    if(dx*dx+dz*dz>1.32) continue;
+    if(Math.abs(player.y-(st.y+0.36))>0.2) continue;
+    const now=performance.now();
+    if(now-(st._jpAt||0)<350) continue;            // rearm so it launches once per landing
+    st._jpAt=now;
+    player.vy=13; player.grounded=false;
+    spawnBurst(st.x,st.y+0.5,st.z,0x5aff8a,14,2,4,0.6,2);
+    if(SND.jump) SND.jump(); else SND.blip();
+    break;
   }
 }
 
@@ -2897,7 +3023,9 @@ function renderBuildGrid(){
   tool('◑','Paint Tool',()=>{ renderPaintGrid(); openPanel('paintPanel'); });
   tool('▤','Blueprints',openBlueprints);
   addSection('Structures');
-  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
+  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
+  addSection('Outpost Systems');
+  for(const k of ['telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
   addSection('Furniture & Interior');
@@ -3249,7 +3377,9 @@ function doLaunch(){
 }
 function doBlackout(){
   fadeTo('OXYGEN DEPLETED — EMERGENCY RECALL',()=>{
-    player.x=surf.shipPos.x-3; player.z=surf.shipPos.z+3;
+    const rp=respawnPointHere();   // suit recalls to your Cryopod if you set one
+    if(rp){ player.x=rp.x+1.2; player.z=rp.z+1.2; }
+    else { player.x=surf.shipPos.x-3; player.z=surf.shipPos.z+3; }
     player.y=groundYAt(player.x,player.z,1e9);
     player.vy=0; S.o2=o2Max();
   });
@@ -3630,6 +3760,7 @@ function updateSurface(dt){
   if(pr>WORLD_R){ player.x*=WORLD_R/pr; player.z*=WORLD_R/pr; if(Math.random()<dt*2) showToast('Suit warning: leaving survey zone'); }
   /* structure collision + doors */
   updateDoors(dt);
+  updateLifts(dt);
   collidePlayer();
   /* weapon fire */
   if(S.slot>0&&fireHeld&&!buildSel) fireWeapon();
@@ -3649,6 +3780,8 @@ function updateSurface(dt){
   else { player.vy-=18*dt; player.vy=clamp(player.vy,-30,9); }
   player.y+=player.vy*dt;
   if(player.y<=gy){ player.y=gy; player.vy=0; player.grounded=true; }
+  /* jump pads launch anyone standing on them */
+  if(player.grounded&&!driving) checkJumpPad();
   /* head bob */
   footT+=im*dt*(sprinting?11:7);
   /* --- O2 --- */
@@ -3674,8 +3807,10 @@ function updateSurface(dt){
   const nearShip=dxs*dxs+dzs*dzs<60;
   const roverHere=(!buildSel&&!nearShip)?nearRover():null;
   const arm=(!buildSel&&!nearShip&&!roverHere)?nearArmory():null;
+  const pad=(!buildSel&&!nearShip&&!roverHere&&!arm)?nearTelepad():null;
+  const pod=(!buildSel&&!nearShip&&!roverHere&&!arm&&!pad)?nearCryopod():null;
   const aimed=buildSel?null:aimedStructure();
-  const damaged=(aimed&&aimed.hp<CAT[aimed.t].hp&&!roverHere&&!arm)?aimed:null;
+  const damaged=(aimed&&aimed.hp<CAT[aimed.t].hp&&!roverHere&&!arm&&!pad&&!pod)?aimed:null;
   let prompted=false; mFire=false;
   if(bpStamp){
     updateStampGhost();
@@ -3702,6 +3837,17 @@ function updateSurface(dt){
   } else if(arm){
     setPrompt('<span class="key">E</span>OPEN ARMORY'); setMAct('USE'); prompted=true;
     if(justE){ openCraftMenu(); justE=false; return; }
+    updateMining(0,false);
+  } else if(pad){
+    const dest=telepadDest(pad);
+    setPrompt(dest?'<span class="key">E</span>TELEPORT'
+      :'<span style="color:#9fdcf5;opacity:0.8">NO LINKED PAD — paint two pads the same colour</span>');
+    setMAct(dest?'WARP':'—'); prompted=true;
+    if(justE&&dest){ doTeleport(pad,dest); justE=false; return; }
+    updateMining(0,false);
+  } else if(pod){
+    setPrompt('<span class="key">E</span>SET RESPAWN POINT'); setMAct('SET'); prompted=true;
+    if(justE){ setRespawnPoint(pod); justE=false; }
     updateMining(0,false);
   } else if(damaged){
     const busy=updateRepair(dt,!!keys.KeyE,damaged);
@@ -3773,6 +3919,7 @@ function renderSurfaceCam(){
 function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
+  S.respawnPt=null;
   S.station=[]; S.stationOnline=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
@@ -3940,6 +4087,7 @@ function startMultiplayer(w){
       if(typeof w.prog.o2==='number') S.o2=clamp(w.prog.o2,5,o2Max());
       if(typeof w.prog.fuel==='number') S.fuel=clamp(w.prog.fuel,0,100);
     }
+    if(w.spawn&&PLANETS[w.spawn.pl]) S.respawnPt={pl:w.spawn.pl,x:+w.spawn.x,y:+w.spawn.y,z:+w.spawn.z};
     if(w.loc&&Array.isArray(w.loc.pos)&&w.loc.pos.length===3&&w.loc.pos.every(v=>isFinite(+v))){
       if(w.loc.mode==='surface'&&PLANETS[w.loc.pl]){
         S.mode='surface'; S.planet=w.loc.pl;
@@ -3967,6 +4115,7 @@ function resyncFromWelcome(w){
      (store lost us somehow) still needs the legacy hand-back */
   if(w.fresh) NET.send({t:'progRestore',prog:mpProgBlob()});
   else if(w.prog) applyProg(w.prog);
+  if(w.spawn&&PLANETS[w.spawn.pl]) S.respawnPt={pl:w.spawn.pl,x:+w.spawn.x,y:+w.spawn.y,z:+w.spawn.z};
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
   for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
@@ -4097,6 +4246,7 @@ Object.assign(window,{
   curP,curWeapon,doLand,doLaunch,drawMinimap,enterEva,enterRover,exitEva,exitRover,explodeGrenade,
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
+  nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

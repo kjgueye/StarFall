@@ -30,9 +30,16 @@ export const CAT = {
            {g:'box',m:'metal',o:[-1.8,1.55,0],s:[0.4,2.1,0.3]},{g:'box',m:'metal',o:[1.8,1.55,0],s:[0.4,2.1,0.3]},
            {g:'box',m:'glass',o:[0,1.55,0],s:[3.2,2.1,0.1]}]},
   door:   {name:'Door', ic:'◫', tier:2, cost:{fe:8,cy:3}, hp:100,
+    doorParts:[3,4], doorSlide:[1.55,1.55], doorSpeed:6,   // panel+seam slide together
     parts:[{g:'box',m:'metal',o:[-1.45,1.5,0],s:[1.1,3,0.3]},{g:'box',m:'metal',o:[1.45,1.5,0],s:[1.1,3,0.3]},
            {g:'box',m:'metal',o:[0,2.8,0],s:[1.8,0.4,0.3]},{g:'box',m:'doorM',o:[0,1.3,0],s:[1.7,2.6,0.14]},
            {g:'box',m:'emisC',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
+  airlock:{name:'Airlock Door', ic:'⎕', tier:2, cost:{fe:12,cy:5}, hp:120,
+    doorParts:[3,4], doorSlide:[-0.82,0.82], doorSpeed:3.5,   // two half-panels part to the sides, heavier/slower
+    parts:[{g:'box',m:'dark',o:[-1.45,1.5,0],s:[1.1,3,0.3]},{g:'box',m:'dark',o:[1.45,1.5,0],s:[1.1,3,0.3]},
+           {g:'box',m:'dark',o:[0,2.8,0],s:[1.8,0.4,0.3]},
+           {g:'box',m:'metal',o:[-0.45,1.3,0],s:[0.86,2.6,0.18]},{g:'box',m:'metal',o:[0.45,1.3,0],s:[0.86,2.6,0.18]},
+           {g:'box',m:'emisO',o:[0,2.62,0.16],s:[1.5,0.12,0.04]}]},
   dome:   {name:'Dome Roof', ic:'◠', tier:2, cost:{fe:10,cy:4}, hp:90,
     parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisC',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
   /* ---- Phase 2 building pieces ---- */
@@ -69,6 +76,46 @@ export const CAT = {
   beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
            {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
+  /* ---- Outpost update: functional pieces ---- */
+  telepad:{name:'Teleporter Pad', ic:'⊙', tier:2, cost:{fe:20,cy:10}, hp:90,
+    desc:'Paint two pads the same colour to link — stand on one and press E',
+    parts:[{g:'cyl',m:'dark',o:[0,0.15,0],s:[2.4,0.3,2.4]},
+           {g:'torus',m:'emisC',o:[0,0.36,0],s:[1.7,1.7,1.7],r:[Math.PI/2,0,0]},
+           {g:'cyl',m:'emisC',o:[0,0.33,0],s:[0.5,0.06,0.5]}], glow:{y:0.6,c:'#8ff4ff',s:3}},
+  lift:   {name:'Lift Platform', ic:'⇕', tier:2, cost:{fe:25,cy:8}, hp:120,
+    liftH:6, liftParts:[2,3], desc:'Step on to rise; step off to send it back down',
+    parts:[{g:'cyl',m:'dark',o:[0,0.25,0],s:[1.0,0.5,1.0]},                              // base pedestal
+           {g:'cyl',m:'metal',o:[0,3.3,0],s:[0.3,6.6,0.3]},                              // mast (static)
+           {g:'cyl',m:'metal',o:[0,0.55,0],s:[2.6,0.18,2.6]},                            // platform disc (animated)
+           {g:'torus',m:'emisC',o:[0,0.6,0],s:[1.25,1.25,1.25],r:[Math.PI/2,0,0]}],      // platform ring (animated)
+    glow:{y:0.6,c:'#8ff4ff',s:2.5}},
+  jumppad:{name:'Jump Pad', ic:'⏫', tier:1, cost:{fe:8}, hp:60,
+    parts:[{g:'cyl',m:'dark',o:[0,0.15,0],s:[2.2,0.3,2.2]},
+           {g:'cyl',m:'emisG',o:[0,0.33,0],s:[1.6,0.1,1.6]},
+           {g:'cone',m:'emisG',o:[0,0.46,0],s:[0.5,0.18,0.5]}], glow:{y:0.46,c:'#5aff8a',s:2.5}},
+  spotlight:{name:'Spotlight', ic:'◤', tier:1, cost:{fe:8,cy:2}, hp:60,
+    parts:[{g:'cyl',m:'dark',o:[0,1.5,0],s:[0.2,3,0.2]},                                 // pole
+           {g:'box',m:'metal',o:[0,3.0,0.25],s:[0.5,0.4,0.6],r:[0.6,0,0]},               // head, angled down
+           {g:'sphere',m:'emisW',o:[0,2.92,0.5],s:[0.3,0.3,0.3]},                        // lens
+           {g:'cone',m:'lightcone',o:[0,1.46,1.45],s:[2.4,3.5,2.4],r:[-0.58,0,0]}],      // faked light cone to the ground
+    glow:{y:3,c:'#eaf6ff',s:4}},
+  cryopod:{name:'Cryopod', ic:'⬓', tier:2, cost:{fe:18,cy:8,bio:4}, hp:100,
+    desc:'Press E to set your respawn point',
+    parts:[{g:'box',m:'dark',o:[0,0.35,0],s:[1.4,0.7,2.6]},
+           {g:'box',m:'cloth',o:[0,0.74,0.2],s:[1.1,0.18,1.9]},
+           {g:'dome',m:'glass',o:[0,0.8,0.2],s:[0.62,0.9,1.05]},
+           {g:'box',m:'metal',o:[0,0.6,-1.15],s:[1.3,1.0,0.3]},
+           {g:'box',m:'emisG',o:[0,0.95,-0.98],s:[0.8,0.25,0.04]}], glow:{y:1.0,c:'#8affb0',s:2.5}},
+  silo:   {name:'Storage Silo', ic:'⛁', tier:2, cost:{fe:35,cy:10}, hp:240, capUp:400, noKill:true,
+    parts:[{g:'cyl',m:'dark',o:[0,0.2,0],s:[2.9,0.4,2.9]},
+           {g:'cyl',m:'metal',o:[0,2.1,0],s:[2.6,3.8,2.6]},
+           {g:'dome',m:'metal',o:[0,4.0,0],s:[1.3,0.9,1.3]},
+           {g:'box',m:'emisO',o:[0,2.1,1.32],s:[0.5,2.6,0.06]}]},
+  navbeacon:{name:'Nav Beacon', ic:'✧', tier:1, cost:{fe:10,cy:2}, hp:70,
+    parts:[{g:'cyl',m:'dark',o:[0,0.2,0],s:[1.0,0.4,1.0]},
+           {g:'cyl',m:'metal',o:[0,4.0,0],s:[0.18,7.6,0.18]},
+           {g:'sphere',m:'emisR',o:[0,8.0,0],s:[0.5,0.5,0.5]},
+           {g:'cyl',m:'beam',o:[0,11.5,0],s:[0.16,7,0.16]}], glow:{y:8.0,c:'#ff7a5a',s:9}},
   /* decorations */
   flag:   {name:'Flag', ic:'⚑', tier:0, cost:{fe:3}, hp:40, decor:true,
     parts:[{g:'cyl',m:'dark',o:[0,1.25,0],s:[0.1,2.5,0.1]},{g:'box',m:'flagM',o:[0.65,2.1,0],s:[1.2,0.7,0.05]}]},
@@ -122,9 +169,9 @@ export const CAT = {
    accept:[piece types that may attach]}. The attaching piece's ORIGIN goes to the
    socket world position; R cycles the allowed rotations. Transforms are arbitrary,
    so collision/doors/save/MP all keep working unchanged. */
-export const SNAP_WALLS=['wall','window','door','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner','flatroof'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
+export const SNAP_WALLS=['wall','window','door','airlock','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner','flatroof'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
 export const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
-export const SNAP_PIECES=new Set(['floor','wall','ramp','door','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam']);
+export const SNAP_PIECES=new Set(['floor','wall','ramp','door','airlock','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam']);
 CAT.floor.sockets=[
   {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
   {p:[-2,0,0],  rots:[1], accept:SNAP_WALLS},
@@ -151,6 +198,7 @@ CAT.wall.sockets=[
 ];
 CAT.window.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
 CAT.door.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
+CAT.airlock.sockets=[{p:[0,3,0],rots:[0],accept:WALL_LIKE}];
 CAT.foundation.sockets=[
   {p:[0,1,0],   rots:[0], accept:SNAP_FLOORS},          // floor/foundation on top
   {p:[2,1,0],   rots:[1], accept:SNAP_WALLS},{p:[-2,1,0],rots:[1],accept:SNAP_WALLS},
@@ -192,6 +240,14 @@ export const COLLIDERS={
   wall:   {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
   window: {boxes:[{cx:0,hx:2,hz:0.16}],h:3,step:0.3},
   door:   {door:true,h:3,step:0.3},
+  airlock:{door:true,h:3,step:0.3},
+  telepad:{r:1.2,h:0.35},            // low cylinders never block at ground level (h-0.4 slack) — you walk onto the pad
+  lift:   {r:0.32,h:6.6},            // mast only; the platform is a walk surface via groundYAt
+  jumppad:{r:1.1,h:0.35},
+  spotlight:{r:0.22,h:3},
+  cryopod:{boxes:[{cx:0,hx:0.75,hz:1.35}],h:1.2,step:0.5},
+  silo:   {r:1.4,h:4.2},
+  navbeacon:{r:0.3,h:7.8},
   crate:  {boxes:[{cx:0,hx:0.8,hz:0.8}],h:1.2,step:0.55},
   ramp:   {ramp:true},
   shieldgen:{r:1.55,h:1.7},
