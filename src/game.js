@@ -552,17 +552,23 @@ const GEO={
 function stdMat(c,opt){ return new THREE.MeshStandardMaterial(Object.assign({color:c,roughness:0.65,metalness:0.35},opt||{})); }
 function emisMat(c,e,i){ return new THREE.MeshStandardMaterial({color:c,emissive:e,emissiveIntensity:i||1.6,roughness:0.4,metalness:0.1}); }
 const MAT={
-  metal:stdMat(0x9babb8),
-  dark:stdMat(0x46525e,{roughness:0.5,metalness:0.6}),
-  trim:stdMat(0x5a7a8e,{roughness:0.45,metalness:0.5}),
-  glass:new THREE.MeshStandardMaterial({color:0xaee6ff,transparent:true,opacity:0.32,roughness:0.1,metalness:0.2,side:THREE.DoubleSide}),
+  /* structural set: stronger rough/metal contrast so big builds read as
+     brushed alloy + gunmetal + bright trim instead of uniform grey.
+     Base colors stay neutral — instanceColor (paint) multiplies them. */
+  metal:stdMat(0x9babb8,{roughness:0.42,metalness:0.62}),
+  dark:stdMat(0x46525e,{roughness:0.32,metalness:0.82}),
+  trim:stdMat(0x5a7a8e,{roughness:0.28,metalness:0.7}),
+  glass:new THREE.MeshStandardMaterial({color:0xaee6ff,transparent:true,opacity:0.28,roughness:0.05,metalness:0.4,side:THREE.DoubleSide}),
   doorM:emisMat(0x3a4654,0x16384a,0.4),
-  emisC:emisMat(0x9feaff,0x2fb6e8,1.8),
-  emisW:emisMat(0xffffff,0xdfeaf0,1.7),
-  emisO:emisMat(0xffb070,0xcc5510,1.4),
-  emisR:emisMat(0xff7a6a,0xcc2210,1.7),
-  emisG:emisMat(0x8affa8,0x10cc44,1.7),
-  emisB:emisMat(0x7aa8ff,0x1040cc,1.7),
+  /* the emis* family is the curated "hot set": intensities ≥2.0 are what a
+     future bloom threshold keys on; sub-1.0 emissives (doorM/flagM/plant/
+     solar) stay deliberately below it */
+  emisC:emisMat(0x9feaff,0x2fb6e8,2.2),
+  emisW:emisMat(0xffffff,0xdfeaf0,2.0),
+  emisO:emisMat(0xffb070,0xcc5510,1.6),
+  emisR:emisMat(0xff7a6a,0xcc2210,2.0),
+  emisG:emisMat(0x8affa8,0x10cc44,2.0),
+  emisB:emisMat(0x7aa8ff,0x1040cc,2.0),
   beam:new THREE.MeshBasicMaterial({color:0x9fffc8,transparent:true,opacity:0.28,blending:THREE.AdditiveBlending,depthWrite:false}),
   lightcone:new THREE.MeshBasicMaterial({color:0xeaf6ff,transparent:true,opacity:0.14,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   holo:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
@@ -991,7 +997,7 @@ function buildSurface(planetKey){
     const wseg=40, wsize=940;
     const wg=new THREE.PlaneGeometry(wsize,wsize,wseg,wseg);
     wg.rotateX(-Math.PI/2);
-    const water=new THREE.Mesh(wg,new THREE.MeshStandardMaterial({color:0x2bb4ae,transparent:true,opacity:0.62,roughness:0.18,metalness:0.45,side:THREE.DoubleSide}));
+    const water=new THREE.Mesh(wg,new THREE.MeshStandardMaterial({color:0x2bb4ae,transparent:true,opacity:0.58,roughness:0.12,metalness:0.55,side:THREE.DoubleSide}));
     water.position.y=SEA_Y; g.add(water);
     surf.water={mesh:water,geo:wg,base:wg.attributes.position.array.slice()};
   }
