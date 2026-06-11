@@ -3991,6 +3991,7 @@ Object.assign(window,{
   S,CAT,PLANETS,TIERS,WEAPONS,CRAFT,STATION,STATION_KEYS,COLLIDERS,CRITTERS,
   SLOT_KEYS,SNAP_PIECES,SNAP_ROOFS,SNAP_WALLS,SNAP_FLOORS,player,NET,remotes,critters,structGlows,
   weaponVM,shieldWalls,throwables,surf,meteorState,evaPos,structMeshes,placedByType,
+  camera,renderer,surfScene,spaceScene,GEO,MAT,
   /* every game function the /tmp/pwtest suite calls as a bare global */
   addShieldWall,anyPanelOpen,applyDayNight,applyNodeDead,applyPaint,applyRemoved,applyPlaced,
   applyStationPlaced,buildSaveObj,cancelBuild,canAfford,carryCap,clearMeteors,collidePlayer,craft,
