@@ -9,8 +9,15 @@
 A first-person 3D sci-fi **build & explore** game. You mine resources on alien planets,
 unlock tiers of upgrades, extend how far you can travel (oxygen, jetpack, ship speed),
 reach new planets with rarer resources, and build a thriving base. Light survival
-pressure (oxygen running out, meteor showers damaging structures), **no combat**. It
-supports **1–4 player online co-op**.
+pressure (oxygen running out, meteor showers damaging structures), plus an **optional
+combat layer** (craftable weapons, PvP, sentry turrets, passive wildlife to hunt) added
+in later updates. It supports **1–4 player online co-op**.
+
+> **Note:** sections 1–4 describe the original release. The game has since grown
+> substantially — see **§5b (Combat & vehicles)** and **§5c (Horizon: critters,
+> heavy weapons, ocean world + Tier 5, orbital station)** for everything added since,
+> including the 4th planet, the 5-tier progression, the EVA mode, and the full message
+> protocol. The save format is now **v6**.
 
 Live versions:
 - Railway (runs the multiplayer server + game): https://starfall-production.up.railway.app
@@ -23,8 +30,8 @@ Live versions:
 
 - **Language:** Plain JavaScript (ES2020), no TypeScript, **no build step**, no framework.
 - **3D engine:** [Three.js](https://threejs.org) **r158**, loaded from cdnjs as a UMD `<script>` (global `THREE`). No imports/modules.
-- **Client = ONE file:** `index.html` (~2,400 lines). All HTML, CSS, and JavaScript are inline in this single self-contained file. There are **no external assets** — every 3D model is built from Three.js primitives (boxes, cylinders, spheres, cones), every texture/sound is generated in code.
-- **Server = `server.js`** (~350 lines, Node.js). Uses only the `ws` npm package for WebSockets plus Node built-ins. It serves `index.html` over HTTP **and** runs the co-op protocol, so one process does both. `package.json` + `railpack.json` configure the Railway (Node) deploy.
+- **Client = ONE file:** `index.html` (~4,700 lines). All HTML, CSS, and JavaScript are inline in this single self-contained file. There are **no external assets** — every 3D model is built from Three.js primitives (boxes, cylinders, spheres, cones), every texture/sound is generated in code.
+- **Server = `server.js`** (~520 lines, Node.js). Uses only the `ws` npm package for WebSockets plus Node built-ins. It serves `index.html` over HTTP **and** runs the co-op protocol, so one process does both. `package.json` + `railpack.json` configure the Railway (Node) deploy.
 - **Audio:** Procedural via the Web Audio API (`SND` object) — no sound files; tones are synthesized for mining, placing, klaxons, tier-ups, etc.
 - **Persistence:** Browser `localStorage` (single-player saves are versioned JSON; multiplayer stores per-player progress + a host world snapshot). No database.
 - **Rendering performance:** Heavy use of `THREE.InstancedMesh` (all structures, crystals, rocks, flora render as instanced batches), shared geometries/materials, a fixed particle pool, and fog-based distance culling. Targets 60fps desktop, playable on mid-range phones.
@@ -140,6 +147,21 @@ Authoritative for the shared world only: room membership (4-player cap, 5-char c
 - **Furniture**: bed, chair, holo console (animated screen), shelf, rug, ceiling light, locker, railing — all in `CAT` as decor.
 - **New net messages**: `fire`, `died`, `lootClaim/lootSpawn/lootGone/lootGot`, `chat`/`sys`, `roverSeat/roverSeatClear/roverMove` — see the protocol comment atop `server.js`. Damage is client-authoritative; loot/seats/turret-owner are server-authoritative.
 - **Save**: bumped to v2 with graceful v1 migration (combat fields default). `SAVE_VER`, `parseSave` accepts v1 and v2.
+
+## 5c. Horizon update (save v6) — 7 phases
+
+A large multi-phase expansion. Save is now **v6**; `parseSave` migrates v1–v5 (every new field defaults). All multiplayer behavior stays gated on `NET.active`; the server is authoritative only for shared-world objects (clock, critters, station, loot, nodes, seats).
+
+- **P1 — Building socket/snap system.** Pieces define 3D-ish sockets in `CAT.<piece>.sockets` (`{p:[x,y,z], rots, accept}`). The ghost snaps to the nearest valid socket (`findSnap`/`occupiedAt`, rewritten `updateGhost`), `R` cycles socket orientations, `G`/`#mFree` toggles free-place. Fixes dome-on-wall, flush corners, rotated joins, multi-story homes.
+- **P2 — Building content & tools.** New pieces (foundation, pillar S/M/L, half-wall, half-floor, angled roof + corner, beam) with sockets/colliders. **Paint tool** — 12 colours via per-instance `InstancedMesh.instanceColor` (`st.col`, saved, `paint` message). **Blueprints** — drag-select → save (localStorage, 60-piece cap), stamp the full ghost footprint, export/import codes.
+- **P3 — Day/night cycle.** Shared ~10-min cycle (`dayClock`, `CYCLE_S`, `applyDayNight`, `todNow`); sky/fog/light lerp, `surfStars` at night. Server owns `worldClock` (sends `tod` in welcome + a `clock` broadcast).
+- **P4 — Critters & hunting.** Passive fauna from primitives (skitterer/grazer/floater/hopper/skimmer — `CRITTERS`/`CRIT_BY_PLANET`), wander + flee, never attack. Defeating them drops **Chitin** (`S.res.ch`), used in cheaper Med-Pack + ammo recipes. Solo simulates locally; server owns spawns/positions (`critSnap` snapshots, `critHit` → `critDead`). Cap 12/planet, excluded from the Beacon safe zone.
+- **P5 — Heavy weapons** (Armory, tier-gated): **Plasma Grenade** (throw-arc + 3s-fuse AoE, no structure damage), **Deployable Shield** (thrown energy wall that blocks ranged shots 20s — `shieldWalls`/`shotBlocked`), **Lance Beam** (T4 hitscan sniper, scope FOV zoom, 3 Heavy Cells/shot), **Inferno Thrower** (T5 flame cone, burns new Fuel ammo). Hotbar scaled to 8 slots (keys 1-8, `Q` cycle, wraps on mobile). `nade`/`shield` relayed; lance/inferno reuse `fire` (wp 4/5).
+- **P6 — Ocean world Pelagos + Tier 5.** 4th planet (`PLANETS.pelagos`, `water:true`): `terrainHWater` archipelago above an animated water plane (`updateWater`), `SEA_Y=0`. New resource **Abyssal Pearl** (`pe`), nodes on outer islands. Water mechanics: wading slows, deep water sinks + drains O₂ 4× + vignette. **Tier 5** unlocks Pelagos (signal-shield cutscene like Verdant — now generalized to `SHIELDED`/`shieldGroups`/`startShieldCutscene`), the **Rover Hover Module** (skim water at T5), O₂ tank 160→240, and the Inferno recipe. `skimmer` water-critter.
+- **P7 — Orbital Station endgame.** A **Station Core** appears in orbit near Rust at Tier 5 (`STATION_POS`, `stationCore`). Flying near → **DOCK** → **EVA mode** (`S.mode='eva'`): jetpack 6DOF flight around the core, O₂ drains away from the parked ship. **Station pieces** (`STATION`: corridor/habitat/solar/dome/dock/comms) snap to a 3D socket graph (`stationSockets`, quaternion-aligned via `socketQuat`, `R` rolls). Placing all 6 types + ≥10 pieces powers it: **STARFALL STATION ONLINE** celebration (once) + persistent glow. Server stores pieces (`stationPlace`/`stationRemove` → `stationPlaced`/`stationRemoved`) and the online flag, both in welcome.
+
+**Net messages added across Horizon** (full list lives in the protocol comment atop `server.js`):
+`paint`, `clock`, `critSnap`/`critHit`/`critDead`, `nade`, `shield`, `stationPlace`/`stationRemove`/`stationPlaced`/`stationRemoved`. Damage stays client-authoritative (each victim self-applies); critters/station/nodes/clock are server-authoritative.
 
 ## 6. Current feature list (what exists today)
 

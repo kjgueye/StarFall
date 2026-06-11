@@ -4,12 +4,13 @@
 
    PROTOCOL (JSON frames, server is authoritative for shared-world objects):
    client->server: host, join, pu{pos,yaw,pitch,mode,pl,wp,iv,dr,sw},
-     place{st}, remove{id}, repair{id}, mine{pl,i},
+     place{st}, remove{id}, repair{id}, paint{id,col}, mine{pl,i},
      fire{wp,o,p,target?,dmg?}, critHit{id,dmg}, nade{o,v}, shield{o,v},
      stationPlace{st}, stationRemove{id}, died{by,pos,loot}, lootClaim{id},
      chat{text}, roverSeat{id}, roverSeatClear{id}, roverMove{id,x,y,z,ry}
-   server->client: welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats}},
-     err, pjoin, pleave, pu, placed, removed, hp, destroyed,
+   server->client:
+     welcome{...,world{structures,beacon,deadNodes,meteor,loot,seats,tod,station,stationOnline}},
+     err, pjoin, pleave, pu, placed, removed, paint, hp, destroyed, clock{tod},
      nodeDead, nodeAlive, meteorWarn/Active/meteor/meteorEnd,
      fire, nade, shield, critSnap{pl,crit[]}, critDead{id,x,z,by,ch},
      stationPlaced{by,st}, stationRemoved{id,by},
