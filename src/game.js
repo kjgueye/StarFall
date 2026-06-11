@@ -8,6 +8,10 @@
    ============================================================ */
 import * as THREE from 'three';
 window.THREE=THREE;
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
   WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
@@ -411,7 +415,7 @@ function buildSaveObj(){
     rsp:S.respawnPt||null,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
-    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false};
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true};
 }
 function saveGame(){
   if(!S.running) return;
@@ -423,7 +427,7 @@ function saveMP(){
     localStorage.setItem(mpPlayerKey(),JSON.stringify({tier:S.tier,
       res:{fe:S.res.fe|0,cy:S.res.cy|0,bio:S.res.bio|0,ch:S.res.ch|0,pe:S.res.pe|0},o2:S.o2|0,fuel:S.fuel|0,victoryShown:!!S.victoryShown,
       weapons:saveWeapons(),
-      ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false}));
+      ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true}));
     if(NET.isHost){
       localStorage.setItem(MP_WORLD_KEY,JSON.stringify({v:1,worldId:NET.worldId,savedAt:Date.now(),beacon:!!S.beacon,
         structures:S.structures.map(structSave),station:S.station.map(stationSave),stationOnline:!!S.stationOnline}));
@@ -453,7 +457,8 @@ function parseSave(json){
       sound:d.sound!==false,
       weapons:readWeapons(d.weapons),
       ammo:readAmmo(d.ammo),
-      medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false};
+      medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false,
+      fx:typeof d.fx==='boolean'?d.fx:null};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
         if(out.structures.length>=MAX_STRUCT) break;
@@ -495,6 +500,7 @@ function applySave(d){
   S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
+  if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
 }
 function exportSave(){
   const code=btoa(unescape(encodeURIComponent(JSON.stringify(buildSaveObj()))));
@@ -536,7 +542,34 @@ camera.rotation.order='YXZ';
 window.addEventListener('resize',()=>{
   camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth,window.innerHeight);
+  if(composer) composer.setSize(window.innerWidth,window.innerHeight);
 });
+
+/* ---------- post stack (Outpost P4): bloom + ACES grade, gated by S.fx ----------
+   fx ON: scene renders linear into the composer (r158 skips material tone
+   mapping for render targets), UnrealBloom lifts only the curated emis* hot
+   set (threshold 0.85), OutputPass applies ACES + sRGB. fx OFF: the direct
+   renderer path, pixel-identical to pre-P4. Default: on for desktop, off for
+   touch. Built lazily so fx-off devices never pay for the render targets. */
+function fxDefault(){ return !(('ontouchstart' in window)||navigator.maxTouchPoints>0); }
+const FX_EXPOSURE={rust:1.06,glacius:1.12,verdant:0.96,pelagos:1.02,space:1.0};
+let composer=null,renderPassFx=null,bloomPass=null;
+function buildComposer(){
+  const half=!fxDefault();                       // touch devices: half-res bloom
+  composer=new EffectComposer(renderer);
+  renderPassFx=new RenderPass(spaceScene,camera);
+  /* subtle: the additive glow sprites already carry the halos — bloom just
+     lifts emissive surfaces and hot pixels, it must not double the halos */
+  bloomPass=new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth>>(half?1:0),window.innerHeight>>(half?1:0)),0.26,0.25,0.88);
+  composer.addPass(renderPassFx);
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+}
+function applyFx(){
+  if(S.fx&&!composer) buildComposer();
+  renderer.toneMapping=S.fx?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;
+}
 
 const spaceScene=new THREE.Scene();
 const surfScene=new THREE.Scene();
@@ -3305,6 +3338,7 @@ function openSettings(){
   $('btnQuit').classList.toggle('hidden',!S.running);
   $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF');
   $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
+  $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
   $('importWrap').classList.add('hidden');
   openPanel('settings');
 }
@@ -3316,6 +3350,7 @@ $('btnImportGo').addEventListener('click',()=>{
 });
 $('btnSound').addEventListener('click',()=>{ SND.on=!SND.on; $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip(); });
 $('btnBob').addEventListener('click',()=>{ S.headbob=!S.headbob; $('btnBob').textContent='Head Bob: '+(S.headbob?'ON':'OFF'); SND.blip(); saveGame(); });
+$('btnFx').addEventListener('click',()=>{ S.fx=!S.fx; applyFx(); $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 $('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
 $('mMap').addEventListener('touchstart',e=>{ e.preventDefault(); toggleMap(); },{passive:false});
@@ -4098,6 +4133,7 @@ function startMultiplayer(w){
       S.weapons=readWeapons(blob.weapons);
       S.ammo=readAmmo(blob.ammo);
       S.medkits=Math.max(0,blob.medkits|0); S.headbob=blob.headbob!==false;
+      if(typeof blob.fx==='boolean'){ S.fx=blob.fx; applyFx(); }
       NET.send({t:'progRestore',prog:mpProgBlob()});
     } else if(w.prog) applyProg(w.prog);   // brand-new player (or Commander host): adopt server state
     if(pendingImportProg){
@@ -4203,6 +4239,10 @@ function secretTap(){
   }
 })();
 
+/* effects default + initial pipeline state (after save-load had its chance) */
+if(typeof S.fx!=='boolean') S.fx=fxDefault();
+applyFx();
+
 /* autosave */
 setInterval(saveGame,30000);
 window.addEventListener('beforeunload',saveGame);
@@ -4244,7 +4284,11 @@ function loop(now){
   updateFx(dt);
   if(S.running){ renderCompass(dt); updateMinimap(dt); }
   if(NET.active) updateChatFade();
-  renderer.render(activeScene,camera);
+  if(S.fx&&composer){
+    renderPassFx.scene=activeScene;
+    renderer.toneMappingExposure=FX_EXPOSURE[(S.running&&S.mode==='surface')?S.planet:'space']||1;
+    composer.render();
+  } else renderer.render(activeScene,camera);
 }
 requestAnimationFrame(loop);
 
@@ -4272,6 +4316,7 @@ Object.assign(window,{
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
+  applyFx,openSettings,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
