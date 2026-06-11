@@ -47,6 +47,9 @@ const SHIELD_R = 18;
 const METEOR_DMG = 35;
 const HITS_PER_SHOWER = 6;
 const PLANETS = ['rust', 'glacius', 'verdant'];
+const DAY_CYCLE = 600;            // seconds for a full day/night cycle
+let worldClock = 300;             // shared time-of-day (seconds)
+function worldTod() { return ((worldClock % DAY_CYCLE) + DAY_CYCLE) % DAY_CYCLE / DAY_CYCLE; }
 
 /* meteor phase timings (seconds) */
 const T_IDLE = () => METEOR_FAST ? 3 : 120 + Math.random() * 120;
@@ -155,6 +158,7 @@ function welcomeMsg(room, pid) {
       meteor: meteorSnapshot(room),
       loot: [...room.loot.values()].map(c => ({ id: c.id, pl: c.pl, pos: c.pos, loot: c.loot })),
       seats: [...room.seats.entries()],
+      tod: worldTod(),
     },
   };
 }
@@ -380,11 +384,13 @@ function resolveImpact(room, pl, tx, tz) {
     if (ms.hits >= HITS_PER_SHOWER) break;
   }
 }
-let lastTick = Date.now();
+let lastTick = Date.now(), lastClockBcast = 0;
 setInterval(() => {
   const now = Date.now();
   const dt = Math.min(2, (now - lastTick) / 1000);
   lastTick = now;
+  worldClock += dt;
+  if (now - lastClockBcast > 20000) { lastClockBcast = now; const tod = worldTod(); for (const room of rooms.values()) bcast(room, { t: 'clock', tod }); }
   for (const [code, room] of rooms) {
     /* GC */
     if (room.players.size === 0) {
