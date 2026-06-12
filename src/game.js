@@ -254,8 +254,56 @@ function applyCtl(pl,ctl,by){
   if(ctl==='yours'&&was!=='yours') onPlanetClaimed(pl,by);
   saveGame();
 }
-/* claim payoff — Phase 3 turns this into the full celebration */
-function onPlanetClaimed(pl,by){ showToast('★ '+PLANETS[pl].name+' CLAIMED ★',4000); }
+/* ---- claim payoff (Conquest P3): the biggest celebration since the station ---- */
+function onPlanetClaimed(pl,by){ claimSequence(pl); }
+function claimSequence(pl){
+  const p=PLANETS[pl];
+  SND.claimFanfare();
+  $('claimName').textContent=p.name+' IS YOURS';
+  $('claimStory').textContent=claimStoryLine(pl);
+  $('claimBanner').classList.remove('hidden');
+  setTimeout(()=>$('claimBanner').classList.add('hidden'),5600);
+  flashFx();
+  if(S.mode==='surface'&&S.planet===pl&&surf.built){
+    /* the defense powers down in sequence — capture positions now, the
+       server's snapshots may clear the entities underneath us */
+    const ds=drones.map(d=>({id:d.id,x:d.x,y:d.y,z:d.z}));
+    ds.forEach((d,i)=>setTimeout(()=>{ if(!S.running) return; droneDeathFx(d.x,d.y,d.z); removeDroneEntity(d.id); },350+i*170));
+    /* light cascade rings rolling outward from the new Claim Beacon */
+    const cp=S.structures.find(s=>s.t==='claimpost'&&s.pl===pl)||surf.fnode||{x:player.x,z:player.z};
+    const cols=[0xff7ad0,0x5affd8,0x7fff9a,0xb46aff];
+    for(let ring=0;ring<6;ring++) setTimeout(()=>{
+      if(!S.running||S.planet!==pl) return;
+      const r=5+ring*8;
+      for(let i=0;i<12;i++){
+        const a=i/12*6.283, x=cp.x+Math.cos(a)*r, z=cp.z+Math.sin(a)*r;
+        spawnBurst(x,terrainH(x,z,p)+0.8,z,cols[ring%cols.length],7,1.6,4.5,1.1,2);
+      }
+      SND.tone(523+ring*110,0.22,'sine',0.05);
+    },420+ring*230);
+    /* the beacon itself flares */
+    setTimeout(()=>{ if(S.running&&S.planet===pl){
+      spawnBurst(cp.x,terrainH(cp.x,cp.z,p)+5,cp.z,0xff7ad0,30,5,7,1.6,2);
+      const fl=makeGlow('#ff9ae0',30); fl.position.set(cp.x,terrainH(cp.x,cp.z,p)+5,cp.z); pushFx(fl,0.8,0.9);
+    } },380);
+  }
+  missionEvent('claim',pl);
+  renderMission();
+}
+/* one-line story beat per conquest (the chain reads outward to the stronghold) */
+function claimStoryLine(pl){
+  return {
+    cinder:'The faction\'s mining grip on the ember wastes is broken. Their signals point further out.',
+    umbra:'The violet relay falls silent. Whatever commands these drones is running out of places to hide.',
+    noctis:'The stronghold is yours. Across the system, the faction\'s lights blink out — for now.',
+  }[pl]||PLANETS[pl].name+' has joined your colony network.';
+}
+SND.claimFanfare=function(){
+  const seq=[392,523,659,784,1046,1318,1568,2093];
+  seq.forEach((f,i)=>setTimeout(()=>this.tone(f,0.5,'triangle',0.09),i*130));
+  setTimeout(()=>this.tone(98,2.4,'sawtooth',0.05,96),200);                       // low triumphant pad
+  setTimeout(()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>this.tone(f,0.9,'sine',0.06),i*40));},1350);  // closing chord
+};
 function onTurretFire(m){
   if(S.mode!=='surface') return;
   const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
@@ -303,6 +351,10 @@ function progEvent(ev){
     /* hp itself arrived in this prog snapshot */
     SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
     showToast('+50 HP');
+  }
+  else if(ev.type==='claim'){
+    const t=facTier(PLANETS[ev.pl]);
+    if(t&&t.reward) showToast('Claim reward: '+costStr(t.reward),4000);
   }
   else if(ev.type==='tier') applyTierUp(ev.n);
 }
@@ -1764,6 +1816,12 @@ function selectBuild(t){
   const def=CAT[t];
   if(def.tier>0&&def.tier>S.tier){ SND.denied(); showToast('Requires Tier '+def.tier); return; }
   if(t==='beacon'&&S.beacon){ showToast('The Beacon is already placed'); return; }
+  if(t==='claimpost'){
+    /* check everything except placement range (the ghost handles that) */
+    const p=curP(), fn=p.fnode||{x:0,z:0};
+    const err=R.claimError(p,planetCtl(S.planet),S.fnHp[S.planet]||0,fn.x,fn.z);
+    if(err){ showToast(err); SND.denied(); return; }
+  }
   buildSel=t; removeMode=false;
   if(ghost){ surfScene.remove(ghost); ghost=null; }
   ghost=new THREE.Group();
@@ -1833,7 +1891,8 @@ function updateGhost(){
   ghost.position.copy(ghostPos);
   const inB=Math.hypot(gx,gz)<WORLD_R-6;
   const dx=gx-player.x,dz=gz-player.z;
-  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz);
+  const claimBad=buildSel==='claimpost'&&R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,gx,gz)!==null;
+  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad;
   ghost.children.forEach(m=>m.material=ghostOK?MAT.ghostOk:MAT.ghostBad);
 }
 function placeStructure(){
@@ -1843,6 +1902,10 @@ function placeStructure(){
   if(buildSel==='turret'){ let mine=0; for(const s of S.structures) if(s.t==='turret'&&s.owner===myPid()) mine++;
     if(mine>=8){ showToast('Turret limit reached (8 per player)'); SND.denied(); return; } }
   if(!canAfford(def.cost)){ showToast('Need '+costStr(def.cost)); SND.denied(); return; }
+  if(buildSel==='claimpost'){
+    const err=R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,ghostPos.x,ghostPos.z);
+    if(err){ showToast(err); SND.denied(); return; }
+  }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
     NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostPlaceRot}});
@@ -1869,6 +1932,16 @@ function applyPlaced(m,byMe){
     S.beacon=true;
     if(byMe) cancelBuild();
     triggerVictory(); saveGame(); return;
+  }
+  if(st.t==='claimpost'){
+    if(byMe) cancelBuild();
+    /* solo: flip the planet here; in co-op the server flips and broadcasts ctl */
+    if(!NET.active&&planetCtl(st.pl)==='faction'){
+      const tier=facTier(PLANETS[st.pl]);
+      if(tier&&tier.reward){ for(const k in tier.reward) S.res[k]=Math.min(carryCap(),(S.res[k]|0)+tier.reward[k]); updateHUDRes(); }
+      applyCtl(st.pl,'yours','self');
+    }
+    saveGame(); return;
   }
   if(byMe){
     if(!canAfford(def.cost)){ cancelBuild(); showToast('Out of resources for '+def.name); }
@@ -3760,7 +3833,7 @@ function renderBuildGrid(){
   tool('◑','Paint Tool',()=>{ renderPaintGrid(); openPanel('paintPanel'); });
   tool('▤','Blueprints',openBlueprints);
   addSection('Structures');
-  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
+  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon','claimpost']) addItem(k);
   addSection('Outpost Systems');
   for(const k of ['telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon']) addItem(k);
   addSection('Decorations — any tier');
@@ -5243,6 +5316,7 @@ Object.assign(window,{
   planetCtl,applyCtl,updateCtlRings,defaultCtl,readCtl,
   drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
   damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
+  claimSequence,claimStoryLine,claimError:R.claimError,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

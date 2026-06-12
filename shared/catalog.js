@@ -76,6 +76,13 @@ export const CAT = {
   beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
            {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
+  /* Conquest: planting this in faction territory (control node down) flips the planet to yours */
+  claimpost:{name:'CLAIM BEACON', ic:'✪', tier:1, cost:{fe:25,cy:10}, hp:500, noKill:true, o2r:30,
+    desc:'Plant in the contested zone once the faction control node is down',
+    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.6,0],s:[1.0,4.2,1.0]},
+           {g:'sphere',m:'emisM',o:[0,5.0,0],s:[0.85,0.85,0.85]},
+           {g:'torus',m:'emisT',o:[0,1.0,0],s:[2.2,2.2,2.2],r:[Math.PI/2,0,0]},
+           {g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.0,c:'#ff7ad0',s:8}},
   /* ---- Outpost update: functional pieces ---- */
   telepad:{name:'Teleporter Pad', ic:'⊙', tier:2, cost:{fe:20,cy:10}, hp:90,
     desc:'Paint two pads the same colour to link — stand on one and press E',
@@ -254,6 +261,7 @@ export const COLLIDERS={
   armory: {boxes:[{cx:0,hx:1.35,hz:0.72}],h:1.5,step:0.6},
   turret: {r:0.8,h:1.6},
   beacon: {r:1.4,h:5},
+  claimpost:{r:1.3,h:4.6},
   lightpole:{r:0.22,h:3},
   relay:  {r:0.35,h:2.4},
   flag:   {r:0.14,h:2.5},
@@ -346,9 +354,9 @@ export const DRONES={
    roamer population, sentries ringing the node, HP/damage multipliers,
    and the Command Node's own HP */
 export const FACTION_TIERS=[
-  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:1,   nodeHp:300},
-  {count:5, roam:['stinger','stinger','heavy'], sentries:2, hpMul:1.4, dmgMul:1.3, nodeHp:550},
-  {count:7, roam:['stinger','heavy','heavy'],   sentries:3, hpMul:1.9, dmgMul:1.7, nodeHp:850},
+  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:1,   nodeHp:300, reward:{fe:40,cy:20}},
+  {count:5, roam:['stinger','stinger','heavy'], sentries:2, hpMul:1.4, dmgMul:1.3, nodeHp:550, reward:{fe:80,cy:40}},
+  {count:7, roam:['stinger','heavy','heavy'],   sentries:3, hpMul:1.9, dmgMul:1.7, nodeHp:850, reward:{fe:150,cy:80,bio:30}},
 ];
 export function facTier(p){ return p&&p.fac?FACTION_TIERS[Math.min(FACTION_TIERS.length,Math.max(1,p.fac.diff))-1]:null; }
 export const DRONE_LEASH=110;       // drones never chase farther than this from the node

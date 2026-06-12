@@ -72,7 +72,7 @@ import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DY
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
-  inSafeZone, groundYAt, shotBlocked, readFnodeHp } from './shared/rules.js';
+  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 import { openStore } from './store.js';
 
@@ -586,6 +586,10 @@ async function handle(ws, m) {
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       if (me.mode !== 'surface' || me.pl !== s.pl) { sendTo(ws, { t: 'err', msg: 'You must be on that surface to build' }); return; }
       if (s.t === 'beacon' && room.beacon) { sendTo(ws, { t: 'err', msg: 'The Beacon is already placed' }); return; }
+      if (s.t === 'claimpost') {
+        const cerr = claimError(PDATA[s.pl], room.ctl[s.pl], room.fnodeHp[s.pl] || 0, x, z);
+        if (cerr) { sendTo(ws, { t: 'err', msg: cerr }); return; }
+      }
       if (s.t === 'turret') {
         let mine = 0; for (const o of room.structures) if (o.t === 'turret' && o.owner === ws.pid) mine++;
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
@@ -601,6 +605,18 @@ async function handle(ws, m) {
       room.structures.push(st);
       if (st.t === 'beacon') room.beacon = true;
       bcast(room, { t: 'placed', by: ws.pid, st });
+      if (st.t === 'claimpost') {
+        /* BUILD = conquest: the planet flips to the players' colors */
+        room.ctl[st.pl] = 'yours';
+        room.drones[st.pl] = [];                 // defense powers down (clients play the sequence)
+        bcast(room, { t: 'ctl', pl: st.pl, ctl: 'yours', by: ws.pid });
+        const tier = facTier(PDATA[st.pl]);
+        if (tier && tier.reward) {
+          for (const k in tier.reward) grantRes(room, me, k, tier.reward[k]);
+          sendProg(room, ws.pid, { type: 'claim', pl: st.pl });
+        }
+        saveWorld(room);
+      }
       sendProg(room, ws.pid);
       return;
     }

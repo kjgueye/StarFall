@@ -20,6 +20,8 @@ const SCAT = {
   bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
   /* Outpost update functional pieces */
   telepad: 90, lift: 120, jumppad: 60, airlock: 120, spotlight: 60, cryopod: 100, silo: 240, navbeacon: 70,
+  /* Conquest update */
+  claimpost: 500,
 };
 const SCRIT = {
   skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
@@ -38,7 +40,7 @@ const PLANET_CRIT = {
   noctis: ['skitterer', 'floater'],
 };
 const STATION_TYPES = ['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms'];
-const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo'],
+const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo', 'claimpost'],
   SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos','cinder','umbra','noctis'],
   SAFE_CR: 32, CRIT_CAP: 12, STATION_MAX: 60, STATION_MIN: 10, DAY_CYCLE: 600, MAX_STRUCT: 400 };
 
