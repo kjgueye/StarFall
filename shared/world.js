@@ -69,6 +69,8 @@ export const PLANET_KEYS=Object.keys(PLANETS);
    defended), 'yours' (claimed by players). Shared by save files, the MP
    store and the wire protocol — readCtl sanitizes any of them. */
 export const CTL_STATES=['neutral','faction','yours'];
+/* the conquest mission thread walks outward, easy to brutal, ending at the stronghold */
+export const CONQUEST_CHAIN=['cinder','umbra','noctis'];
 export function defaultCtl(){
   const o={}; for(const k of PLANET_KEYS) o[k]=PLANETS[k].fac?'faction':'neutral'; return o;
 }

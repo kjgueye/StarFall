@@ -23,7 +23,7 @@ import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LI
   DRONES, FACTION_TIERS, facTier, DRONE_LEASH, DRONE_PATROL } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
 import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout,
-  defaultCtl, readCtl } from '../shared/world.js';
+  defaultCtl, readCtl, CONQUEST_CHAIN } from '../shared/world.js';
 import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
@@ -4340,15 +4340,85 @@ const MISSION_STEPS=[
 function missionOn(){ return S.running&&S.intro&&!S.intro.done; }
 function renderMission(){
   const card=$('missionCard');
-  if(!missionOn()||S.mode!=='surface'||arr.active){ card.classList.add('hidden'); return; }
+  if(!S.running||arr.active){ card.classList.add('hidden'); return; }
+  if(missionOn()){
+    /* First Light onboarding keeps priority (surface only, as before) */
+    if(S.mode!=='surface'){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    $('missionTitle').textContent='ESTABLISH YOUR OUTPOST';
+    $('missionSkip').style.display='';
+    const list=$('missionSteps'); list.innerHTML='';
+    MISSION_STEPS.forEach((st,i)=>{
+      const d=document.createElement('div');
+      d.className='mStep'+(i<S.intro.step?' done':(i===S.intro.step?' cur':''));
+      d.innerHTML=(i<S.intro.step?'✓ ':'▸ ')+st.t+(i===S.intro.step?'<div class="mHint">'+st.d+'</div>':'');
+      list.appendChild(d);
+    });
+    return;
+  }
+  /* Conquest thread (the PULL): fully derived from world state — the
+     current goal is the first chain planet that isn't yours yet */
+  if(S.mode!=='surface'&&S.mode!=='space'){ card.classList.add('hidden'); return; }
+  const m=conquestMission();
+  if(m.kind==='done'&&conqDismissed()){ card.classList.add('hidden'); return; }
+  renderConquest(m);
+}
+/* ---- Conquest mission thread (Conquest P4) ---- */
+function conquestMission(){
+  if(!WEP_KEYS.some(k=>S.weapons[k])) return {kind:'arm'};
+  for(const pl of CONQUEST_CHAIN) if(planetCtl(pl)!=='yours') return {kind:'claim',pl};
+  return {kind:'done'};
+}
+const CONQ_EPILOGUE='The faction\'s command nodes are silent across the system… but something out there is still listening.';
+function conqDismissed(){ try{ return !!localStorage.getItem('astravox_conq_dismissed'); }catch(e){ return false; } }
+function conquestHint(m){
+  if(m.kind==='arm') return 'Build an Armory and craft a weapon — the faction won\'t yield to a mining tool';
+  const pl=m.pl;
+  if(S.mode!=='surface'||S.planet!==pl) return 'Fly to '+PLANETS[pl].name+' (follow the ◆ marker) and land — expect resistance';
+  if(fnodeAlive(pl)) return 'Fight to the faction control node (⬢ on compass / map) and destroy it';
+  return 'Now BUILD the conquest: Build menu → CLAIM BEACON, planted near the downed node';
+}
+function renderConquest(m){
+  const card=$('missionCard');
   card.classList.remove('hidden');
-  const list=$('missionSteps'); list.innerHTML='';
-  MISSION_STEPS.forEach((st,i)=>{
-    const d=document.createElement('div');
-    d.className='mStep'+(i<S.intro.step?' done':(i===S.intro.step?' cur':''));
-    d.innerHTML=(i<S.intro.step?'✓ ':'▸ ')+st.t+(i===S.intro.step?'<div class="mHint">'+st.d+'</div>':'');
-    list.appendChild(d);
-  });
+  $('missionTitle').textContent='FACTION CONQUEST';
+  $('missionSkip').style.display=m.kind==='done'?'':'none';
+  let html='';
+  html+=m.kind==='arm'
+    ?'<div class="mStep cur">▸ Arm yourself<div class="mHint">'+conquestHint(m)+'</div></div>'
+    :'<div class="mStep done">✓ Arm yourself</div>';
+  for(const pl of CONQUEST_CHAIN){
+    const yours=planetCtl(pl)==='yours';
+    const cur=m.kind==='claim'&&m.pl===pl;
+    const label=(pl===CONQUEST_CHAIN[CONQUEST_CHAIN.length-1]?'Take the stronghold — ':'Claim ')+PLANETS[pl].name;
+    html+='<div class="mStep'+(yours?' done':(cur?' cur':''))+'">'+(yours?'✓ ':'▸ ')+label+
+      (cur?'<div class="mHint">'+conquestHint(m)+'</div>':'')+'</div>';
+  }
+  if(m.kind==='done')
+    html+='<div class="mStep done" style="color:#9affe2;margin-top:6px">★ CONQUEST COMPLETE<div class="mHint">'+CONQ_EPILOGUE+'</div></div>';
+  $('missionSteps').innerHTML=html;
+}
+/* space-mode target chevron: projects the current conquest target onto the
+   screen (clamped to the edge when off-axis/behind) — the pull across the void */
+function updateSpaceTarget(){
+  const el=$('spaceTarget');
+  if(!S.running||S.mode!=='space'||cs.active||transitioning||arr.active){ el.classList.add('hidden'); return; }
+  const m=conquestMission();
+  if(m.kind!=='claim'){ el.classList.add('hidden'); return; }
+  const p=PLANETS[m.pl];
+  _pv.set(p.pos[0],p.pos[1],p.pos[2]).project(camera);
+  let x=_pv.x, y=_pv.y;
+  const behind=_pv.z>1;
+  if(behind){ x=-x; y=-y; const l=Math.hypot(x,y)||1e-4; x=x/l*0.92; y=y/l*0.85; }
+  else {
+    if(Math.abs(x)>0.92){ y*=0.92/Math.abs(x); x=Math.sign(x)*0.92; }
+    if(Math.abs(y)>0.85){ x*=0.85/Math.abs(y); y=Math.sign(y)*0.85; }
+  }
+  const d=ship.position.distanceTo(_pv.set(p.pos[0],p.pos[1],p.pos[2]));
+  el.textContent='◆ '+p.name+' · '+(d|0)+'m';
+  el.style.left=((x*0.5+0.5)*window.innerWidth)+'px';
+  el.style.top=((-y*0.5+0.5)*window.innerHeight)+'px';
+  el.classList.remove('hidden');
 }
 function missionBegin(){
   if(S.intro&&!S.intro.done&&introDoneDevice()) S.intro.done=true;   // device already finished it (e.g. MP guest)
@@ -4370,6 +4440,9 @@ function missionAdvance(){
     showToast('✦ OUTPOST ESTABLISHED — the frontier is yours. Mine, build, reach further.',7000);
     SND.tierUp();
     spawnBurst(player.x,player.y+1.5,player.z,0x8affb0,30,4,5,1.2,2);
+    /* hand straight off to the conquest thread — there is ALWAYS a next goal */
+    setTimeout(()=>{ if(S.running&&!missionOn())
+      showToast('⚑ NEW OBJECTIVE — the faction holds '+PLANETS[CONQUEST_CHAIN[0]].name+'. Take it from them.',6500); },7400);
   }
   renderMission();
   saveGame();
@@ -4407,7 +4480,10 @@ function missionTick(dt){
     if(dx*dx+dz*dz<256) missionAdvance();
   }
 }
-$('missionSkip').addEventListener('click',()=>{ SND.blip(); missionSkip(); });
+$('missionSkip').addEventListener('click',()=>{ SND.blip();
+  if(missionOn()) missionSkip();
+  else { try{ localStorage.setItem('astravox_conq_dismissed','1'); }catch(e){} renderMission(); }
+});
 
 /* ============================================================
    SIGNAL-SHIELD CUTSCENE (Verdant tier 3, Pelagos tier 5)
@@ -5239,7 +5315,7 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 /* ============================================================
    MAIN LOOP
    ============================================================ */
-let last=performance.now(), titleT=0;
+let last=performance.now(), titleT=0, missionUiT=0;
 function loop(now){
   requestAnimationFrame(loop);
   let dt=(now-last)/1000; last=now;
@@ -5255,6 +5331,10 @@ function loop(now){
       if(nw-NET.lastPU>100&&!transitioning){ NET.lastPU=nw; sendPU(); }
       updateRemotes(dt);
     }
+    /* mission card is derived state — refresh it ~1/s; chevron every frame */
+    missionUiT-=dt;
+    if(missionUiT<=0){ missionUiT=1; renderMission(); }
+    updateSpaceTarget();
   } else {
     /* title backdrop: slow orbit through space */
     titleT+=dt*0.04;
@@ -5317,6 +5397,7 @@ Object.assign(window,{
   drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
   damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
   claimSequence,claimStoryLine,claimError:R.claimError,
+  conquestMission,conquestHint,updateSpaceTarget,CONQUEST_CHAIN,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

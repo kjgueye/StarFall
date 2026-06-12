@@ -204,6 +204,11 @@
   #missionCard .mHint { font-size:10.5px; color:#9fc8de; opacity:0.85; margin:2px 0 0 14px; }
   #missionSkip { position:absolute; top:6px; right:8px; background:none; border:none; color:#5fa8c8; cursor:pointer; font-size:11px; }
   #missionSkip:hover { color:#cfeefe; }
+  /* conquest target chevron in space — points at the current mission planet */
+  #spaceTarget { position:fixed; z-index:21; pointer-events:none; color:#ff9ad0; font-size:14px; letter-spacing:0.14em;
+    text-shadow:0 0 12px #aa1080, 0 0 4px #000; transform:translate(-50%,-50%); white-space:nowrap;
+    animation:tgtPulse 1.4s infinite alternate; }
+  @keyframes tgtPulse { from { opacity:0.65; } to { opacity:1; } }
   body.touch #missionCard { top:auto; bottom:208px; left:12px; width:min(230px,52vw); }
   body.touch #missionCard .mHint { display:none; }
 
@@ -280,6 +285,7 @@
     <button id="missionSkip">skip ✕</button>
     <div id="missionSteps"></div>
   </div>
+  <div id="spaceTarget" class="hidden">◆</div>
 </div>
 
 <div id="vignette" class="hidden"></div>
