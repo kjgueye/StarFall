@@ -753,6 +753,34 @@ spaceScene.background=new THREE.Color(0x01030a);
   stars.frustumCulled=false;
   spaceScene.add(stars);
 }
+/* nebula backdrop (Neon Horizon P4): additive procedural color fields on a
+   far BackSide sphere — deep space stays black, bands of magenta/violet/teal
+   drift across it. One draw call, one 512^2 canvas texture. */
+let nebula=null;
+{
+  const cv=document.createElement('canvas'); cv.width=cv.height=512;
+  const g2=cv.getContext('2d');
+  g2.fillStyle='#000'; g2.fillRect(0,0,512,512);
+  const blobs=[
+    [120,150,150,'rgba(255,60,190,0.30)'],   // magenta
+    [330,90,120,'rgba(140,70,255,0.26)'],    // violet
+    [410,300,160,'rgba(40,230,210,0.20)'],   // teal
+    [200,380,130,'rgba(255,110,200,0.20)'],  // pink
+    [60,330,100,'rgba(80,90,255,0.18)'],     // deep blue
+    [470,450,90,'rgba(255,60,120,0.16)'],    // hot red-pink
+  ];
+  for(const b of blobs){
+    const rg=g2.createRadialGradient(b[0],b[1],0,b[0],b[1],b[2]);
+    rg.addColorStop(0,b[3]); rg.addColorStop(1,'rgba(0,0,0,0)');
+    g2.fillStyle=rg; g2.beginPath(); g2.arc(b[0],b[1],b[2],0,6.283); g2.fill();
+  }
+  nebula=new THREE.Mesh(new THREE.SphereGeometry(2600,24,16),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cv),side:THREE.BackSide,transparent:true,
+      opacity:0.6,depthWrite:false,blending:THREE.AdditiveBlending,fog:false}));
+  nebula.frustumCulled=false;
+  nebula.renderOrder=-1;
+  spaceScene.add(nebula);
+}
 /* sun */
 {
   const sun=new THREE.Mesh(new THREE.SphereGeometry(38,24,18),new THREE.MeshBasicMaterial({color:0xffe8b0}));
@@ -4735,6 +4763,7 @@ function loop(now){
     activeScene=spaceScene;
   }
   for(const key in shieldGroups){ const g=shieldGroups[key]; if(g.parent){ g.rotation.y+=dt*0.3; g.rotation.x+=dt*0.11; } }
+  if(nebula){ nebula.rotation.y+=dt*0.0015; nebula.rotation.z+=dt*0.0004; }   // imperceptibly drifting cosmos
   if(stationCore.visible){ stationCore.rotation.y+=dt*0.08;
     const cb=stationCore.getObjectByName('coreBeacon'); if(cb) cb.scale.setScalar(2.4+Math.sin(now*0.004)*0.4);
     if(stationGlow.visible) stationGlow.scale.setScalar(150+Math.sin(now*0.002)*30); }
