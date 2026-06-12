@@ -91,7 +91,11 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='astravox_save_v1';
-const SAVE_VER=7;   // v7: + rsp (cryopod respawn point); older saves load with it null
+const SAVE_VER=8;   // v7: + rsp (cryopod respawn). v8: + intro {done,step,cineSeen} — pre-v8 saves load as done (veterans skip onboarding)
+/* device-scoped intro markers so MP guests (no solo save) also skip on replay */
+const CINE_SEEN_KEY='astravox_cine_seen_v1', INTRO_DONE_KEY='astravox_intro_done_v1';
+function cineSeenDevice(){ try{ return !!localStorage.getItem(CINE_SEEN_KEY); }catch(e){ return false; } }
+function introDoneDevice(){ try{ return !!localStorage.getItem(INTRO_DONE_KEY); }catch(e){ return false; } }
 const MP_WORLD_KEY='astravox_mp_world_v1';
 /* Phase 3 — guest identity + persistent worlds */
 const GUEST_KEY='astravox_guest_v1';            // server-minted {id,tok}; our passwordless identity
@@ -413,6 +417,8 @@ function buildSaveObj(){
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
     rsp:S.respawnPt||null,
+    intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen},
+    cine:S.cine===true,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
     ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true};
@@ -453,6 +459,10 @@ function parseSave(json){
       beacon:!!d.beacon, victoryShown:!!d.victoryShown,
       rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
         ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
+      /* pre-v8 saves = veterans: intro complete, never replays */
+      intro:(d.v>=8&&d.intro)?{done:!!d.intro.done,step:d.intro.step|0,cineSeen:!!d.intro.cineSeen}
+        :{done:true,step:99,cineSeen:true},
+      cine:d.cine===true,
       pc:(d.pc&&SHIELDED[d.pc])?d.pc:(d.pvc?'verdant':null),
       sound:d.sound!==false,
       weapons:readWeapons(d.weapons),
@@ -502,6 +512,7 @@ function applySave(d){
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
   if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
   S.amb=d.amb===true;
+  S.intro=d.intro; S.cine=d.cine;
 }
 function exportSave(){
   const code=btoa(unescape(encodeURIComponent(JSON.stringify(buildSaveObj()))));
@@ -3429,6 +3440,7 @@ function openSettings(){
   $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
   $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF');
+  $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY');
   $('importWrap').classList.add('hidden');
   openPanel('settings');
 }
@@ -3445,6 +3457,10 @@ $('btnAmb').addEventListener('click',()=>{
   S.amb=!S.amb;
   if(S.amb&&S.running&&S.mode==='surface') SND.ambStart(S.planet); else SND.ambStop();
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF'); SND.blip(); saveGame();
+});
+$('btnCine').addEventListener('click',()=>{
+  S.cine=!S.cine;
+  $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY'); SND.blip(); saveGame();
 });
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 $('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
@@ -3491,7 +3507,10 @@ function enterSurface(planetKey,fromSave){
   refreshMobileUI();
   /* one-time hint: wildlife is the Chitin source (it isn't mined) */
   try{ if(!localStorage.getItem('sf_huntHint')){ localStorage.setItem('sf_huntHint','1');
-    setTimeout(()=>{ if(S.running&&S.mode==='surface') showToast('Wildlife roams here — track the tan dots on your map (M) and defeat them with a weapon to harvest Chitin',5500); },3000); } }catch(e){}
+    const hint=()=>{ if(!S.running||S.mode!=='surface') return;
+      if(arr.active){ setTimeout(hint,4000); return; }   // never talk over the arrival cinematic
+      showToast('Wildlife roams here — track the tan dots on your map (M) and defeat them with a weapon to harvest Chitin',5500); };
+    setTimeout(hint,3000); } }catch(e){}
 }
 function enterSpace(fromPlanetKey,fromSave){
   if(driving){ driving=null; }
@@ -3523,7 +3542,15 @@ function enterSpace(fromPlanetKey,fromSave){
 function doLand(planetKey){
   if(transitioning) return;
   saveGame();
-  fadeTo('DESCENDING TO '+PLANETS[planetKey].name,()=>{ enterSurface(planetKey,false); saveGame(); });
+  /* cinematic descent: a new player's first landing (or every landing with
+     the Settings flourish on). Camera-only — in MP other players just see
+     your avatar appear, nothing global changes. */
+  const cine=(S.intro&&!S.intro.done&&!S.intro.cineSeen&&!cineSeenDevice())||S.cine===true;
+  fadeTo('DESCENDING TO '+PLANETS[planetKey].name,()=>{
+    enterSurface(planetKey,false);
+    saveGame();
+    if(cine) startArrival();
+  });
 }
 function doLaunch(){
   if(transitioning) return;
@@ -3540,6 +3567,82 @@ function doBlackout(){
     player.vy=0; S.o2=o2Max();
   });
 }
+
+/* ============================================================
+   CINEMATIC ARRIVAL (First Light P1) — the ship drops out of the
+   sky onto the pad while an external camera watches, dust + shake
+   on touchdown, then the camera blends into first-person. Pure
+   client spectacle: ~7s, skippable with any key/tap.
+   ============================================================ */
+const arr={active:false,t:0,dur:7.4,base:null,touched:false,shake:0,skip:false};
+const _arrV=new THREE.Vector3(), _arrQ=new THREE.Quaternion(), _arrE=new THREE.Euler(0,0,0,'YXZ');
+function startArrival(){
+  arr.active=true; arr.t=0; arr.touched=false; arr.skip=false; arr.shake=0;
+  arr.base=surf.shipPos.clone();
+  ship.position.set(arr.base.x,arr.base.y+170,arr.base.z);
+  ship.getObjectByName('engGlow').visible=true;
+  tool.visible=false;                                  // no first-person viewmodel in the cinematic
+  for(const k in weaponVM) weaponVM[k].visible=false;
+  if(!S.intro.done&&!NET.active) dayClock=CYCLE_S*0.38;  // first light: a new player arrives in bright morning
+  applyDayNight();
+  document.body.classList.add('cutsceneOn');
+  showToast('TAP or press any key to skip',2600);
+  SND.tone&&SND.tone(46,2.8,'sawtooth',0.055,120);     // entry rumble builds
+  if(SND.tone) setTimeout(()=>arr.active&&SND.tone(70,2.2,'sawtooth',0.06,140),2400);
+}
+function finishArrival(){
+  arr.active=false;
+  ship.position.copy(arr.base);
+  ship.getObjectByName('engGlow').visible=false;
+  updateViewmodel();                                   // restore the FP tool/weapon
+  document.body.classList.remove('cutsceneOn');
+  S.intro.cineSeen=true;
+  try{ localStorage.setItem(CINE_SEEN_KEY,'1'); }catch(e){}
+  saveGame();
+}
+function updateArrival(dt){
+  arr.t+=dt;
+  if(arr.skip){ if(!arr.touched) SND.impact(); finishArrival(); return; }
+  const t=arr.t;
+  /* ship descends 170m, decelerating into the pad */
+  const k=smooth(0.2,4.8,t);
+  ship.position.set(arr.base.x,arr.base.y+(1-k)*170,arr.base.z);
+  if(!arr.touched&&Math.random()<dt*36)
+    spawnBurst(ship.position.x,ship.position.y-2.2,ship.position.z,0xffc060,3,2.2,-7,0.45,-5);
+  if(!arr.touched&&k>0.6&&Math.random()<dt*20)          // ground dust kicked up by the wash
+    spawnBurst(arr.base.x+(Math.random()-0.5)*8,arr.base.y-1.8,arr.base.z+(Math.random()-0.5)*8,0xa9764f,4,5,1.5,0.8,2);
+  if(k>=1&&!arr.touched){
+    arr.touched=true; arr.shake=0.9;
+    ship.getObjectByName('engGlow').visible=false;
+    spawnBurst(arr.base.x,arr.base.y-1.8,arr.base.z,0xb07a50,42,9,2.6,1.3,4);
+    spawnBurst(arr.base.x,arr.base.y-1.8,arr.base.z,0x7a5236,26,13,1,1.8,3);
+    SND.impact();
+    if(SND.tone) setTimeout(()=>SND.tone(2400,0.8,'sine',0.02,700),260);   // settling hiss
+  }
+  arr.shake=Math.max(0,arr.shake-dt*1.1);
+  /* camera: side vantage watching the descent, then blend into first-person */
+  const eyeY=player.y+player.h;
+  const camK=smooth(5.2,arr.dur-0.15,t);
+  const vx=arr.base.x+13, vz=arr.base.z+15;            // NE vantage — clear sightline past the spawn boulder
+  const vy=groundYAt(vx,vz,1e9)+5;
+  camera.position.set(vx+(player.x-vx)*camK,vy+(eyeY-vy)*camK,vz+(player.z-vz)*camK);
+  if(camK<0.02){
+    /* keep the shot level on the pad/horizon (Rust's sky is near-black —
+       pitching up reads as a void); the ship drops INTO frame for touchdown */
+    _arrV.set(ship.position.x,arr.base.y+Math.min(7,(ship.position.y-arr.base.y)*0.12)+1.2,ship.position.z);
+    camera.lookAt(_arrV);
+  } else {
+    camera.lookAt(ship.position.x,arr.base.y+1.5,ship.position.z);
+    _arrE.set(0,player.yaw,0); _arrQ.setFromEuler(_arrE);
+    camera.quaternion.slerp(_arrQ,camK*camK);            // settle onto the FP view direction
+  }
+  camera.position.x+=(Math.random()-0.5)*arr.shake*0.5;
+  camera.position.y+=(Math.random()-0.5)*arr.shake*0.4;
+  if(t>=arr.dur) finishArrival();
+}
+/* skip on any key/tap while the arrival plays */
+window.addEventListener('keydown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
+window.addEventListener('pointerdown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
 
 /* ============================================================
    SIGNAL-SHIELD CUTSCENE (Verdant tier 3, Pelagos tier 5)
@@ -4087,6 +4190,7 @@ function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
   S.respawnPt=null;
+  S.intro={done:false,step:0,cineSeen:false};   // a NEW game runs the intro (device markers still gate replays)
   S.station=[]; S.stationOnline=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
@@ -4349,6 +4453,8 @@ function secretTap(){
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
 if(typeof S.amb!=='boolean') S.amb=false;   // planet ambience is opt-in
+if(!S.intro) S.intro={done:true,step:99,cineSeen:true};   // pre-start safety; resetState/applySave set the real value
+if(typeof S.cine!=='boolean') S.cine=false;
 applyFx();
 
 /* autosave */
@@ -4366,6 +4472,7 @@ function loop(now){
   if(!(dt>0)||dt>0.05) dt=Math.min(Math.max(dt,0.001),0.05);
   if(S.running){
     if(cs.active){ updateCutscene(dt); }
+    else if(arr.active){ updateArrival(dt); }   // particles/fx update later in the loop as usual
     else if(S.mode==='space') updateSpace(dt);
     else if(S.mode==='eva') updateEva(dt);
     else updateSurface(dt);
@@ -4424,7 +4531,7 @@ Object.assign(window,{
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
-  applyFx,openSettings,buildAmbient,updateAmbient,SND,
+  applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
