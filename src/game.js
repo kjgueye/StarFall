@@ -3063,14 +3063,18 @@ function applyDayNight(){
   const p=curP(), tod=todNow();
   const sunUp=Math.sin((tod-0.25)*Math.PI*2);      // 1 noon, -1 midnight
   const day=clamp((sunUp+0.25)/1.15,0,1);
-  if(surf.hemi) surf.hemi.intensity=0.12+0.78*day;
+  if(surf.hemi) surf.hemi.intensity=0.22+0.68*day;          // night floor raised: navigable, still dark
   if(surf.dirLight){
-    surf.dirLight.intensity=0.08+1.2*day;
+    surf.dirLight.intensity=0.12+1.16*day;
     /* horizon light warms toward the planet's dusk tint at dawn/sunset */
     const duskK=clamp(1-Math.abs(sunUp)*2.6,0,1)*0.85;
     surf.dirLight.color.set(p.sun).lerp(_tmpC2.set(p.dusk!==undefined?p.dusk:0xffb070),duskK);
   }
-  if(surf.amb) surf.amb.intensity=0.16+0.34*day;
+  if(surf.amb){
+    surf.amb.intensity=0.30+0.20*day;
+    /* colored ambient bounce: shadows fill with the planet's neon-night tint */
+    surf.amb.color.set(p.nightAmb!==undefined?p.nightAmb:0x2a1c50).lerp(_tmpC2.set(0x404050),day);
+  }
   dnBaseSky.set(p.nightSky!==undefined?p.nightSky:0x05070d).lerp(_tmpC.set(p.sky),day);
   dnBaseFog.set(p.nightFog!==undefined?p.nightFog:0x080c16).lerp(_tmpC.set(p.fog),day);
   surfScene.background=dnBaseSky;
