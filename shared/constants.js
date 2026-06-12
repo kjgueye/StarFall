@@ -45,6 +45,9 @@ export const MINE_RESPAWN_S = 180; // node respawn time (server uses ms)
 /* ---- critters ---- */
 export const CRIT_CAP = 12;        // max concurrent critters per planet
 
+/* ---- faction drones (Conquest) ---- */
+export const DRONE_CAP = 10;       // max concurrent drones per planet (perf cap)
+
 /* ---- orbital station ---- */
 export const STATION_MAX = 60;         // max station pieces per world
 export const STATION_MIN_PIECES = 10;  // min pieces (plus all types) to power the station

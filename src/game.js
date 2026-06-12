@@ -15,11 +15,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
-  WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
+  WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, DRONE_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
   EVA_SPEED, STATION_REACH, STATION_SNAP } from '../shared/constants.js';
 import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LIKE, SNAP_PIECES,
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
-  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
+  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS,
+  DRONES, FACTION_TIERS, facTier, DRONE_LEASH, DRONE_PATROL } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
 import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout,
   defaultCtl, readCtl } from '../shared/world.js';
@@ -82,6 +83,7 @@ const S={
   o2:100, fuel:100, beacon:false, victoryShown:false,
   station:[], stationOnline:false,
   ctl:defaultCtl(),         // per-planet faction control: neutral | faction | yours
+  fnHp:R.readFnodeHp(null), // per-faction-planet Command Node HP (0 = downed)
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingCutscene:null,
@@ -201,6 +203,11 @@ function netHandle(m){
     case 'critSnap': applyCritSnap(m.pl,m.crit||[]); break;
     case 'critDead': onCritDead(m); break;
     case 'ctl': applyCtl(m.pl,m.ctl,m.by); break;
+    case 'droneSnap': applyDroneSnap(m.pl,m.drones||[]); break;
+    case 'droneDead': onDroneDead(m); break;
+    case 'dfire': onDFire(m); break;
+    case 'fnodeHp': onFnodeHp(m); break;
+    case 'fnodeDown': onFnodeDown(m); break;
     case 'nade': onRemoteNade(m); break;
     case 'shield': onRemoteShield(m); break;
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
@@ -350,6 +357,7 @@ function renderCompass(dt){
   const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
   for(const s of placedByType.navbeacon||[]){ if(s.hp>0) mk(s.x,s.z,'✧','#'+new THREE.Color(s.col!=null?s.col:0xff7a5a).getHexString()); }
   if(surf.poi) for(const o of surf.poi) mk(o.x,o.z,o.label,o.col);
+  if(surf.fnode) mk(surf.fnode.x,surf.fnode.z,'⬢',fnodeAlive()?'#ff5a4a':'#8a6a64');
   if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
   /* nearest critter — points the way to the hunt */
   if(critters.length){ let best=null,bd=1e9; for(const c of critters){ const dx=c.x-px,dz=c.z-pz,d=dx*dx+dz*dz; if(d<bd){bd=d;best=c;} }
@@ -384,6 +392,10 @@ function drawMinimap(){
     dot(s.x,s.z, s.t==='beacon'?'#aef9c8':(s.t==='turret'?'#ff7a6a':(s.t==='rover'?'#ffd060':'#8fb6cc')), s.t==='beacon'?3:2); }
   // wildlife (critters — hunt for Chitin)
   for(const c of critters) dot(c.x,c.z,'#d8b878',1.8);
+  // faction forces (Conquest): drones hot red, Command Node a marked square
+  for(const d of drones) dot(d.x,d.z,'#ff4a3a',2.2);
+  if(surf.fnode){ const m2=w2m(surf.fnode.x,surf.fnode.z);
+    g.fillStyle=fnodeAlive()?'#ff3a2a':'#7a4a44'; g.fillRect(m2[0]-3.5,m2[1]-3.5,7,7); }
   // ship
   if(surf.built) dot(surf.shipPos.x,surf.shipPos.z,'#7fd6f5',3);
   // starter-world landmarks
@@ -434,7 +446,7 @@ function buildSaveObj(){
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
-    ctl:Object.assign({},S.ctl),
+    ctl:Object.assign({},S.ctl), fnHp:Object.assign({},S.fnHp),
     rsp:S.respawnPt||null,
     intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen,granted:!!S.intro.granted},
     cine:S.cine===true,
@@ -477,7 +489,7 @@ function parseSave(json){
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown,
       /* pre-v9 saves: faction worlds default to faction-held, the rest neutral */
-      ctl:readCtl(d.ctl),
+      ctl:readCtl(d.ctl), fnHp:R.readFnodeHp(d.fnHp),
       rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
         ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
       /* pre-v8 saves = veterans: intro complete, never replays */
@@ -528,7 +540,7 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
-  S.ctl=d.ctl; updateCtlRings();
+  S.ctl=d.ctl; S.fnHp=d.fnHp; updateCtlRings();
   S.respawnPt=d.rsp||null;
   S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
@@ -1348,6 +1360,7 @@ function buildSurface(planetKey){
 
   surf.poi=[]; surf.poiCols=[]; surf.spire=null;
   if(p.starter) buildStarterPOIs(g,p);
+  buildFnode(g,p);
   surfScene.add(g);
   buildAmbient();
   SND.ambStart(planetKey);
@@ -2274,13 +2287,48 @@ function doAttack(w,wp,kind){
       hitDist=tca; critTarget=c; hitPid=null;
     }
   }
-  let end = critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
+  /* faction drones — same hit competition as critters */
+  let droneTarget=null;
+  for(const d of drones){
+    if(d.pl!==S.planet) continue;
+    const cx=d.x-_cw.x, cyv=d.y-_cw.y, cz=d.z-_cw.z;
+    const tca=cx*_cf.x+cyv*_cf.y+cz*_cf.z;
+    if(tca<0||tca>hitDist) continue;
+    if(kind==='melee'){
+      const dd=Math.hypot(cx,cyv,cz)||1;
+      if((cx/dd)*_cf.x+(cyv/dd)*_cf.y+(cz/dd)*_cf.z<1-w.arc) continue;
+      if(dd>w.range) continue;
+      hitDist=dd; droneTarget=d; critTarget=null; hitPid=null;
+    } else {
+      const perp2=cx*cx+cyv*cyv+cz*cz-tca*tca;
+      if(perp2>0.9*0.9) continue;
+      hitDist=tca; droneTarget=d; critTarget=null; hitPid=null;
+    }
+  }
+  /* faction Command Node core — a big, forgiving target */
+  let fnodeAim=null;
+  if(surf.fnode&&fnodeAlive()){
+    const f=surf.fnode;
+    const cx=f.x-_cw.x, cyv=(f.y+5.5)-_cw.y, cz=f.z-_cw.z;
+    const tca=cx*_cf.x+cyv*_cf.y+cz*_cf.z;
+    if(tca>0&&tca<=hitDist){
+      const perp2=cx*cx+cyv*cyv+cz*cz-tca*tca;
+      const hitR=kind==='melee'?3.2:2.6;
+      const dd=Math.hypot(cx,cyv,cz);
+      if(perp2<hitR*hitR&&(kind!=='melee'||dd<w.range+3)){
+        hitDist=tca; fnodeAim=[f.x,f.y+5.5,f.z]; droneTarget=null; critTarget=null; hitPid=null;
+      }
+    }
+  }
+  let end = fnodeAim ? fnodeAim
+            : droneTarget ? [droneTarget.x,droneTarget.y,droneTarget.z]
+            : critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
             : hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
             : (kind==='ranged' ? aimPoint(w.range) : aimPoint(w.range*0.7));
   /* deployable shield walls block ranged shots */
   if(kind==='ranged'){
     const b=shotBlocked([_cw.x,_cw.y,_cw.z],end);
-    if(b){ end=b; hitPid=null; critTarget=null; spawnBurst(b[0],b[1],b[2],0x7fdcff,9,2.4,2.4,0.4,2); SND.shieldHit(); }
+    if(b){ end=b; hitPid=null; critTarget=null; droneTarget=null; fnodeAim=null; spawnBurst(b[0],b[1],b[2],0x7fdcff,9,2.4,2.4,0.4,2); SND.shieldHit(); }
   }
   if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col,w.lance?0.16:0);
   else spawnBurst(end[0],end[1],end[2],0x9feaff,5,2,2,0.3,1);
@@ -2290,6 +2338,8 @@ function doAttack(w,wp,kind){
       target:hitPid!==null?hitPid:undefined});   // damage is computed server-side
   }
   if(critTarget) hitCritter(critTarget,w.dmg,end,wp);
+  else if(droneTarget) hitDrone(droneTarget,w.dmg,end,wp);
+  else if(fnodeAim) hitFnode(w.dmg,end,wp);
 }
 function muzzleAt(pos,col){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW_TEX,color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -2426,7 +2476,7 @@ function updateRover(dt){
   /* exit */
   if(justE){ exitRover(); justE=false; }
   /* world timers still run while driving */
-  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateHeavyWeapons(dt); updateWater();
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateDrones(dt); updateFnode(dt); updateHeavyWeapons(dt); updateWater();
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
   renderRoverCam();
@@ -2926,6 +2976,298 @@ function soloSpawnInitial(){
 }
 
 /* ============================================================
+   FACTION FORCES (Conquest P2) — drone defenders + Command Node.
+   Drones are deliberately dumb: detect within a radius, close to
+   ~9m, orbit, fire on a cooldown. Server owns spawns/positions/HP
+   in co-op (coarse droneSnap, like critters); solo runs the same
+   logic locally. Destroyed = sparks + shutdown, never gore.
+   ============================================================ */
+SND.droneShoot=function(){ this.tone(1240,0.07,'square',0.045,520); };
+SND.droneDie=function(){ this.tone(880,0.3,'sawtooth',0.07,90); setTimeout(()=>this.tone(220,0.25,'square',0.05,40),120); };
+SND.droneAlert=function(){ this.tone(740,0.09,'square',0.05); setTimeout(()=>this.tone(990,0.11,'square',0.05),110); };
+SND.fnodeHit=function(){ this.tone(360,0.1,'square',0.05,220); };
+SND.fnodeDown=function(){ this.tone(60,0.8,'sawtooth',0.16,24); setTimeout(()=>this.tone(1800,1.2,'sine',0.05,80),150); setTimeout(()=>this.tone(120,0.5,'square',0.08,40),350); };
+
+const drones=[];                  // client entities (solo + MP)
+let droneSpawnT=0, soloDroneId=1, droneAlerted=false;
+const DRONE_MAT={
+  body:stdMat(0x3a3540,{roughness:0.35,metalness:0.85}),
+  vane:stdMat(0x55505e,{roughness:0.3,metalness:0.75}),
+  eyeIdle:emisMat(0xff7a5a,0x991505,1.2),
+  eyeHot:emisMat(0xff3a2a,0xee1500,2.6),
+};
+function curFacTier(){ return facTier(curP()); }
+function fnodeAlive(pl){ return (S.fnHp[pl||S.planet]||0)>0; }
+function buildDrone(type){
+  const def=DRONES[type], g=new THREE.Group();
+  let eye;
+  if(type==='sentry'){
+    const pod=new THREE.Mesh(GEO.cyl,DRONE_MAT.body); pod.scale.set(0.9,0.7,0.9); g.add(pod);
+    const ring=new THREE.Mesh(GEO.torus,DRONE_MAT.vane); ring.scale.set(1.5,1.5,1.5); ring.rotation.x=Math.PI/2; g.add(ring);
+    const cap=new THREE.Mesh(GEO.dome,DRONE_MAT.vane); cap.scale.set(0.5,0.3,0.5); cap.position.y=0.35; g.add(cap);
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.3,0.3,0.3); eye.position.set(0,0,0.46); g.add(eye);
+  } else if(type==='heavy'){
+    const body=new THREE.Mesh(GEO.box,DRONE_MAT.body); body.scale.set(1.3,0.6,1.5); g.add(body);
+    const top=new THREE.Mesh(GEO.dome,DRONE_MAT.vane); top.scale.set(0.65,0.4,0.75); top.position.y=0.3; g.add(top);
+    for(const sx of [-0.8,0.8]){ const v=new THREE.Mesh(GEO.box,DRONE_MAT.vane); v.scale.set(0.5,0.12,1.0); v.position.set(sx,0.1,0); v.rotation.z=sx*0.5; g.add(v); }
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.34,0.34,0.34); eye.position.set(0,0.05,0.78); g.add(eye);
+  } else { /* stinger */
+    const body=new THREE.Mesh(GEO.sphere,DRONE_MAT.body); body.scale.set(0.55,0.45,0.65); g.add(body);
+    for(const sx of [-0.45,0.45]){ const v=new THREE.Mesh(GEO.box,DRONE_MAT.vane); v.scale.set(0.4,0.06,0.5); v.position.set(sx,0.12,0); v.rotation.z=sx*0.9; g.add(v); }
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.22,0.22,0.22); eye.position.set(0,0,0.34); g.add(eye);
+  }
+  const gl=makeGlow('#ff5a4a',1.6); gl.position.y=-0.3; g.add(gl);
+  return {group:g,eye};
+}
+function droneById(id){ for(const d of drones) if(d.id===id) return d; return null; }
+function spawnDroneEntity(id,type,x,z){
+  const def=DRONES[type]; if(!def) return null;
+  const built=buildDrone(type);
+  surfScene.add(built.group);
+  const tier=curFacTier()||FACTION_TIERS[0];
+  const d={id,type,def,pl:S.planet,group:built.group,eye:built.eye,
+    x,z,y:0,hd:Math.random()*6.283,wt:1+Math.random()*2,st:0,hp:Math.round(def.hp*tier.hpMul),
+    fireT:1+Math.random(),bobP:Math.random()*6,sx:undefined,sz:undefined};
+  built.group.position.set(x,critGroundY(x,z)+def.hover,z);
+  drones.push(d); return d;
+}
+function removeDroneEntity(id){
+  const i=drones.findIndex(d=>d.id===id); if(i<0) return;
+  surfScene.remove(drones[i].group);
+  drones.splice(i,1);
+}
+function clearDrones(){ for(let i=drones.length-1;i>=0;i--) removeDroneEntity(drones[i].id); droneAlerted=false; }
+function droneDeathFx(x,y,z){
+  spawnBurst(x,y,z,0xffa040,18,3.5,3,0.7,5);      // sparks
+  spawnBurst(x,y,z,0x8a8a92,10,2,2.5,1.2,1);      // smoke puffs
+  spawnBurst(x,y,z,0xff5a4a,8,2.5,2,0.4,3);
+  SND.droneDie();
+}
+/* shared mesh placement + hover animation */
+function updateDroneMesh(d,dt){
+  const def=d.def;
+  d.bobP+=dt*1.8;
+  d.y=terrainH(d.x,d.z,curP())+def.hover+Math.sin(d.bobP)*(def.bob||0.2);
+  d.group.position.set(d.x,d.y,d.z);
+  /* face heading (or the player when engaged) */
+  const yaw=d.st?Math.atan2(player.x-d.x,player.z-d.z):Math.atan2(Math.cos(d.hd),Math.sin(d.hd));
+  let dy=yaw-d.group.rotation.y; dy=((dy+Math.PI)%6.283+6.283)%6.283-Math.PI;
+  d.group.rotation.y+=dy*Math.min(1,dt*(d.st?8:3));
+  d.eye.material=d.st?DRONE_MAT.eyeHot:DRONE_MAT.eyeIdle;
+  if(d.st) d.group.rotation.z=Math.sin(performance.now()*0.012)*0.06; else d.group.rotation.z*=0.9;
+}
+function droneFireFx(d,tp){
+  tracerFx([d.x,d.y,d.z],tp,0xff4a5a);
+  const dx=player.x-d.x,dz=player.z-d.z;
+  if(dx*dx+dz*dz<2500) SND.droneShoot();
+}
+/* one alert ping the first time the defense notices you (per landing) */
+function droneAlertPing(){
+  if(droneAlerted) return; droneAlerted=true;
+  SND.droneAlert(); showToast('⚠ Faction defense drones have detected you');
+}
+/* ---- solo sim (identical numbers to the server) ---- */
+function updateDronesSolo(dt){
+  const p=curP();
+  if(!p.fac||planetCtl(S.planet)!=='faction') return;
+  const tier=curFacTier(), fn=p.fnode;
+  /* population: instant seed on arrival, slow upkeep after */
+  if(fnodeAlive()){
+    if(drones.length===0){
+      for(let i=0;i<tier.sentries;i++){ const a=i*(Math.PI*2/tier.sentries)+0.7;
+        spawnDroneEntity('ds'+(soloDroneId++),'sentry',fn.x+Math.cos(a)*9,fn.z+Math.sin(a)*9); }
+      for(let i=0;i<tier.count&&drones.length<DRONE_CAP;i++){
+        const type=tier.roam[i%tier.roam.length];
+        const a=Math.random()*6.283,r=12+Math.random()*DRONE_PATROL;
+        spawnDroneEntity('ds'+(soloDroneId++),type,fn.x+Math.cos(a)*r,fn.z+Math.sin(a)*r);
+      }
+      droneSpawnT=4;
+    } else if(drones.length<tier.sentries+tier.count&&drones.length<DRONE_CAP){
+      droneSpawnT-=dt;
+      if(droneSpawnT<=0){
+        droneSpawnT=3+Math.random()*4;
+        let sentries=0; for(const d of drones) if(d.def.turret) sentries++;
+        if(sentries<tier.sentries){ const a=sentries*(Math.PI*2/tier.sentries)+0.7;
+          spawnDroneEntity('ds'+(soloDroneId++),'sentry',fn.x+Math.cos(a)*9,fn.z+Math.sin(a)*9); }
+        else { const type=tier.roam[Math.floor(Math.random()*tier.roam.length)];
+          const a=Math.random()*6.283,r=12+Math.random()*DRONE_PATROL;
+          spawnDroneEntity('ds'+(soloDroneId++),type,fn.x+Math.cos(a)*r,fn.z+Math.sin(a)*r); }
+      }
+    }
+  }
+  const targetable=player.invuln<=0&&!inSafeZone(player.x,player.z)&&!driving;
+  for(const d of drones){
+    const def=d.def;
+    const dx=d.x-player.x, dz=d.z-player.z, dist=Math.hypot(dx,dz);
+    const engaged=targetable&&dist<def.detectR;
+    if(engaged){ if(!d.st) droneAlertPing(); d.st=1; }
+    else if(d.st&&(!targetable||dist>def.detectR*1.4)) d.st=0;
+    if(!def.turret){
+      if(d.st&&targetable){
+        const dirx=-dx/(dist||1), dirz=-dz/(dist||1);
+        if(dist>9){ d.x+=dirx*def.speed*dt; d.z+=dirz*def.speed*dt; }
+        else { d.x+=-dirz*def.speed*0.6*dt; d.z+=dirx*def.speed*0.6*dt; }
+      } else {
+        d.wt-=dt;
+        if(d.wt<=0){ d.wt=1.5+Math.random()*2.5; d.hd=Math.random()*6.283; }
+        d.x+=Math.cos(d.hd)*def.speed*0.4*dt; d.z+=Math.sin(d.hd)*def.speed*0.4*dt;
+        const hx=d.x-fn.x,hz=d.z-fn.z,hd2=Math.hypot(hx,hz);
+        if(hd2>DRONE_PATROL){ d.x=fn.x+hx/hd2*DRONE_PATROL; d.z=fn.z+hz/hd2*DRONE_PATROL; d.hd+=Math.PI; }
+      }
+      const lx=d.x-fn.x,lz=d.z-fn.z,ld=Math.hypot(lx,lz);
+      if(ld>DRONE_LEASH){ d.x=fn.x+lx/ld*DRONE_LEASH; d.z=fn.z+lz/ld*DRONE_LEASH; }
+    }
+    d.fireT-=dt;
+    if(d.st&&targetable&&dist<def.range&&d.fireT<=0){
+      d.fireT=def.fireCd;
+      droneFireFx(d,[player.x,player.y+1,player.z]);
+      applyDamageToSelf(Math.round(def.dmg*(curFacTier()||{dmgMul:1}).dmgMul));
+    }
+    updateDroneMesh(d,dt);
+  }
+}
+/* ---- MP: server snapshots, client interpolation ---- */
+function applyDroneSnap(pl,list){
+  if(!NET.active) return;
+  if(pl!==S.planet||S.mode!=='surface') return;
+  const seen=new Set();
+  for(const it of list){
+    if(!DRONES[it.ty]) continue;
+    seen.add(it.id);
+    let d=droneById(it.id);
+    if(!d) d=spawnDroneEntity(it.id,it.ty,it.x,it.z);
+    if(d){ d.sx=it.x; d.sz=it.z;
+      if(it.st&&!d.st) droneAlertPing();
+      d.st=it.st|0; }
+  }
+  for(let i=drones.length-1;i>=0;i--) if(!seen.has(drones[i].id)) removeDroneEntity(drones[i].id);
+}
+function updateDronesMP(dt){
+  for(const d of drones){
+    if(d.sx===undefined){ updateDroneMesh(d,dt); continue; }
+    const k=Math.min(1,dt*6);
+    const ox=d.x;
+    d.x=lerp(d.x,d.sx,k); d.z=lerp(d.z,d.sz,k);
+    if(Math.abs(d.x-ox)>0.005) d.hd=Math.atan2(d.x-ox,0.001);
+    updateDroneMesh(d,dt);
+  }
+}
+function updateDrones(dt){ if(NET.active) updateDronesMP(dt); else updateDronesSolo(dt); }
+function onDroneDead(m){
+  const d=droneById(m.id);
+  const x=d?d.x:m.x, z=d?d.z:m.z, y=d?d.y:terrainH(m.x,m.z,curP())+1.5;
+  droneDeathFx(x,y,z);
+  if(d) removeDroneEntity(m.id);
+  /* the Ferrite salvage arrives via the server's prog snapshot */
+}
+function onDFire(m){
+  if(S.mode!=='surface') return;
+  const d=droneById(m.id);
+  if(d&&Array.isArray(m.p)) droneFireFx(d,m.p);
+  /* damage (if we were the target) arrives via the server 'hurt' message */
+}
+/* damage to a drone (server-authoritative in MP) */
+function damageDrone(d,dmg,wp){
+  if(NET.active){ NET.send({t:'droneHit',id:d.id,wp:wp===undefined?S.slot:wp}); d.st=1; return; }
+  d.hp-=dmg; d.st=1;
+  if(d.hp<=0){
+    const r=d.def.fe, n=r[0]+Math.floor(Math.random()*(r[1]-r[0]+1));
+    droneDeathFx(d.x,d.y,d.z);
+    S.res.fe=Math.min(carryCap(),(S.res.fe|0)+n);
+    updateHUDRes(); SND.collect(); showToast('+'+n+' Ferrite salvaged');
+    removeDroneEntity(d.id);
+  }
+}
+function hitDrone(d,dmg,pos,wp){
+  spawnBurst(pos[0],pos[1],pos[2],0xffc060,6,1.8,1.8,0.3,2);
+  damageDrone(d,dmg,wp);
+}
+/* ---- Command Node: the objective the drones guard ---- */
+const FNODE_MAT={
+  base:stdMat(0x2a242c,{roughness:0.45,metalness:0.85}),
+  fin:stdMat(0x453a44,{roughness:0.35,metalness:0.7}),
+  coreOn:emisMat(0xff5a3a,0xcc1505,2.4),
+  coreOff:stdMat(0x2e1a16,{roughness:0.7,metalness:0.3}),
+  ringM:new THREE.MeshBasicMaterial({color:0xff5040,transparent:true,opacity:0.22,side:THREE.DoubleSide,depthWrite:false}),
+};
+function buildFnode(g,p){
+  surf.fnode=null;
+  if(!p.fac) return;
+  const x=p.fnode.x,z=p.fnode.z,y=terrainH(x,z,p);
+  const grp=new THREE.Group();
+  const base=new THREE.Mesh(GEO.cyl,FNODE_MAT.base); base.scale.set(7,1.4,7); base.position.y=0.7; grp.add(base);
+  const mid=new THREE.Mesh(GEO.cyl,FNODE_MAT.fin); mid.scale.set(3.6,1.6,3.6); mid.position.y=2.1; grp.add(mid);
+  const pylon=new THREE.Mesh(GEO.cyl,FNODE_MAT.base); pylon.scale.set(1.0,4.2,1.0); pylon.position.y=4.6; grp.add(pylon);
+  const core=new THREE.Mesh(GEO.sphere,FNODE_MAT.coreOn); core.scale.set(2.0,2.0,2.0); core.position.y=7.2; grp.add(core);
+  for(let i=0;i<3;i++){ const a=i*2.094;
+    const fin=new THREE.Mesh(GEO.box,FNODE_MAT.fin);
+    fin.scale.set(0.45,4.6,1.9); fin.position.set(Math.cos(a)*2.4,4.4,Math.sin(a)*2.4); fin.rotation.y=-a; grp.add(fin); }
+  const glow=makeGlow('#ff6a4a',12); glow.position.y=7.2; grp.add(glow);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(9.6,10.3,48),FNODE_MAT.ringM);
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.14; grp.add(ring);
+  grp.position.set(x,y,z);
+  g.add(grp);
+  surf.fnode={x,z,y,group:grp,core,glow,ring,half:false};
+  surf.poiCols.push({x,z,r:3.9});
+  applyFnodeState();
+}
+function applyFnodeState(){
+  const f=surf.fnode; if(!f) return;
+  const alive=fnodeAlive();
+  f.core.material=alive?FNODE_MAT.coreOn:FNODE_MAT.coreOff;
+  f.glow.visible=alive; f.ring.visible=alive;
+}
+function updateFnode(dt){
+  const f=surf.fnode; if(!f) return;
+  if(fnodeAlive()){
+    const k=1+Math.sin(performance.now()*0.004)*0.12;
+    f.core.scale.set(2*k,2*k,2*k);
+    f.glow.scale.setScalar(12+Math.sin(performance.now()*0.004)*2.5);
+  } else if(Math.random()<dt*3){
+    spawnBurst(f.x,f.y+6.5,f.z,0x555555,2,1,1.6,1.6,-1.2);   // dead node smolders
+  }
+}
+function fnodeDownFx(pl){
+  showToast('☒ FACTION CONTROL NODE DESTROYED — '+PLANETS[pl].name+' can be claimed',6000);
+  SND.fnodeDown();
+  const f=surf.fnode;
+  if(f&&pl===S.planet){
+    spawnBurst(f.x,f.y+7,f.z,0xff8030,40,8,7,1.2,4);
+    spawnBurst(f.x,f.y+7,f.z,0xffe070,20,6,6,0.8,2);
+    spawnBurst(f.x,f.y+5,f.z,0x554444,24,5,4,2,1.5);
+    const fl=makeGlow('#ffb070',26); fl.position.set(f.x,f.y+7,f.z); pushFx(fl,0.5,0.95);
+    applyFnodeState();
+  }
+  missionEvent('fnode',pl);
+}
+/* shots at the node — server owns HP in MP, save owns it solo */
+function hitFnode(dmg,end,wp){
+  spawnBurst(end[0],end[1],end[2],0xff7a4a,7,2,2,0.35,3);
+  SND.fnodeHit();
+  const pl=S.planet;
+  if(!(S.fnHp[pl]>0)) return;
+  if(NET.active){ NET.send({t:'fnodeHit',pl,wp:wp===undefined?S.slot:wp}); return; }
+  const tier=curFacTier();
+  S.fnHp[pl]=Math.max(0,S.fnHp[pl]-dmg);
+  const f=surf.fnode;
+  if(f&&!f.half&&S.fnHp[pl]<=tier.nodeHp*0.5&&S.fnHp[pl]>0){ f.half=true; showToast('Control node at 50% — keep firing!'); }
+  if(S.fnHp[pl]<=0) fnodeDownFx(pl);
+  saveGame();
+}
+function onFnodeHp(m){
+  if(!PLANETS[m.pl]) return;
+  const tier=facTier(PLANETS[m.pl]); if(!tier) return;
+  S.fnHp[m.pl]=clamp(m.hp|0,0,tier.nodeHp);
+  const f=surf.fnode;
+  if(f&&m.pl===S.planet&&!f.half&&S.fnHp[m.pl]<=tier.nodeHp*0.5&&S.fnHp[m.pl]>0){ f.half=true; showToast('Control node at 50% — keep firing!'); }
+}
+function onFnodeDown(m){
+  if(!PLANETS[m.pl]) return;
+  S.fnHp[m.pl]=0;
+  fnodeDownFx(m.pl);
+}
+
+/* ============================================================
    HEAVY WEAPONS (Phase 5) — Plasma Grenade, Deployable Shield,
    Lance Beam, Inferno Thrower. Throwables + shield walls are
    client-relayed (transient combat fx); damage stays client-
@@ -2995,11 +3337,15 @@ function explodeGrenade(t){
   /* players: each client applies blast to ITSELF (safe zone / invuln respected) */
   const dx=player.x-t.x, dy=(player.y+1)-t.y, dz=player.z-t.z, d=Math.hypot(dx,dy,dz);
   if(d<GREN_R){ const dmg=Math.round(GREN_DMG*(1-d/GREN_R)); if(dmg>0) applyDamageToSelf(dmg); }
-  /* critters: solo only — in co-op the server resolves the blast on its own sim */
+  /* critters + drones: solo only — in co-op the server resolves the blast on its own sim */
   if(t.owned&&!NET.active){
     for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
       const cd=Math.hypot(c.x-t.x,(c.y+0.4)-t.y,c.z-t.z);
       if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)),6);
+    }
+    for(let k=drones.length-1;k>=0;k--){ const d=drones[k]; if(d.pl!==S.planet) continue;
+      const dd=Math.hypot(d.x-t.x,d.y-t.y,d.z-t.z);
+      if(dd<GREN_R) damageDrone(d,Math.round(GREN_DMG*(1-dd/GREN_R)),6);
     }
   }
   /* grenades do NOT damage structures (by design) */
@@ -3082,6 +3428,17 @@ function fireInferno(w){
       if(d>w.range||d<0.1) continue;
       if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
       damageCritter(c,w.dmg,5);
+    }
+    for(let k=drones.length-1;k>=0;k--){ const dr=drones[k]; if(dr.pl!==S.planet) continue;
+      const dx=dr.x-_cw.x, dy=dr.y-_cw.y, dz=dr.z-_cw.z, d=Math.hypot(dx,dy,dz);
+      if(d>w.range||d<0.1) continue;
+      if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
+      damageDrone(dr,w.dmg,5);
+    }
+    if(surf.fnode&&fnodeAlive()){
+      const f=surf.fnode, dx=f.x-_cw.x, dy=(f.y+5.5)-_cw.y, dz=f.z-_cw.z, d=Math.hypot(dx,dy,dz);
+      if(d<=w.range&&d>0.1&&(dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z>=w.coneCos)
+        hitFnode(w.dmg,[f.x,f.y+5.5,f.z],5);
     }
     if(NET.active){
       const tip=aimPoint(w.range);
@@ -3731,6 +4088,7 @@ function enterSurface(planetKey,fromSave){
   updateViewmodel();
   clearMeteors();
   clearCritters(); soloSpawnInitial();
+  clearDrones();
   clearThrowables(); clearShieldWalls();
   if(fromSave&&S.ppos&&Math.hypot(S.ppos[0],S.ppos[2])<WORLD_R){
     player.x=S.ppos[0]; player.z=S.ppos[2];
@@ -3769,7 +4127,7 @@ function enterSpace(fromPlanetKey,fromSave){
   updateViewmodel();
   cancelBuild();
   clearMeteors();
-  clearCritters();
+  clearCritters(); clearDrones();
   clearThrowables(); clearShieldWalls();
   $('waterVig').style.opacity=0;
   if(camera.fov!==74){ camera.fov=74; camera.updateProjectionMatrix(); }
@@ -4508,6 +4866,7 @@ function updateSurface(dt){
   updateTurrets(dt);
   updateRoverMeshes(dt);
   updateCritters(dt);
+  updateDrones(dt); updateFnode(dt);
   updateHeavyWeapons(dt);
   updateWater();
   updateAmbient(dt);
@@ -4527,7 +4886,7 @@ function renderSurfaceCam(){
 function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
-  S.ctl=defaultCtl(); updateCtlRings();
+  S.ctl=defaultCtl(); S.fnHp=R.readFnodeHp(null); updateCtlRings();
   S.respawnPt=null;
   S.intro={done:false,step:0,cineSeen:false,granted:false};   // a NEW game runs the intro (device markers still gate replays)
   S.station=[]; S.stationOnline=false;
@@ -4644,7 +5003,7 @@ function installWorld(world){
     return st;
   });
   S.beacon=!!world.beacon;
-  S.ctl=readCtl(world.ctl); updateCtlRings();
+  S.ctl=readCtl(world.ctl); S.fnHp=R.readFnodeHp(world.fnodeHp); updateCtlRings();
   NET.deadNodes={};
   for(const pl in (world.deadNodes||{})) NET.deadNodes[pl]=new Set(world.deadNodes[pl]);
   NET.meteor={};
@@ -4856,7 +5215,7 @@ function loop(now){
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,drones,DRONES,
   WEAPONS,SLOT_KEYS,throwables,shieldWalls,SHIELDED,shieldGroups,
   STATION,STATION_KEYS,STATION_POS,stationCore,stationGroup,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
@@ -4882,6 +5241,8 @@ Object.assign(window,{
   applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
   missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,applyNeon,
   planetCtl,applyCtl,updateCtlRings,defaultCtl,readCtl,
+  drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
+  damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

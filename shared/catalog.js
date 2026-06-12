@@ -332,6 +332,28 @@ export const CRIT_BY_PLANET={
   noctis: ['skitterer','floater'],
 };
 
+/* ---------- faction drones (Conquest) ----------
+   Deliberately dumb defenders guarding the Command Node: detect within a
+   radius, close to ~9m and orbit, fire on a cooldown. Server-simulated in
+   MP (coarse snapshots like critters), local in solo. fe = ferrite salvage
+   dropped on shutdown. */
+export const DRONES={
+  stinger:{name:'Stinger Drone', hp:24, speed:6.0, hover:1.6, bob:0.25, dmg:6,  range:18, fireCd:1.3, detectR:30, fe:[2,4]},
+  sentry: {name:'Sentry Drone',  hp:40, turret:true, hover:2.6, bob:0.12, dmg:8, range:24, fireCd:1.1, detectR:26, fe:[3,5]},
+  heavy:  {name:'Devastator',    hp:70, speed:3.4, hover:1.3, bob:0.2,  dmg:12, range:20, fireCd:1.6, detectR:34, fe:[4,7]},
+};
+/* per-planet defense scaling, indexed by PLANETS[pl].fac.diff (1-based):
+   roamer population, sentries ringing the node, HP/damage multipliers,
+   and the Command Node's own HP */
+export const FACTION_TIERS=[
+  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:1,   nodeHp:300},
+  {count:5, roam:['stinger','stinger','heavy'], sentries:2, hpMul:1.4, dmgMul:1.3, nodeHp:550},
+  {count:7, roam:['stinger','heavy','heavy'],   sentries:3, hpMul:1.9, dmgMul:1.7, nodeHp:850},
+];
+export function facTier(p){ return p&&p.fac?FACTION_TIERS[Math.min(FACTION_TIERS.length,Math.max(1,p.fac.diff))-1]:null; }
+export const DRONE_LEASH=110;       // drones never chase farther than this from the node
+export const DRONE_PATROL=55;       // roamer wander radius around the node
+
 /* ---------- paint palette ---------- */
 export const PAINT_COLORS=[0xff5050,0xff9a4a,0xffd24a,0x9ee84a,0x4adf8a,0x4adfff,0x4a9aff,0x9a6aff,0xff6ad0,0xffffff,0x8fa0b0,0x2a2f38];
 

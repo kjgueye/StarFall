@@ -62,16 +62,17 @@ import { WebSocketServer } from 'ws';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
-import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
+import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, DRONE_CAP, STATION_MAX,
   MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_R, GREN_DMG, GREN_FUSE, SHIELD_CD, SHIELD_LIFE,
   TURRET_R, TURRET_DMG, TURRET_CD, WORLD_R, SEA_Y,
   O2_DRAIN, O2_DRAIN_SPRINT, O2_JET_MULT, O2_DRAIN_SUBMERGED, O2_REFILL,
   EVA_O2_DRAIN, EVA_O2_REFILL } from './shared/constants.js';
-import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
+import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC,
+  DRONES, facTier, DRONE_LEASH, DRONE_PATROL } from './shared/catalog.js';
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
-  inSafeZone, groundYAt, shotBlocked } from './shared/rules.js';
+  inSafeZone, groundYAt, shotBlocked, readFnodeHp } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 import { openStore } from './store.js';
 
@@ -155,11 +156,13 @@ function makeRoom(world, code) {
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
     ctl: readCtl(world && world.ctl),                 // faction control per planet (Conquest)
+    drones: {}, droneT: {}, nextDrone: 1,             // faction drones per planet (server-simulated)
+    fnodeHp: readFnodeHp(world && world.fnodeHp),     // Command Node HP per faction planet
     walls: [],                          // live deployable shield walls (server blocks shots)
     station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
   };
-  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; }
+  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; room.drones[pl] = []; room.droneT[pl] = 0; }
   if (world && Array.isArray(world.structures)) {
     for (const s of world.structures) {
       if (room.structures.length >= MAX_STRUCT) break;
@@ -193,7 +196,7 @@ function serializeRoom(room) {
   return {
     v: 1, worldId: room.worldId, clock: room.clock,
     beacon: room.beacon, stationOnline: room.stationOnline,
-    ctl: { ...room.ctl },
+    ctl: { ...room.ctl }, fnodeHp: { ...room.fnodeHp },
     structures: room.structures.map(s => {
       const o = { t: s.t, pl: s.pl, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), r: s.r, hp: s.hp | 0 };
       if (s.owner !== undefined && s.owner !== null) o.owner = s.owner;
@@ -298,6 +301,21 @@ function damageCritter(room, plKey, c, dmg, byPid, fromX, fromZ) {
     if (by) sendProg(room, byPid, { type: 'gain', k: 'ch', amt: got });
   }
 }
+/* drone damage + ferrite salvage — used by droneHit intents and grenade AoE */
+function damageDrone(room, plKey, d, dmg, byPid) {
+  const arr = room.drones[plKey]; if (!arr || arr.indexOf(d) < 0) return;
+  d.hp -= dmg;
+  d.st = 1;                                            // taking fire = engaged
+  if (d.hp <= 0) {
+    arr.splice(arr.indexOf(d), 1);
+    const r = DRONES[d.type].fe;
+    const fe = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
+    const by = room.players.get(byPid);
+    const got = by ? grantRes(room, by, 'fe', fe) : 0;
+    bcast(room, { t: 'droneDead', id: d.id, x: +d.x.toFixed(1), z: +d.z.toFixed(1), by: byPid, fe });
+    if (by) sendProg(room, byPid, { type: 'gain', k: 'fe', amt: got });
+  }
+}
 /* ballistic sim on the shared heightfield+structures — grenade rest point / shield landing */
 function simThrowable(room, pl, o, v, kind) {
   let x = +o[0], y = +o[1], z = +o[2], vx = +v[0], vy = +v[1], vz = +v[2];
@@ -361,7 +379,7 @@ function welcomeMsg(room, pid) {
       tod: todOf(room.clock),
       station: room.station,
       stationOnline: room.stationOnline,
-      ctl: room.ctl,
+      ctl: room.ctl, fnodeHp: room.fnodeHp,
     },
   };
 }
@@ -729,6 +747,10 @@ async function handle(ws, m) {
           const cd = Math.hypot(c.x - at.x, c.z - at.z);
           if (cd < GREN_R) damageCritter(room, pl, c, Math.round(GREN_DMG * (1 - cd / GREN_R)), byPid, at.x, at.z);
         }
+        for (const d of (room.drones[pl] || []).slice()) {
+          const dd = Math.hypot(d.x - at.x, d.z - at.z);
+          if (dd < GREN_R) damageDrone(room, pl, d, Math.round(GREN_DMG * (1 - dd / GREN_R)), byPid);
+        }
       }, GREN_FUSE * 1000);
       return;
     }
@@ -813,6 +835,45 @@ async function handle(ws, m) {
       const dx = c.x - me.pos[0], dz = c.z - me.pos[2];
       if (dx * dx + dz * dz > range * range) return;
       damageCritter(room, me.pl, c, dmg, ws.pid, me.pos[0], me.pos[2]);
+      return;
+    }
+    case 'droneHit': {
+      /* damage computed server-side from the claimed weapon — never trusted */
+      if (me.mode !== 'surface') return;
+      const arr = room.drones[me.pl]; if (!arr) return;
+      const d = arr.find(k => k.id === m.id); if (!d) return;
+      const wp = m.wp | 0;
+      let dmg = 0, range = 0;
+      if (wp === 6) {                                   // grenade AoE
+        if (!me.weapons.grenade) return;
+        dmg = GREN_DMG; range = 46;
+      } else {
+        const chk = fireCheck(me.weapons, { light: 1e9, heavy: 1e9, fuel: 1e9, nade: 1e9 }, wp);  // ammo charged on 'fire'
+        if (chk.err || !chk.w.dmg) return;
+        dmg = chk.w.dmg; range = (chk.w.range || 4) + 10;
+      }
+      const dx = d.x - me.pos[0], dz = d.z - me.pos[2];
+      if (dx * dx + dz * dz > range * range) return;
+      damageDrone(room, me.pl, d, dmg, ws.pid);
+      return;
+    }
+    case 'fnodeHit': {
+      /* shots at the faction Command Node — server owns its HP */
+      if (me.mode !== 'surface') return;
+      const p = PDATA[me.pl];
+      if (!p || !p.fac || room.ctl[me.pl] !== 'faction') return;
+      if (!(room.fnodeHp[me.pl] > 0)) return;
+      const chk = fireCheck(me.weapons, { light: 1e9, heavy: 1e9, fuel: 1e9, nade: 1e9 }, m.wp | 0);
+      if (chk.err || !chk.w.dmg) return;
+      const range = (chk.w.range || 4) + 10;
+      const dx = p.fnode.x - me.pos[0], dz = p.fnode.z - me.pos[2];
+      if (dx * dx + dz * dz > range * range) return;
+      room.fnodeHp[me.pl] = Math.max(0, room.fnodeHp[me.pl] - chk.w.dmg);
+      bcast(room, { t: 'fnodeHp', pl: me.pl, hp: room.fnodeHp[me.pl] });
+      if (room.fnodeHp[me.pl] <= 0) {
+        bcast(room, { t: 'fnodeDown', pl: me.pl, by: ws.pid });
+        saveWorld(room);
+      }
       return;
     }
     /* 'died' intent removed in P2.3 — the server decides deaths in damagePlayer() */
@@ -1019,6 +1080,80 @@ function simCritters(room, pl, dt) {
   }
 }
 
+/* faction drones (Conquest): server-side sim while the surface is occupied
+   and faction-held. Deliberately dumb: detect, close to ~9m, orbit, fire on
+   a cooldown. Sentries ring the Command Node and never move. */
+function simDrones(room, pl, dt) {
+  const p = PDATA[pl];
+  if (!p || !p.fac || room.ctl[pl] !== 'faction') return;
+  const arr = room.drones[pl];
+  const tier = facTier(p);
+  const fn = p.fnode;
+  /* population upkeep — instant seed on first contact, slow respawns after,
+     no new spawns once the Command Node is down */
+  const mkSentry = i => { const a = i * (Math.PI * 2 / tier.sentries) + 0.7;
+    return { id: 'd' + (room.nextDrone++), type: 'sentry', x: fn.x + Math.cos(a) * 9, z: fn.z + Math.sin(a) * 9,
+      hp: Math.round(DRONES.sentry.hp * tier.hpMul), hd: a, wt: 0, st: 0, fireT: 1 + Math.random() }; };
+  const mkRoamer = type => { const a = Math.random() * 6.283, r = 12 + Math.random() * DRONE_PATROL;
+    return { id: 'd' + (room.nextDrone++), type, x: fn.x + Math.cos(a) * r, z: fn.z + Math.sin(a) * r,
+      hp: Math.round(DRONES[type].hp * tier.hpMul), hd: Math.random() * 6.283, wt: 1 + Math.random() * 2, st: 0, fireT: 1 + Math.random() }; };
+  if (room.fnodeHp[pl] > 0 && arr.length < DRONE_CAP) {
+    if (arr.length === 0) {
+      for (let i = 0; i < tier.sentries; i++) arr.push(mkSentry(i));
+      for (let i = 0; i < tier.count && arr.length < DRONE_CAP; i++) arr.push(mkRoamer(tier.roam[i % tier.roam.length]));
+      room.droneT[pl] = 4;
+    } else {
+      let sentries = 0; for (const d of arr) if (DRONES[d.type].turret) sentries++;
+      if (sentries < tier.sentries || arr.length - sentries < tier.count) {
+        room.droneT[pl] -= dt;
+        if (room.droneT[pl] <= 0) {
+          room.droneT[pl] = 3 + Math.random() * 4;
+          if (sentries < tier.sentries) arr.push(mkSentry(sentries));
+          else arr.push(mkRoamer(tier.roam[Math.floor(Math.random() * tier.roam.length)]));
+        }
+      }
+    }
+  }
+  /* targets: surface players here, not protected, not safe-zoned */
+  const now = Date.now();
+  const ps = [];
+  for (const [pid, pp] of room.players) {
+    if (pp.mode !== 'surface' || pp.pl !== pl) continue;
+    if (now < pp.invulnUntil) continue;
+    if (inSafeZone(room.structures, pl, pp.pos[0], pp.pos[2])) continue;
+    ps.push({ pid, p: pp });
+  }
+  for (const d of arr) {
+    const def = DRONES[d.type];
+    let tgt = null, td = 1e18;
+    for (const t of ps) { const dx = d.x - t.p.pos[0], dz = d.z - t.p.pos[2], q = dx * dx + dz * dz; if (q < td) { td = q; tgt = t; } }
+    const dist = Math.sqrt(td);
+    const engaged = !!tgt && dist < def.detectR;
+    if (engaged) d.st = 1; else if (d.st && (!tgt || dist > def.detectR * 1.4)) d.st = 0;
+    if (!def.turret) {
+      if (engaged) {
+        const dirx = (tgt.p.pos[0] - d.x) / (dist || 1), dirz = (tgt.p.pos[2] - d.z) / (dist || 1);
+        if (dist > 9) { d.x += dirx * def.speed * dt; d.z += dirz * def.speed * dt; }
+        else { d.x += -dirz * def.speed * 0.6 * dt; d.z += dirx * def.speed * 0.6 * dt; }   // strafe-orbit
+      } else {
+        d.wt -= dt;
+        if (d.wt <= 0) { d.wt = 1.5 + Math.random() * 2.5; d.hd = Math.random() * 6.283; }
+        d.x += Math.cos(d.hd) * def.speed * 0.4 * dt; d.z += Math.sin(d.hd) * def.speed * 0.4 * dt;
+        const hx = d.x - fn.x, hz = d.z - fn.z, hd2 = Math.hypot(hx, hz);
+        if (hd2 > DRONE_PATROL) { d.x = fn.x + hx / hd2 * DRONE_PATROL; d.z = fn.z + hz / hd2 * DRONE_PATROL; d.hd += Math.PI; }
+      }
+      const lx = d.x - fn.x, lz = d.z - fn.z, ld = Math.hypot(lx, lz);
+      if (ld > DRONE_LEASH) { d.x = fn.x + lx / ld * DRONE_LEASH; d.z = fn.z + lz / ld * DRONE_LEASH; }
+    }
+    d.fireT -= dt;
+    if (engaged && dist < def.range && d.fireT <= 0) {
+      d.fireT = def.fireCd;
+      bcast(room, { t: 'dfire', id: d.id, tp: tgt.pid, p: [tgt.p.pos[0], tgt.p.pos[1] + 1, tgt.p.pos[2]] });
+      damagePlayer(room, tgt.pid, Math.round(def.dmg * tier.dmgMul), 0);
+    }
+  }
+}
+
 let lastTick = Date.now(), lastClockBcast = 0;
 setInterval(() => {
   const now = Date.now();
@@ -1055,6 +1190,7 @@ setInterval(() => {
       for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
       if (!occupied) continue;
       simCritters(room, pl, dt);
+      simDrones(room, pl, dt);
       simTurrets(room, pl, dt);
       const ms = room.meteor[pl];
       ms.t -= dt;
@@ -1081,11 +1217,13 @@ setInterval(() => {
     if (room.critBcast >= 0.2) {
       room.critBcast = 0;
       for (const pl of PLANETS) {
-        if (!room.crit[pl].length) continue;
+        if (!room.crit[pl].length && !room.drones[pl].length) continue;
         let occ = false;
         for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occ = true; break; } }
         if (!occ) continue;
-        bcast(room, { t: 'critSnap', pl, crit: room.crit[pl].map(c => ({ id: c.id, ty: c.type, x: +c.x.toFixed(1), z: +c.z.toFixed(1), st: c.st })) });
+        if (room.crit[pl].length)
+          bcast(room, { t: 'critSnap', pl, crit: room.crit[pl].map(c => ({ id: c.id, ty: c.type, x: +c.x.toFixed(1), z: +c.z.toFixed(1), st: c.st })) });
+        bcast(room, { t: 'droneSnap', pl, drones: room.drones[pl].map(d => ({ id: d.id, ty: d.type, x: +d.x.toFixed(1), z: +d.z.toFixed(1), st: d.st })) });
       }
     }
   }
