@@ -224,7 +224,10 @@ function saveWorld(room) {
    Phase 3 replaces that bridge with Postgres keyed by guest id. */
 const ci = (v, lo, hi) => Math.max(lo, Math.min(hi, v | 0));
 function freshProg() {
-  return { res: { fe: 0, cy: 0, bio: 0, ch: 0, pe: 0 }, tier: 1,
+  /* First Light: genuinely-new players start with a small kit so the opening
+     mission has zero grind. Returning players load their stored progress;
+     legacy imports overwrite via progRestore. */
+  return { res: { fe: 40, cy: 15, bio: 0, ch: 0, pe: 0 }, tier: 1,
     weapons: {}, ammo: { light: 0, heavy: 0, fuel: 0, nade: 0 }, medkits: 0 };
 }
 function sanitizeProg(d) {

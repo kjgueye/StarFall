@@ -183,6 +183,19 @@
   #chatInput { position:fixed; left:18px; bottom:90px; width:min(420px,70vw); padding:9px 12px; z-index:66;
     background:#06141f; color:#cfeefe; border:1px solid #2e8fb8; font-size:15px; font-family:inherit; }
   body.touch #chatLog { bottom:auto; top:130px; left:12px; font-size:11.5px; }
+  /* ---------- opening mission card ---------- */
+  #missionCard { position:fixed; top:150px; left:28px; width:min(270px,44vw); z-index:21; pointer-events:auto;
+    background:rgba(6,20,32,0.82); border:1px solid #2e8fb8; border-left:3px solid #4adf8a; padding:10px 12px; }
+  #missionTitle { font-size:11px; letter-spacing:0.24em; color:#8fefb0; margin-bottom:7px; }
+  #missionCard .mStep { font-size:12.5px; color:#7fa8c4; margin:4px 0; line-height:1.35; }
+  #missionCard .mStep.cur { color:#d4f4ff; }
+  #missionCard .mStep.done { color:#5fae7f; opacity:0.75; }
+  #missionCard .mHint { font-size:10.5px; color:#9fc8de; opacity:0.85; margin:2px 0 0 14px; }
+  #missionSkip { position:absolute; top:6px; right:8px; background:none; border:none; color:#5fa8c8; cursor:pointer; font-size:11px; }
+  #missionSkip:hover { color:#cfeefe; }
+  body.touch #missionCard { top:auto; bottom:208px; left:12px; width:min(230px,52vw); }
+  body.touch #missionCard .mHint { display:none; }
+
   #mMed { right:176px; bottom:30px; width:54px; height:54px; background:rgba(10,60,40,0.55); border-color:rgba(120,255,190,0.6); }
   #mChat { left:96px; bottom:30px; width:50px; height:50px; }
   #mMap { left:26px; bottom:96px; width:50px; height:50px; font-size:10px; }
@@ -251,6 +264,11 @@
   <div id="protRing" class="hidden"></div>
   <div id="compass" class="hidden"><div id="compassStrip"></div><div id="compassCtr">▲</div></div>
   <div id="chatLog"></div>
+  <div id="missionCard" class="hidden">
+    <div id="missionTitle">ESTABLISH YOUR OUTPOST</div>
+    <button id="missionSkip">skip ✕</button>
+    <div id="missionSteps"></div>
+  </div>
 </div>
 
 <div id="vignette" class="hidden"></div>

@@ -266,7 +266,7 @@ function applyProg(m){
   saveGame();
 }
 function progEvent(ev){
-  if(ev.type==='gain'&&ev.amt>0){ SND.collect(); showToast('+'+ev.amt+' '+RES_NAMES[ev.k]); }
+  if(ev.type==='gain'&&ev.amt>0){ SND.collect(); showToast('+'+ev.amt+' '+RES_NAMES[ev.k]); missionEvent('mine'); }
   else if(ev.type==='craft'){
     const c=CRAFT[ev.key];
     if(c){ SND.craft();
@@ -420,7 +420,7 @@ function buildSaveObj(){
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
     rsp:S.respawnPt||null,
-    intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen},
+    intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen,granted:!!S.intro.granted},
     cine:S.cine===true,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
@@ -463,8 +463,8 @@ function parseSave(json){
       rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
         ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
       /* pre-v8 saves = veterans: intro complete, never replays */
-      intro:(d.v>=8&&d.intro)?{done:!!d.intro.done,step:d.intro.step|0,cineSeen:!!d.intro.cineSeen}
-        :{done:true,step:99,cineSeen:true},
+      intro:(d.v>=8&&d.intro)?{done:!!d.intro.done,step:d.intro.step|0,cineSeen:!!d.intro.cineSeen,granted:!!d.intro.granted}
+        :{done:true,step:99,cineSeen:true,granted:true},
       cine:d.cine===true,
       pc:(d.pc&&SHIELDED[d.pc])?d.pc:(d.pvc?'verdant':null),
       sound:d.sound!==false,
@@ -1591,6 +1591,7 @@ function applyNodeDead(pl,i,byMe){
     }
   }
   if(byMe&&!NET.active){   // co-op: the server grants and confirms via prog
+    missionEvent('mine');
     const key=PLANETS[pl].res, amt=4+Math.floor(Math.random()*3);
     S.res[key]=Math.max(S.res[key],Math.min(carryCap(),S.res[key]+amt));
     SND.collect();
@@ -1735,6 +1736,7 @@ function applyPlaced(m,byMe){
     spawnBurst(st.x,st.y+1,st.z,0x7fd6ff,12,3,3,0.6,5);
   } else updateCapNote();
   if(byMe){ if(!NET.active) payCost(def.cost); SND.place(); }   // co-op: server pays, prog confirms
+  if(byMe) missionEvent('place',st);
   if(st.t==='beacon'){
     S.beacon=true;
     if(byMe) cancelBuild();
@@ -3613,6 +3615,7 @@ function enterSurface(planetKey,fromSave){
   }
   player.vy=0; player.pitch=0;
   refreshMobileUI();
+  setTimeout(()=>{ if(S.running&&S.mode==='surface') missionBegin(); },400);
   /* one-time hint: wildlife is the Chitin source (it isn't mined) */
   try{ if(!localStorage.getItem('sf_huntHint')){ localStorage.setItem('sf_huntHint','1');
     const hint=()=>{ if(!S.running||S.mode!=='surface') return;
@@ -3645,6 +3648,7 @@ function enterSpace(fromPlanetKey,fromSave){
     S.sspeed=6;
   }
   refreshMobileUI();
+  renderMission();
   if(S.pendingCutscene) setTimeout(()=>{ if(S.mode==='space'&&S.running) startShieldCutscene(S.pendingCutscene); },1200);
 }
 function doLand(planetKey){
@@ -3662,6 +3666,7 @@ function doLand(planetKey){
 }
 function doLaunch(){
   if(transitioning) return;
+  if(missionOn()&&S.intro.step===3) missionAdvance();   // launching counts as opening the world
   resetEmisBoost();   // night emissive boost is surface-only; mats are shared with space
   SND.ambStop();
   fadeTo('LAUNCHING',()=>{ enterSpace(S.planet,false); saveGame(); });
@@ -3707,6 +3712,7 @@ function finishArrival(){
   S.intro.cineSeen=true;
   try{ localStorage.setItem(CINE_SEEN_KEY,'1'); }catch(e){}
   saveGame();
+  renderMission();
 }
 function updateArrival(dt){
   arr.t+=dt;
@@ -3751,6 +3757,91 @@ function updateArrival(dt){
 /* skip on any key/tap while the arrival plays */
 window.addEventListener('keydown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
 window.addEventListener('pointerdown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
+
+/* ============================================================
+   "ESTABLISH YOUR OUTPOST" — opening mission (First Light P3).
+   Four beats, each an immediately-rewarding action, zero grind
+   (starter supplies granted up front). Client-side and per-player;
+   persists in S.intro.step and never repeats once done (save flag
+   + device marker).
+   ============================================================ */
+const MISSION_STEPS=[
+  {t:'Drop your first structure', d:'Open the build menu (B / BUILD), pick a Floor, click to place'},
+  {t:'Harvest a glowing crystal', d:'Walk to the crystal cluster and hold E'},
+  {t:'Raise a Nav Beacon',        d:'Build menu → Outpost Systems → Nav Beacon — light the way home'},
+  {t:'Explore the Crystal Spire', d:'Follow the ✦ marker on your compass — or launch back to space'},
+];
+function missionOn(){ return S.running&&S.intro&&!S.intro.done; }
+function renderMission(){
+  const card=$('missionCard');
+  if(!missionOn()||S.mode!=='surface'||arr.active){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const list=$('missionSteps'); list.innerHTML='';
+  MISSION_STEPS.forEach((st,i)=>{
+    const d=document.createElement('div');
+    d.className='mStep'+(i<S.intro.step?' done':(i===S.intro.step?' cur':''));
+    d.innerHTML=(i<S.intro.step?'✓ ':'▸ ')+st.t+(i===S.intro.step?'<div class="mHint">'+st.d+'</div>':'');
+    list.appendChild(d);
+  });
+}
+function missionBegin(){
+  if(S.intro&&!S.intro.done&&introDoneDevice()) S.intro.done=true;   // device already finished it (e.g. MP guest)
+  if(!missionOn()){ renderMission(); return; }
+  if(!S.intro.granted){
+    S.intro.granted=true;
+    if(!NET.active){ S.res.fe+=40; S.res.cy+=15; updateHUDRes(); }   // MP: the server's fresh-guest kit covers it
+    setTimeout(()=>{ if(missionOn()) showToast('Starter supplies unpacked from the ship — build something!',5000); },800);
+    saveGame();
+  }
+  renderMission();
+}
+function missionAdvance(){
+  S.intro.step++;
+  SND.craft();
+  if(S.intro.step>=MISSION_STEPS.length){
+    S.intro.done=true;
+    try{ localStorage.setItem(INTRO_DONE_KEY,'1'); }catch(e){}
+    showToast('✦ OUTPOST ESTABLISHED — the frontier is yours. Mine, build, reach further.',7000);
+    SND.tierUp();
+    spawnBurst(player.x,player.y+1.5,player.z,0x8affb0,30,4,5,1.2,2);
+  }
+  renderMission();
+  saveGame();
+}
+function missionSkip(){
+  if(!S.intro.done){
+    S.intro.done=true;
+    try{ localStorage.setItem(INTRO_DONE_KEY,'1'); }catch(e){}
+    saveGame();
+  }
+  renderMission();
+}
+/* beat triggers — called from gameplay code */
+function missionEvent(kind,st){
+  if(!missionOn()) return;
+  const step=S.intro.step;
+  if(step===0&&kind==='place'){ missionAdvance(); return; }
+  if(step===1&&kind==='mine'){ missionAdvance(); return; }
+  if(step===2&&kind==='place'&&st&&(st.t==='navbeacon'||st.t==='lightpole')){
+    /* power-on moment: the beacon flares to life */
+    spawnBurst(st.x,st.y+7.5,st.z,0xff8a5a,26,3,4,1.1,1);
+    if(SND.navPing) SND.navPing();
+    missionAdvance(); return;
+  }
+}
+/* explore beat: reaching the spire (checked ~1/s from updateSurface) */
+let missionChkT=0;
+function missionTick(dt){
+  if(!missionOn()) return;
+  missionChkT-=dt;
+  if(missionChkT>0) return;
+  missionChkT=1;
+  if(S.intro.step===3&&surf.spire){
+    const dx=player.x-surf.spire.x, dz=player.z-surf.spire.z;
+    if(dx*dx+dz*dz<256) missionAdvance();
+  }
+}
+$('missionSkip').addEventListener('click',()=>{ SND.blip(); missionSkip(); });
 
 /* ============================================================
    SIGNAL-SHIELD CUTSCENE (Verdant tier 3, Pelagos tier 5)
@@ -4162,6 +4253,7 @@ function updateSurface(dt){
   $('o2bar').style.width=(o2f*100)+'%';
   $('o2bar').classList.toggle('low',o2f<0.25&&lowAir);
   if(o2f<0.25&&lowAir){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  missionTick(dt);
   /* nav beacon proximity ping (throttled) */
   navPingT-=dt;
   if(navPingT<=0){
@@ -4298,7 +4390,7 @@ function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
   S.respawnPt=null;
-  S.intro={done:false,step:0,cineSeen:false};   // a NEW game runs the intro (device markers still gate replays)
+  S.intro={done:false,step:0,cineSeen:false,granted:false};   // a NEW game runs the intro (device markers still gate replays)
   S.station=[]; S.stationOnline=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
@@ -4640,6 +4732,7 @@ Object.assign(window,{
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
   applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
+  missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
