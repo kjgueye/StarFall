@@ -68,7 +68,7 @@ import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
   O2_DRAIN, O2_DRAIN_SPRINT, O2_JET_MULT, O2_DRAIN_SUBMERGED, O2_REFILL,
   EVA_O2_DRAIN, EVA_O2_REFILL } from './shared/constants.js';
 import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
-import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout } from './shared/world.js';
+import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
   inSafeZone, groundYAt, shotBlocked } from './shared/rules.js';
@@ -154,6 +154,7 @@ function makeRoom(world, code) {
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
+    ctl: readCtl(world && world.ctl),                 // faction control per planet (Conquest)
     walls: [],                          // live deployable shield walls (server blocks shots)
     station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
@@ -192,6 +193,7 @@ function serializeRoom(room) {
   return {
     v: 1, worldId: room.worldId, clock: room.clock,
     beacon: room.beacon, stationOnline: room.stationOnline,
+    ctl: { ...room.ctl },
     structures: room.structures.map(s => {
       const o = { t: s.t, pl: s.pl, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), r: s.r, hp: s.hp | 0 };
       if (s.owner !== undefined && s.owner !== null) o.owner = s.owner;
@@ -359,6 +361,7 @@ function welcomeMsg(room, pid) {
       tod: todOf(room.clock),
       station: room.station,
       stationOnline: room.stationOnline,
+      ctl: room.ctl,
     },
   };
 }

@@ -33,10 +33,13 @@ const PLANET_CRIT = {
   glacius: ['skitterer', 'floater'],
   verdant: ['grazer', 'floater', 'hopper'],
   pelagos: ['skimmer', 'floater'],
+  cinder: ['skitterer', 'hopper'],
+  umbra: ['floater', 'hopper'],
+  noctis: ['skitterer', 'floater'],
 };
 const STATION_TYPES = ['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms'];
 const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo'],
-  SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos'],
+  SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos','cinder','umbra','noctis'],
   SAFE_CR: 32, CRIT_CAP: 12, STATION_MAX: 60, STATION_MIN: 10, DAY_CYCLE: 600, MAX_STRUCT: 400 };
 
 /* --- 1. SCAT ≡ CAT hp --- */

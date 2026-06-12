@@ -327,6 +327,9 @@ export const CRIT_BY_PLANET={
   glacius:['skitterer','floater'],
   verdant:['grazer','floater','hopper'],
   pelagos:['skimmer','floater'],
+  cinder: ['skitterer','hopper'],
+  umbra:  ['floater','hopper'],
+  noctis: ['skitterer','floater'],
 };
 
 /* ---------- paint palette ---------- */

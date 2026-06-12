@@ -41,8 +41,42 @@ export const PLANETS={
            nightSky:0x070c1e, nightFog:0x0e1830, dusk:0x9fe8e0, nightAmb:0x1c2458, glowNight:1.15,
            ambient:{col:0xbfeee8, count:220, fall:-0.08, drift:1.3, size:0.3, op:0.3},   // drifting sea-mist motes
            floraCol:0x49c8bd, desc:'Teal archipelago — cross the water', water:true},
+  /* ---- Conquest update: faction-held territory (fac.diff scales the
+     defense; fnode = the Command Node site, the objective to break) ---- */
+  cinder: {name:'CINDER',  seed:67, r:27, pos:[540,-30,330],  surfCol:0x6e4438, surfCol2:0x3c241e, rockCol:0x32221e,
+           fog:0x3a1410, sky:0x1c0a06, sun:0xffb070, amp:11, res:'fe', nodeCol:0xff6a2a, nodeEmis:0xdd2a00,
+           nightSky:0x140406, nightFog:0x1e0a08, nightAmb:0x4a1a0e, dusk:0xff6a40, glowNight:1.1,
+           ambient:{col:0xff8a4a, count:260, fall:0.5, drift:1.6, size:0.2, op:0.45, nightGlow:true},   // rising embers
+           floraCol:0x8a4a2a, desc:'Ember wastes — faction territory',
+           fac:{diff:1}, fnode:{x:85,z:-55}},
+  umbra:  {name:'UMBRA',   seed:79, r:29, pos:[-660,60,-440], surfCol:0x5a4878, surfCol2:0x322650, rockCol:0x403258,
+           fog:0x241a3e, sky:0x100822, sun:0xcfb8ff, amp:10, res:'cy', nodeCol:0xb47aff, nodeEmis:0x6a20dd,
+           nightSky:0x0a0618, nightFog:0x120c26, nightAmb:0x2c1a5a, dusk:0xb88aff, glowNight:1.25,
+           ambient:{col:0xc8a8ff, count:240, fall:-0.15, drift:0.9, size:0.26, op:0.5, nightGlow:true},  // drifting violet motes
+           floraCol:0x7a5acc, desc:'Violet twilight world — faction territory',
+           fac:{diff:2}, fnode:{x:-70,z:75}},
+  noctis: {name:'NOCTIS',  seed:97, r:30, pos:[60,90,860],    surfCol:0x342e3e, surfCol2:0x181420, rockCol:0x232028,
+           fog:0x1a0c10, sky:0x070308, sun:0xff9a8a, amp:13, res:'bio', nodeCol:0xff4a3a, nodeEmis:0xcc1000,
+           nightSky:0x080306, nightFog:0x100608, nightAmb:0x401018, dusk:0xff5a4a, glowNight:1.3,
+           ambient:{col:0xff5a4a, count:200, fall:-0.6, drift:1.1, size:0.22, op:0.35},   // black ash with red glints
+           floraCol:0x6a2030, desc:'Obsidian stronghold — the faction\'s seat',
+           fac:{diff:3}, fnode:{x:95,z:80}},
 };
 export const PLANET_KEYS=Object.keys(PLANETS);
+
+/* ---------- faction control state (Conquest update) ----------
+   Per-planet, per-world: 'neutral' (freely landable), 'faction' (AI-held,
+   defended), 'yours' (claimed by players). Shared by save files, the MP
+   store and the wire protocol — readCtl sanitizes any of them. */
+export const CTL_STATES=['neutral','faction','yours'];
+export function defaultCtl(){
+  const o={}; for(const k of PLANET_KEYS) o[k]=PLANETS[k].fac?'faction':'neutral'; return o;
+}
+export function readCtl(d){
+  const o=defaultCtl();
+  if(d&&typeof d==='object') for(const k of PLANET_KEYS){ if(CTL_STATES.indexOf(d[k])>=0) o[k]=d[k]; }
+  return o;
+}
 export const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin',pe:'Abyssal Pearl'};
 export const RES_DOTS={fe:'#ff8a2a',cy:'#44eaff',bio:'#52ff7a',ch:'#d8b878',pe:'#5affe4'};
 

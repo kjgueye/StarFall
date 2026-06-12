@@ -21,7 +21,8 @@ import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LI
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
   CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
-import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout } from '../shared/world.js';
+import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout,
+  defaultCtl, readCtl } from '../shared/world.js';
 import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
@@ -80,6 +81,7 @@ const S={
   structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
   station:[], stationOnline:false,
+  ctl:defaultCtl(),         // per-planet faction control: neutral | faction | yours
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingCutscene:null,
@@ -92,7 +94,7 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='astravox_save_v1';
-const SAVE_VER=8;   // v7: + rsp (cryopod respawn). v8: + intro {done,step,cineSeen} — pre-v8 saves load as done (veterans skip onboarding)
+const SAVE_VER=9;   // v8: + intro (pre-v8 = veterans skip onboarding). v9: + ctl/fnHp (Conquest) — missing fields default per planet
 /* device-scoped intro markers so MP guests (no solo save) also skip on replay */
 const CINE_SEEN_KEY='astravox_cine_seen_v1', INTRO_DONE_KEY='astravox_intro_done_v1';
 function cineSeenDevice(){ try{ return !!localStorage.getItem(CINE_SEEN_KEY); }catch(e){ return false; } }
@@ -198,6 +200,7 @@ function netHandle(m){
     case 'clock': if(typeof m.tod==='number') dayClock=m.tod*CYCLE_S; break;
     case 'critSnap': applyCritSnap(m.pl,m.crit||[]); break;
     case 'critDead': onCritDead(m); break;
+    case 'ctl': applyCtl(m.pl,m.ctl,m.by); break;
     case 'nade': onRemoteNade(m); break;
     case 'shield': onRemoteShield(m); break;
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
@@ -235,6 +238,17 @@ function onPDeath(m){
   if(S.mode==='surface'&&surf.built) respawnPlayer();
   else { player.hp=HP_MAX; player.invuln=SPAWN_PROT; }
 }
+/* ---- faction control flips (Conquest) — server-owned in MP, local in solo ---- */
+function applyCtl(pl,ctl,by){
+  if(!PLANETS[pl]||['neutral','faction','yours'].indexOf(ctl)<0) return;
+  const was=S.ctl[pl];
+  S.ctl[pl]=ctl;
+  updateCtlRings();
+  if(ctl==='yours'&&was!=='yours') onPlanetClaimed(pl,by);
+  saveGame();
+}
+/* claim payoff — Phase 3 turns this into the full celebration */
+function onPlanetClaimed(pl,by){ showToast('★ '+PLANETS[pl].name+' CLAIMED ★',4000); }
 function onTurretFire(m){
   if(S.mode!=='surface') return;
   const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
@@ -420,6 +434,7 @@ function buildSaveObj(){
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
+    ctl:Object.assign({},S.ctl),
     rsp:S.respawnPt||null,
     intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen,granted:!!S.intro.granted},
     cine:S.cine===true,
@@ -461,6 +476,8 @@ function parseSave(json){
       syaw:Number(d.syaw)||0, spitch:clamp(Number(d.spitch)||0,-1.2,1.2),
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown,
+      /* pre-v9 saves: faction worlds default to faction-held, the rest neutral */
+      ctl:readCtl(d.ctl),
       rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
         ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
       /* pre-v8 saves = veterans: intro complete, never replays */
@@ -511,6 +528,7 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
+  S.ctl=d.ctl; updateCtlRings();
   S.respawnPt=d.rsp||null;
   S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
@@ -576,6 +594,9 @@ const FX_MOOD={
   glacius:{exposure:1.12, tint:[0.96,1.00,1.08]},
   verdant:{exposure:0.96, tint:[0.95,1.05,0.98]},
   pelagos:{exposure:1.02, tint:[0.96,1.02,1.06]},
+  cinder: {exposure:1.04, tint:[1.07,0.96,0.94]},
+  umbra:  {exposure:1.00, tint:[1.02,0.96,1.08]},
+  noctis: {exposure:0.94, tint:[1.06,0.94,0.96]},
   space:  {exposure:1.00, tint:[1.00,1.00,1.00]},
 };
 /* synthwave grade: saturation + magenta-highlight / teal-shadow split-tone,
@@ -824,6 +845,8 @@ const spacePlanets={};
 const SHIELDED={ verdant:{tier:3,col:0xb05aff,wire:0xd08aff,res:'Biolume'},
                  pelagos:{tier:5,col:0x36c6ff,wire:0x8af0ff,res:'Abyssal Pearl'} };
 const shieldGroups={};
+const ctlRings={};   // per-planet control-state ring (Conquest): faction red / yours green
+const CTL_COLORS={faction:0xff5040, yours:0x5aff8a};
 for(const key in PLANETS){
   const p=PLANETS[key];
   const m=new THREE.Mesh(new THREE.SphereGeometry(p.r,28,20),
@@ -833,6 +856,18 @@ for(const key in PLANETS){
   const atmo=makeGlow('#'+new THREE.Color(p.surfCol).offsetHSL(0,0.1,0.25).getHexString(),p.r*3.4);
   atmo.position.copy(m.position); spaceScene.add(atmo);
   spacePlanets[key]=m;
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(p.r*1.5,p.r*0.045,8,48),
+    new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
+  ring.rotation.x=Math.PI/2; ring.position.copy(m.position); ring.visible=false;
+  spaceScene.add(ring); ctlRings[key]=ring;
+}
+function planetCtl(pl){ return S.ctl[pl]||'neutral'; }
+function updateCtlRings(){
+  for(const key in ctlRings){
+    const c=planetCtl(key), ring=ctlRings[key];
+    ring.visible=c!=='neutral';
+    if(ring.visible) ring.material.color.set(CTL_COLORS[c]);
+  }
 }
 for(const key in SHIELDED){ /* signal-interference shields (verdant, pelagos) */
   const cfg=SHIELDED[key], p=PLANETS[key];
@@ -2079,7 +2114,8 @@ SND.ambStart=function(planet){
     for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
     const src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
     const f=ctx.createBiquadFilter(); f.type='lowpass';
-    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05]}[planet]||[420,0.04];
+    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05],
+               cinder:[260,0.05],umbra:[620,0.04],noctis:[180,0.045]}[planet]||[420,0.04];
     f.frequency.value=cfg[0];
     const g=ctx.createGain();
     g.gain.setValueAtTime(0.0001,ctx.currentTime);
@@ -4251,7 +4287,10 @@ function updateSpace(dt){
       setMAct('✕');
       if(justE){ SND.denied(); showToast('A hostile signal shield blocks descent. Reach Tier '+SHIELDED[landKey].tier+'.'); }
     } else {
-      setPrompt('<span class="key">E</span>LAND ON '+p.name+' — '+p.desc);
+      const c=planetCtl(landKey);
+      const tag=c==='faction'?' — <span style="color:#ff9a8a">⚠ FACTION TERRITORY · defenses active</span>'
+        :(c==='yours'?' — <span style="color:#8fefb0">YOUR COLONY ✓</span>':' — '+p.desc);
+      setPrompt('<span class="key">E</span>LAND ON '+p.name+tag);
       setMAct('LAND');
       if(justE) doLand(landKey);
     }
@@ -4488,6 +4527,7 @@ function renderSurfaceCam(){
 function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
+  S.ctl=defaultCtl(); updateCtlRings();
   S.respawnPt=null;
   S.intro={done:false,step:0,cineSeen:false,granted:false};   // a NEW game runs the intro (device markers still gate replays)
   S.station=[]; S.stationOnline=false;
@@ -4604,6 +4644,7 @@ function installWorld(world){
     return st;
   });
   S.beacon=!!world.beacon;
+  S.ctl=readCtl(world.ctl); updateCtlRings();
   NET.deadNodes={};
   for(const pl in (world.deadNodes||{})) NET.deadNodes[pl]=new Set(world.deadNodes[pl]);
   NET.meteor={};
@@ -4790,6 +4831,9 @@ function loop(now){
     activeScene=spaceScene;
   }
   for(const key in shieldGroups){ const g=shieldGroups[key]; if(g.parent){ g.rotation.y+=dt*0.3; g.rotation.x+=dt*0.11; } }
+  for(const key in ctlRings){ const r=ctlRings[key]; if(!r.visible) continue;
+    r.rotation.z+=dt*0.15;
+    r.material.opacity=planetCtl(key)==='faction'?0.32+0.16*Math.sin(now*0.0035):0.38; }
   if(nebula){ nebula.rotation.y+=dt*0.0015; nebula.rotation.z+=dt*0.0004; }   // imperceptibly drifting cosmos
   if(stationCore.visible){ stationCore.rotation.y+=dt*0.08;
     const cb=stationCore.getObjectByName('coreBeacon'); if(cb) cb.scale.setScalar(2.4+Math.sin(now*0.004)*0.4);
@@ -4837,6 +4881,7 @@ Object.assign(window,{
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
   applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
   missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,applyNeon,
+  planetCtl,applyCtl,updateCtlRings,defaultCtl,readCtl,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
