@@ -3565,6 +3565,14 @@ $('btnCine').addEventListener('click',()=>{
   S.cine=!S.cine;
   $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY'); SND.blip(); saveGame();
 });
+$('btnReplayIntro').addEventListener('click',()=>{
+  S.intro={done:false,step:0,cineSeen:false,granted:true};   // no double starter kit
+  try{ localStorage.removeItem(CINE_SEEN_KEY); localStorage.removeItem(INTRO_DONE_KEY); }catch(e){}
+  saveGame(); SND.blip();
+  showToast('Intro will replay on your next landing');
+  closeAllPanels();
+  if(S.running&&S.mode==='surface') missionBegin();
+});
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 $('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
 $('mMap').addEventListener('touchstart',e=>{ e.preventDefault(); toggleMap(); },{passive:false});
