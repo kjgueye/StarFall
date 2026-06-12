@@ -425,7 +425,7 @@ function buildSaveObj(){
     cine:S.cine===true,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
-    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true};
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true, neon:S.neon||'med'};
 }
 function saveGame(){
   if(!S.running) return;
@@ -472,7 +472,8 @@ function parseSave(json){
       weapons:readWeapons(d.weapons),
       ammo:readAmmo(d.ammo),
       medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false,
-      fx:typeof d.fx==='boolean'?d.fx:null, amb:d.amb===true};
+      fx:typeof d.fx==='boolean'?d.fx:null, amb:d.amb===true,
+      neon:['low','med','high'].indexOf(d.neon)>=0?d.neon:null};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
         if(out.structures.length>=MAX_STRUCT) break;
@@ -516,6 +517,7 @@ function applySave(d){
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
   if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
   S.amb=d.amb===true;
+  if(d.neon){ S.neon=d.neon; applyNeon(); }
   S.intro=d.intro; S.cine=d.cine;
 }
 function exportSave(){
@@ -596,6 +598,22 @@ const GRADE_SHADER={
     '}'].join('\n'),
 };
 let composer=null,renderPassFx=null,bloomPass=null,gradePass=null;
+/* Neon Intensity: one knob scaling the whole look (bloom, grade, night
+   emissive boost, nebula). Persisted in the solo save WITHOUT a version
+   bump — absent field just means the default. */
+const NEON_LEVELS={
+  low: {bloom:0.18, sat:1.08, split:0.06, nightK:0.25, neb:0.35},
+  med: {bloom:0.26, sat:1.18, split:0.10, nightK:0.40, neb:0.60},
+  high:{bloom:0.36, sat:1.30, split:0.15, nightK:0.55, neb:0.85},
+};
+let neonNightK=0.40;
+function applyNeon(){
+  const L=NEON_LEVELS[S.neon]||NEON_LEVELS.med;
+  if(bloomPass) bloomPass.strength=L.bloom;
+  if(gradePass){ gradePass.uniforms.sat.value=L.sat; gradePass.uniforms.split.value=L.split; }
+  if(nebula) nebula.material.opacity=L.neb;
+  neonNightK=L.nightK;
+}
 function buildComposer(){
   const half=!fxDefault();                       // touch devices: half-res bloom
   composer=new EffectComposer(renderer);
@@ -611,7 +629,7 @@ function buildComposer(){
   composer.addPass(new OutputPass());
 }
 function applyFx(){
-  if(S.fx&&!composer) buildComposer();
+  if(S.fx&&!composer){ buildComposer(); applyNeon(); }
   renderer.toneMapping=S.fx?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;
 }
 
@@ -3142,7 +3160,7 @@ function applyDayNight(){
   for(const gl of structGlows) gl.material.opacity=Math.min(1,gl.userData._o0*glowK);
   /* emissive materials run hotter at night (shared with the space scene —
      reset on launch) */
-  const nightK=1+0.4*(1-day);
+  const nightK=1+neonNightK*(1-day);
   for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0*nightK;
 }
 const _tmpC=new THREE.Color(), _tmpC2=new THREE.Color();
@@ -3610,6 +3628,7 @@ function openSettings(){
   $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF');
   $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY');
+  $('btnNeon').textContent='Neon Intensity: '+(S.neon||'med').toUpperCase();
   $('importWrap').classList.add('hidden');
   openPanel('settings');
 }
@@ -3630,6 +3649,12 @@ $('btnAmb').addEventListener('click',()=>{
 $('btnCine').addEventListener('click',()=>{
   S.cine=!S.cine;
   $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY'); SND.blip(); saveGame();
+});
+$('btnNeon').addEventListener('click',()=>{
+  const order=['low','med','high'];
+  S.neon=order[(order.indexOf(S.neon||'med')+1)%3];
+  applyNeon();
+  $('btnNeon').textContent='Neon Intensity: '+S.neon.toUpperCase(); SND.blip(); saveGame();
 });
 $('btnReplayIntro').addEventListener('click',()=>{
   S.intro={done:false,step:0,cineSeen:false,granted:true};   // no double starter kit
@@ -4727,9 +4752,11 @@ function secretTap(){
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
 if(typeof S.amb!=='boolean') S.amb=false;   // planet ambience is opt-in
+if(['low','med','high'].indexOf(S.neon)<0) S.neon='med';
 if(!S.intro) S.intro={done:true,step:99,cineSeen:true};   // pre-start safety; resetState/applySave set the real value
 if(typeof S.cine!=='boolean') S.cine=false;
 applyFx();
+applyNeon();
 
 /* autosave */
 setInterval(saveGame,30000);
@@ -4809,7 +4836,7 @@ Object.assign(window,{
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
   applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
-  missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,
+  missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,applyNeon,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
