@@ -251,6 +251,7 @@ function applyCtl(pl,ctl,by){
   const was=S.ctl[pl];
   S.ctl[pl]=ctl;
   updateCtlRings();
+  if(S.mode==='surface'&&S.planet===pl) applyFnodeState();   // hide the contested-zone ring on claim
   if(ctl==='yours'&&was!=='yours') onPlanetClaimed(pl,by);
   saveGame();
 }
@@ -3278,9 +3279,13 @@ function buildFnode(g,p){
   const glow=makeGlow('#ff6a4a',12); glow.position.y=7.2; grp.add(glow);
   const ring=new THREE.Mesh(new THREE.RingGeometry(9.6,10.3,48),FNODE_MAT.ringM);
   ring.rotation.x=-Math.PI/2; ring.position.y=0.14; grp.add(ring);
+  /* contested-zone ring: shows where the Claim Beacon may rise once the node falls */
+  const claimRing=new THREE.Mesh(new THREE.RingGeometry(R.CLAIM_R-0.8,R.CLAIM_R,72),
+    new THREE.MeshBasicMaterial({color:0x5aff9a,transparent:true,opacity:0.18,side:THREE.DoubleSide,depthWrite:false}));
+  claimRing.rotation.x=-Math.PI/2; claimRing.position.y=0.16; claimRing.visible=false; grp.add(claimRing);
   grp.position.set(x,y,z);
   g.add(grp);
-  surf.fnode={x,z,y,group:grp,core,glow,ring,half:false};
+  surf.fnode={x,z,y,group:grp,core,glow,ring,claimRing,half:false};
   surf.poiCols.push({x,z,r:3.9});
   applyFnodeState();
 }
@@ -3289,6 +3294,7 @@ function applyFnodeState(){
   const alive=fnodeAlive();
   f.core.material=alive?FNODE_MAT.coreOn:FNODE_MAT.coreOff;
   f.glow.visible=alive; f.ring.visible=alive;
+  f.claimRing.visible=!alive&&planetCtl(S.planet)==='faction';   // node down, not yet claimed
 }
 function updateFnode(dt){
   const f=surf.fnode; if(!f) return;
@@ -4372,7 +4378,7 @@ function conquestMission(){
 const CONQ_EPILOGUE='The faction\'s command nodes are silent across the system… but something out there is still listening.';
 function conqDismissed(){ try{ return !!localStorage.getItem('astravox_conq_dismissed'); }catch(e){ return false; } }
 function conquestHint(m){
-  if(m.kind==='arm') return 'Build an Armory and craft a weapon — the faction won\'t yield to a mining tool';
+  if(m.kind==='arm') return 'Reach Tier 2, build an Armory and craft a weapon — the faction won\'t yield to a mining tool';
   const pl=m.pl;
   if(S.mode!=='surface'||S.planet!==pl) return 'Fly to '+PLANETS[pl].name+' (follow the ◆ marker) and land — expect resistance';
   if(fnodeAlive(pl)) return 'Fight to the faction control node (⬢ on compass / map) and destroy it';

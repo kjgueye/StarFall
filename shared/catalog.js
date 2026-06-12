@@ -354,7 +354,7 @@ export const DRONES={
    roamer population, sentries ringing the node, HP/damage multipliers,
    and the Command Node's own HP */
 export const FACTION_TIERS=[
-  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:1,   nodeHp:300, reward:{fe:40,cy:20}},
+  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:0.85, nodeHp:300, reward:{fe:40,cy:20}},
   {count:5, roam:['stinger','stinger','heavy'], sentries:2, hpMul:1.4, dmgMul:1.3, nodeHp:550, reward:{fe:80,cy:40}},
   {count:7, roam:['stinger','heavy','heavy'],   sentries:3, hpMul:1.9, dmgMul:1.7, nodeHp:850, reward:{fe:150,cy:80,bio:30}},
 ];
