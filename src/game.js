@@ -622,9 +622,14 @@ const MAT={
   emisR:emisMat(0xff7a6a,0xcc2210,2.0),
   emisG:emisMat(0x8affa8,0x10cc44,2.0),
   emisB:emisMat(0x7aa8ff,0x1040cc,2.0),
+  /* Neon Horizon spectrum — hot accents that the bloom threshold catches */
+  emisM:emisMat(0xff5ad0,0xcc1080,2.1),    // hot magenta
+  emisP:emisMat(0xb46aff,0x6a10cc,2.1),    // electric purple
+  emisPk:emisMat(0xff7ab8,0xcc1060,2.1),   // hot pink
+  emisT:emisMat(0x5affd8,0x10ccaa,2.1),    // neon teal
   beam:new THREE.MeshBasicMaterial({color:0x9fffc8,transparent:true,opacity:0.28,blending:THREE.AdditiveBlending,depthWrite:false}),
   lightcone:new THREE.MeshBasicMaterial({color:0xeaf6ff,transparent:true,opacity:0.14,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
-  holo:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
+  holo:new THREE.MeshBasicMaterial({color:0xb46aff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   flagM:emisMat(0xff6a4a,0x661505,0.6),
   pot:stdMat(0x7a5a40,{roughness:0.9,metalness:0.05}),
   plant:emisMat(0x4adf6a,0x0a5520,0.7),
@@ -1210,7 +1215,7 @@ function buildSurface(planetKey){
   /* resource nodes (instanced crystals) */
   {
     surf.nodes=[];
-    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),layout.nodes.length);
+    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,2.1),layout.nodes.length);
     const d=new THREE.Object3D();
     layout.nodes.forEach((nd,i)=>{
       surf.nodes.push({x:nd.x,y:nd.y,z:nd.z,s:nd.s,alive:true,respawn:0,rot:nd.rot});
@@ -3050,7 +3055,7 @@ function meteorActiveNow(){
 }
 /* the emissive hot set runs brighter after dark; bases recorded once so the
    boost never compounds and can be reset when leaving the surface */
-const EMIS_NIGHT=[MAT.emisC,MAT.emisW,MAT.emisO,MAT.emisR,MAT.emisG,MAT.emisB];
+const EMIS_NIGHT=[MAT.emisC,MAT.emisW,MAT.emisO,MAT.emisR,MAT.emisG,MAT.emisB,MAT.emisM,MAT.emisP,MAT.emisPk,MAT.emisT];
 for(const m of EMIS_NIGHT) m.userData._ei0=m.emissiveIntensity;
 function resetEmisBoost(){ for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0; }
 function applyDayNight(){
