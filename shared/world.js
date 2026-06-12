@@ -24,6 +24,7 @@ export const PLANETS={
            fog:0x4a2012, sky:0x2a1208, sun:0xffd9b0, amp:9,  res:'fe', nodeCol:0xff7a30, nodeEmis:0xb34400,
            nightSky:0x0a0504, nightFog:0x150906, dusk:0xff8a50, glowNight:1.0,
            ambient:{col:0xc97a4a, count:300, fall:-0.35, drift:2.4, size:0.2, op:0.4},   // wind-blown dust
+           starter:true,   // gets the first-session treatment: POIs, spawn node cluster, nearby wildlife
            floraCol:0x7a4a30, desc:'Iron-rich starter world'},
   glacius:{name:'GLACIUS', seed:23, r:30, pos:[-180,42,470], surfCol:0xaccde4, surfCol2:0x7fa8cc, rockCol:0x6688aa,
            fog:0x9cc2dd, sky:0x16344e, sun:0xeaf4ff, amp:12, res:'cy', nodeCol:0x4fdfff, nodeEmis:0x0aa0cc,
@@ -111,6 +112,15 @@ export function surfaceLayout(p){
     const rot=rng()*6;
     const tx=rng()*0.6, ty=rng()*6, tz=rng()*0.6;   // initial visual tilt
     nodes.push({x,y,z,s,rot,tx,ty,tz});
+  }
+  /* starter world (First Light): a rich crystal cluster right by the landing
+     zone so the first mining is close and rewarding. APPENDED so existing
+     node indices (used by the mine protocol) stay stable. */
+  if(p.starter){
+    for(let i=0;i<4;i++){
+      const th=i*1.57+0.6, x=19+Math.cos(th)*4.2, z=-13+Math.sin(th)*4.2;
+      nodes.push({x,y:terrainH(x,z,p),z,s:1.3+(i%2)*0.35,rot:i*1.3,tx:rng()*0.6,ty:rng()*6,tz:rng()*0.6});
+    }
   }
   return {rocks,flora,nodes};
 }

@@ -334,6 +334,7 @@ function renderCompass(dt){
   if(surf.built) mk(surf.shipPos.x,surf.shipPos.z,'⌂','#7fd6f5');
   const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
   for(const s of placedByType.navbeacon||[]){ if(s.hp>0) mk(s.x,s.z,'✧','#'+new THREE.Color(s.col!=null?s.col:0xff7a5a).getHexString()); }
+  if(surf.poi) for(const o of surf.poi) mk(o.x,o.z,o.label,o.col);
   if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
   /* nearest critter — points the way to the hunt */
   if(critters.length){ let best=null,bd=1e9; for(const c of critters){ const dx=c.x-px,dz=c.z-pz,d=dx*dx+dz*dz; if(d<bd){bd=d;best=c;} }
@@ -370,6 +371,8 @@ function drawMinimap(){
   for(const c of critters) dot(c.x,c.z,'#d8b878',1.8);
   // ship
   if(surf.built) dot(surf.shipPos.x,surf.shipPos.z,'#7fd6f5',3);
+  // starter-world landmarks
+  if(surf.poi) for(const o of surf.poi) dot(o.x,o.z,o.col,3);
   // active meteor zone
   const ms=NET.active?(NET.meteor[S.planet]&&NET.meteor[S.planet].phase!=='idle'):(meteorState.phase!=='idle');
   if(ms){ const c=baseCentroid(); const m=w2m(c.x,c.z); g.strokeStyle='rgba(255,90,60,0.8)'; g.lineWidth=2; g.beginPath(); g.arc(m[0],m[1],50*scale,0,Math.PI*2); g.stroke(); }
@@ -996,6 +999,81 @@ function updateWater(){
   pos.needsUpdate=true;
 }
 
+/* ---------- starter-world points of interest (First Light P2) ----------
+   Hand-authored landmarks near the Rust landing zone so a new player never
+   spawns staring at empty desert: a glowing crystal spire (visible from
+   spawn), a crashed derelict, and alien ruins. Scene objects, not
+   buildables; simple cylinder colliders keep the player out of them. */
+const POIM={
+  crystal:emisMat(0xffa050,0xb34400,1.5),
+  hull:stdMat(0x3c4450,{roughness:0.55,metalness:0.7}),
+  scorch:stdMat(0x241a14,{roughness:0.95,metalness:0.1}),
+  stone:stdMat(0x6b4632,{roughness:0.9,metalness:0.05}),
+  rune:new THREE.MeshBasicMaterial({color:0x7fd6f5,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}),
+};
+function buildStarterPOIs(g,p){
+  surf.poi=[]; surf.poiCols=[];
+  const T=(x,z)=>terrainH(x,z,p);
+  const add=(m)=>{ g.add(m); return m; };
+  /* --- crystal spire (75,-10): tall, glowing, clear of the ship from spawn --- */
+  {
+    const x=75,z=-10,y=T(x,z);
+    for(let i=0;i<5;i++){
+      const a=i*1.26, r=i===0?0:2.4;
+      const cx=x+Math.cos(a)*r, cz=z+Math.sin(a)*r;
+      const h=i===0?15:6+i*1.6;
+      const c=add(new THREE.Mesh(GEO.ico,POIM.crystal));
+      c.position.set(cx,T(cx,cz)+h*0.42,cz);
+      c.scale.set(1.6+(i===0?1.2:0),h,1.6+(i===0?1.2:0));
+      c.rotation.set(0.12*((i%3)-1),a,0.1*((i%2)?1:-1));
+    }
+    const gl=makeGlow('#ffb070',16); gl.position.set(x,y+10,z); g.add(gl);
+    surf.poi.push({x,z,label:'✦',col:'#ffb070',name:'Crystal Spire'});
+    surf.poiCols.push({x,z,r:3.4});
+    surf.spire={x,z};
+  }
+  /* --- crashed derelict (-65,45): half-buried hull, broken wing, sparks --- */
+  {
+    const x=-65,z=45,y=T(x,z);
+    const hull=add(new THREE.Mesh(GEO.cyl,POIM.hull));
+    hull.position.set(x,y+1.6,z); hull.scale.set(3.2,16,3.2);
+    hull.rotation.set(Math.PI/2-0.18,0,0.5);
+    const nose=add(new THREE.Mesh(GEO.cone,POIM.hull));
+    nose.position.set(x+1.2,y+2.8,z-7.6); nose.scale.set(2.6,4,2.6); nose.rotation.set(Math.PI/2-0.18,0,0.5);
+    const wing=add(new THREE.Mesh(GEO.box,POIM.scorch));
+    wing.position.set(x-6,y+0.7,z+3); wing.scale.set(7,0.4,3); wing.rotation.set(0.1,0.7,0.35);
+    for(let i=0;i<5;i++){
+      const d=add(new THREE.Mesh(GEO.box,POIM.scorch));
+      const a=i*1.3, r=6+i*2;
+      d.position.set(x+Math.cos(a)*r,T(x+Math.cos(a)*r,z+Math.sin(a)*r)+0.3,z+Math.sin(a)*r);
+      d.scale.set(0.8+i*0.2,0.5,0.7); d.rotation.set(0,a,0.2);
+    }
+    const spark=add(new THREE.Mesh(GEO.sphere,MAT.emisO));
+    spark.position.set(x+1.4,y+3.4,z+4.6); spark.scale.setScalar(0.4);
+    const gl=makeGlow('#ffb070',6); gl.position.set(x+1.4,y+3.6,z+4.6); g.add(gl);
+    surf.poi.push({x,z,label:'☠',col:'#c8a98a',name:'Derelict Wreck'});
+    surf.poiCols.push({x,z,r:4.2});
+  }
+  /* --- alien ruins (-45,-75): pillar ring + humming monolith --- */
+  {
+    const x=-45,z=-75;
+    for(let i=0;i<7;i++){
+      const a=i*0.897, px=x+Math.cos(a)*9, pz=z+Math.sin(a)*9, py=T(px,pz);
+      const pil=add(new THREE.Mesh(GEO.cyl,POIM.stone));
+      if(i%3===2){ pil.position.set(px,py+0.6,pz); pil.scale.set(0.9,4.6,0.9); pil.rotation.set(0,a,1.35); }   // toppled
+      else { pil.position.set(px,py+2.2,pz); pil.scale.set(0.9,4.6,0.9); surf.poiCols.push({x:px,z:pz,r:1.0}); }
+    }
+    const my=T(x,z);
+    const mono=add(new THREE.Mesh(GEO.box,POIM.stone));
+    mono.position.set(x,my+3.4,z); mono.scale.set(2.2,6.8,1.2); mono.rotation.y=0.5;
+    const rune=add(new THREE.Mesh(GEO.box,POIM.rune));
+    rune.position.set(x,my+3.4,z); rune.scale.set(2.35,5.4,1.0); rune.rotation.y=0.5;
+    const gl=makeGlow('#7fd6f5',7); gl.position.set(x,my+6.4,z); g.add(gl);
+    surf.poi.push({x,z,label:'◬',col:'#9fdcf5',name:'Ancient Ruins'});
+    surf.poiCols.push({x,z,r:2});
+  }
+}
+
 /* ---------- ambient planet atmosphere (Outpost P5) ----------
    One small Points cloud (dust/snow/spores/mist per PLANETS.ambient data)
    wrapped in a 50m box around the player. Near-free: positions stream once
@@ -1153,6 +1231,8 @@ function buildSurface(planetKey){
   const sx=8, sz=2;
   surf.shipPos.set(sx,terrainH(sx,sz,p)+2.3,sz);
 
+  surf.poi=[]; surf.poiCols=[]; surf.spire=null;
+  if(p.starter) buildStarterPOIs(g,p);
   surfScene.add(g);
   buildAmbient();
   SND.ambStart(planetKey);
@@ -1291,6 +1371,17 @@ function collidePlayer(){
     if(d<3.1&&player.y<surf.shipPos.y+1.6){
       const f=d<0.001?3.1:3.1/d;
       player.x=surf.shipPos.x+dsx*f; player.z=surf.shipPos.z+dsz*f;
+    }
+  }
+  /* starter-world POI hulls (cylinders) */
+  if(surf.poiCols&&surf.poiCols.length){
+    for(const c of surf.poiCols){
+      const dx=player.x-c.x, dz=player.z-c.z;
+      const d=Math.hypot(dx,dz), rr=c.r+PR;
+      if(d<rr){
+        if(d<0.001){ player.x=c.x+rr; }                 // dead center: push out along +x
+        else { const f=rr/d; player.x=c.x+dx*f; player.z=c.z+dz*f; }
+      }
     }
   }
   for(let it=0;it<2;it++){
@@ -2703,6 +2794,16 @@ function soloSpawnInitial(){
   if(NET.active) return;
   const n=Math.min(CRIT_CAP,6+Math.floor(Math.random()*3));
   for(let i=0;i<n;i++) critSpawnSolo();
+  /* starter world: guarantee visible, lively wildlife near the landing zone */
+  if(curP().starter){
+    const types=CRIT_BY_PLANET[S.planet]||['skitterer'];
+    for(let i=0;i<3;i++){
+      const ang=i*2.1+0.5, rad=20+i*7;
+      const x=player.x+Math.cos(ang)*rad, z=player.z+Math.sin(ang)*rad;
+      if(inSafeZone(x,z)||Math.hypot(x,z)>WORLD_R-10) continue;
+      spawnCritterEntity('cs'+(soloCritId++),types[i%types.length],x,z);
+    }
+  }
   critSpawnT=4+Math.random()*6;
 }
 
@@ -3502,6 +3603,13 @@ function enterSurface(planetKey,fromSave){
     player.x=1; player.z=-4;
     player.y=groundYAt(player.x,player.z,1e9);
     player.yaw=Math.atan2(-(surf.shipPos.x-player.x),-(surf.shipPos.z-player.z));
+    /* starter world: open the first view so both the ship and the crystal
+       spire landmark are in frame — never a wall of empty desert */
+    if(surf.spire){
+      const a1=player.yaw, a2=Math.atan2(-(surf.spire.x-player.x),-(surf.spire.z-player.z));
+      let d=a2-a1; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+      player.yaw=a1+d*0.55;
+    }
   }
   player.vy=0; player.pitch=0;
   refreshMobileUI();

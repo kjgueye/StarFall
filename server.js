@@ -967,6 +967,19 @@ function simCritters(room, pl, dt) {
   const ps = [];
   for (const p of room.players.values()) if (p.mode === 'surface' && p.pl === pl) ps.push(p);
   const beacon = beaconOnPlanetS(room, pl);
+  /* a freshly-occupied (or hunted-out) surface seeds a few critters near the
+     landing zone immediately — the world reads as inhabited within seconds */
+  if (arr.length === 0) {
+    const types = CRIT_BY_PLANET[pl];
+    for (let i = 0; i < 3; i++) {
+      const ang = Math.random() * Math.PI * 2, rad = 25 + Math.random() * 35;
+      const x = Math.cos(ang) * rad, z = Math.sin(ang) * rad;
+      if (beacon) { const dx = x - beacon.x, dz = z - beacon.z; if (dx * dx + dz * dz < (SAFE_R + 4) * (SAFE_R + 4)) continue; }
+      const type = types[Math.floor(Math.random() * types.length)];
+      arr.push({ id: 'c' + (room.nextCrit++), type, x, z, hp: CRITTERS[type].hp,
+        hd: Math.random() * 6.283, wt: 1 + Math.random() * 3, idle: 0, st: 0 });
+    }
+  }
   /* respawn up to cap */
   room.critT[pl] -= dt;
   if (arr.length < CRIT_CAP && room.critT[pl] <= 0) {

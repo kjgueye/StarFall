@@ -112,7 +112,9 @@ ok(T.SLOT_KEYS.length === 8 && T.WEP_KEYS.length === 7 && T.AMMO_KEYS.length ===
 
 /* --- 11. Phase 2 shared geometry + validators --- */
 const L1 = W.surfaceLayout(W.PLANETS.rust), L2 = W.surfaceLayout(W.PLANETS.rust);
-ok(L1.nodes.length === W.NODE_COUNT && L1.rocks.length === 140 && L1.flora.length === 110, 'surfaceLayout counts');
+ok(L1.nodes.length === W.NODE_COUNT + 4 && L1.rocks.length === 140 && L1.flora.length === 110, 'surfaceLayout counts (starter world +4 spawn cluster)');
+ok(W.surfaceLayout(W.PLANETS.glacius).nodes.length === W.NODE_COUNT, 'non-starter worlds keep base node count');
+ok(L1.nodes.slice(W.NODE_COUNT).every(n => Math.hypot(n.x - 19, n.z + 13) < 6), 'spawn cluster sits by the landing zone');
 ok(JSON.stringify(L1) === JSON.stringify(L2), 'surfaceLayout deterministic');
 ok(W.surfaceLayout(W.PLANETS.pelagos).nodes.every(n => isFinite(n.x) && isFinite(n.y)), 'pelagos node layout finite');
 const floorAt = [{t:'floor',pl:'rust',x:0,y:5,z:0,r:0,hp:100}];
