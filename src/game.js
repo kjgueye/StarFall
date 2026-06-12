@@ -12,6 +12,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
   WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
@@ -567,8 +568,34 @@ window.addEventListener('resize',()=>{
    renderer path, pixel-identical to pre-P4. Default: on for desktop, off for
    touch. Built lazily so fx-off devices never pay for the render targets. */
 function fxDefault(){ return !(('ontouchstart' in window)||navigator.maxTouchPoints>0); }
-const FX_EXPOSURE={rust:1.06,glacius:1.12,verdant:0.96,pelagos:1.02,space:1.0};
-let composer=null,renderPassFx=null,bloomPass=null;
+/* per-planet mood: ACES exposure + a gentle linear-space tint */
+const FX_MOOD={
+  rust:   {exposure:1.06, tint:[1.04,0.97,1.00]},
+  glacius:{exposure:1.12, tint:[0.96,1.00,1.08]},
+  verdant:{exposure:0.96, tint:[0.95,1.05,0.98]},
+  pelagos:{exposure:1.02, tint:[0.96,1.02,1.06]},
+  space:  {exposure:1.00, tint:[1.00,1.00,1.00]},
+};
+/* synthwave grade: saturation + magenta-highlight / teal-shadow split-tone,
+   applied in linear space before OutputPass tone-maps. fx-off never runs it. */
+const GRADE_SHADER={
+  uniforms:{ tDiffuse:{value:null}, sat:{value:1.18}, split:{value:0.10}, tint:{value:new THREE.Vector3(1,1,1)} },
+  vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader:[
+    'uniform sampler2D tDiffuse; uniform float sat; uniform float split; uniform vec3 tint;',
+    'varying vec2 vUv;',
+    'void main(){',
+    '  vec4 c=texture2D(tDiffuse,vUv);',
+    '  float l=dot(c.rgb,vec3(0.2126,0.7152,0.0722));',
+    '  c.rgb=mix(vec3(l),c.rgb,sat);',
+    '  float t=smoothstep(0.04,0.85,l);',
+    '  vec3 grade=mix(vec3(-0.20,0.10,0.14),vec3(0.22,-0.06,0.12),t);   // teal shadows -> magenta highlights',
+    '  c.rgb+=grade*split*(0.15+l);',
+    '  c.rgb=max(c.rgb,0.0)*tint;',
+    '  gl_FragColor=c;',
+    '}'].join('\n'),
+};
+let composer=null,renderPassFx=null,bloomPass=null,gradePass=null;
 function buildComposer(){
   const half=!fxDefault();                       // touch devices: half-res bloom
   composer=new EffectComposer(renderer);
@@ -577,8 +604,10 @@ function buildComposer(){
      lifts emissive surfaces and hot pixels, it must not double the halos */
   bloomPass=new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth>>(half?1:0),window.innerHeight>>(half?1:0)),0.26,0.25,0.88);
+  gradePass=new ShaderPass(GRADE_SHADER);
   composer.addPass(renderPassFx);
   composer.addPass(bloomPass);
+  composer.addPass(gradePass);
   composer.addPass(new OutputPass());
 }
 function applyFx(){
@@ -4718,7 +4747,9 @@ function loop(now){
   if(NET.active) updateChatFade();
   if(S.fx&&composer){
     renderPassFx.scene=activeScene;
-    renderer.toneMappingExposure=FX_EXPOSURE[(S.running&&S.mode==='surface')?S.planet:'space']||1;
+    const mood=FX_MOOD[(S.running&&S.mode==='surface')?S.planet:'space']||FX_MOOD.space;
+    renderer.toneMappingExposure=mood.exposure;
+    gradePass.uniforms.tint.value.fromArray(mood.tint);
     composer.render();
   } else renderer.render(activeScene,camera);
 }
