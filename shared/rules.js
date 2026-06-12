@@ -7,7 +7,7 @@
    The client keeps thin same-name wrappers that supply its S.*
    state, so call sites are unchanged.
    ============================================================ */
-import { SAFE_R, CARRY_BASE, CARRY_PER_CRATE, CYCLE_S, STATION_MIN_PIECES,
+import { SAFE_R, CARRY_BASE, CYCLE_S, STATION_MIN_PIECES,
   MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX } from './constants.js';
 import { CAT, STATION, STATION_KEYS, STATION_POS, CORE_DIRS } from './catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, CRAFT } from './tiers.js';
@@ -21,8 +21,9 @@ export function refundFor(cost){ const out={}; for(const k in cost) out[k]=Math.
 
 /* ---- capacities ---- */
 export function carryCap(structures){
-  let crates=0; for(const s of structures){ if(s.t==='crate'&&s.hp>0) crates++; }
-  return CARRY_BASE + CARRY_PER_CRATE*crates;
+  /* any live structure with a capUp raises the cap (crate +150, silo +400) */
+  let up=0; for(const s of structures){ if(s.hp>0&&CAT[s.t]&&CAT[s.t].capUp) up+=CAT[s.t].capUp; }
+  return CARRY_BASE + up;
 }
 export function o2Max(tier){ return tier>=5?240:(tier>=2?160:100); }
 
@@ -58,8 +59,8 @@ function toLocalXZ(st,wx,wz){
   return {lx:dx*c-dz*s, lz:dx*s+dz*c};
 }
 
-/* walkable height at (x,z): terrain + floors/ramps/crates etc. */
-const WALK_TYPES=['floor','ramp','crate','foundation','halffloor','flatroof'];
+/* walkable height at (x,z): terrain + floors/ramps/crates/pads/lift etc. */
+const WALK_TYPES=['floor','ramp','crate','foundation','halffloor','flatroof','telepad','jumppad','lift'];
 export function groundYAt(structures, plKey, x, z, curY){
   const p=PLANETS[plKey];
   let g=terrainH(x,z,p);
@@ -72,6 +73,8 @@ export function groundYAt(structures, plKey, x, z, curY){
     else if(t==='halffloor'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=1.05) top=st.y+0.31;
     else if(t==='foundation'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.05) top=st.y+1.01;
     else if(t==='crate'&&Math.abs(lx)<=0.85&&Math.abs(lz)<=0.85) top=st.y+1.2;
+    else if((t==='telepad'||t==='jumppad')&&lx*lx+lz*lz<=1.32) top=st.y+0.36;
+    else if(t==='lift'&&lx*lx+lz*lz<=1.7) top=st.y+0.64+(st.lift||0)*CAT.lift.liftH;   // st.lift is client-side; on the server the platform reads as "down"
     else if(t==='ramp'&&Math.abs(lx)<=2.05&&Math.abs(lz)<=2.1){
       const tt=Math.max(0,Math.min(1,(2-lz)/4)); top=st.y+0.31+tt*3;
     }

@@ -18,6 +18,8 @@ const SCAT = {
   flag: 40, planter: 40, holosign: 40, lampR: 30, lampG: 30, lampB: 30,
   table: 50, antenna: 40,
   bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
+  /* Outpost update functional pieces */
+  telepad: 90, lift: 120, jumppad: 60, airlock: 120, spotlight: 60, cryopod: 100, silo: 240, navbeacon: 70,
 };
 const SCRIT = {
   skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
@@ -33,7 +35,7 @@ const PLANET_CRIT = {
   pelagos: ['skimmer', 'floater'],
 };
 const STATION_TYPES = ['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms'];
-const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon'],
+const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo'],
   SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos'],
   SAFE_CR: 32, CRIT_CAP: 12, STATION_MAX: 60, STATION_MIN: 10, DAY_CYCLE: 600, MAX_STRUCT: 400 };
 
@@ -94,6 +96,7 @@ const res = {fe:10,cy:5}; R.payCost(res, {fe:4}); ok(res.fe === 6, 'payCost');
 ok(JSON.stringify(R.refundFor({fe:6,cy:2})) === '{"fe":3,"cy":1}', 'refundFor');
 ok(R.o2Max(1) === 100 && R.o2Max(2) === 160 && R.o2Max(5) === 240, 'o2Max');
 ok(R.carryCap([]) === 300 && R.carryCap([{t:'crate',hp:50},{t:'crate',hp:0}]) === 450, 'carryCap (dead crate excluded)');
+ok(R.carryCap([{t:'crate',hp:50},{t:'silo',hp:100}]) === 850 && R.carryCap([{t:'silo',hp:0}]) === 300, 'carryCap silo +400 (dead silo excluded)');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 10, 10) === true, 'inSafeZone inside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 40, 0) === false, 'inSafeZone outside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'glacius', 1, 1) === false, 'inSafeZone wrong planet');
@@ -137,6 +140,19 @@ ok(R.tierUpCheck(1,3,{fe:9999,cy:9999}).err && R.tierUpCheck(1,2,{fe:0,cy:0}).er
 ok(R.fireCheck({pistol:true},{light:5},2).ammoKey === 'light', 'fireCheck pistol');
 ok(R.fireCheck({},{light:5},2).err && R.fireCheck({pistol:true},{light:0},2).err, 'fireCheck rejects unowned/no-ammo');
 ok(R.fireCheck({lance:true},{heavy:2},4).err && !R.fireCheck({lance:true},{heavy:3},4).err, 'fireCheck lance ammoUse=3');
+/* --- 12. Outpost functional pieces --- */
+ok(K.SNAP_WALLS.indexOf('airlock') >= 0 && K.SNAP_PIECES.has('airlock'), 'airlock snaps like a wall piece');
+ok(JSON.stringify(K.CAT.airlock.doorParts) === '[3,4]' && K.CAT.door.doorParts && K.CAT.door.doorSlide.length === 2, 'door/airlock doorParts data');
+ok(K.CAT.lift.liftH === 6 && Array.isArray(K.CAT.lift.liftParts), 'lift data fields');
+const gpad = W.terrainH(0, 0, W.PLANETS.rust);
+ok(R.groundYAt([{t:'telepad',pl:'rust',x:0,y:gpad,z:0,r:0,hp:90}],'rust',0,0,gpad+1) === gpad+0.36, 'telepad walkable top');
+const liftSt = {t:'lift',pl:'rust',x:0,y:gpad,z:0,r:0,hp:120};
+ok(R.groundYAt([liftSt],'rust',0.8,0,gpad+1) === gpad+0.64, 'lift platform down');
+liftSt.lift = 1;
+ok(Math.abs(R.groundYAt([liftSt],'rust',0.8,0,gpad+7) - (gpad+6.64)) < 1e-9, 'lift platform up (+liftH)');
+ok(R.groundYAt([liftSt],'rust',0.8,0,gpad+1) === W.terrainH(0.8,0,W.PLANETS.rust), 'raised platform not sticky from ground');
+ok(R.placeError({structures:[],st:{t:'telepad',pl:'rust',x:0,y:gpad,z:0,r:0},tier:2,res:{fe:99,cy:99},px:0,pz:0}) === null, 'placeError accepts telepad');
+ok(/Tier/.test(R.placeError({structures:[],st:{t:'cryopod',pl:'rust',x:0,y:gpad,z:0,r:0},tier:1,res:{fe:99,cy:99,bio:9},px:0,pz:0})), 'cryopod tier-gated');
 ok(R.stationSocketPoints([]).length === 6, 'station core sockets');
 const corePt = R.stationSocketPoints([])[0];
 ok(R.stationPlaceValid([], corePt[0], corePt[1], corePt[2]) === true, 'stationPlaceValid on core socket');

@@ -49,20 +49,26 @@ function client() {
   let srv = boot(); await sleep(1200);
 
   const A = client(); await A.ready;
-  A.send({ t: 'host', name: 'OWNER', cmd: 1 });          // commander: maxed resources, no grind
+  A.send({ t: 'host', name: 'OWNER' });
   await sleep(500);
   ok(A.welcome && A.welcome.code, 'world created, invite code: ' + (A.welcome && A.welcome.code));
   ok(A.welcome && A.welcome.fresh === true, 'first-ever join is fresh');
   ok(A.welcome && A.welcome.guest && A.welcome.guest.id && A.welcome.guest.tok, 'server minted a guest identity');
   const code = A.welcome.code, worldId = A.welcome.worldId, auth = { id: A.welcome.guest.id, tok: A.welcome.guest.tok };
 
+  /* fresh player: the one-time legacy import seam seeds deterministic resources */
+  A.send({ t: 'progRestore', prog: { tier: 2, res: { fe: 500, cy: 100, bio: 50, ch: 0, pe: 0 } } });
   const gy = terrainH(6, 0, PLANETS.rust);
   A.send({ t: 'pu', pos: [0, terrainH(0, 0, PLANETS.rust) + 0.1, 0], yaw: 1.5, pitch: 0, mode: 'surface', pl: 'rust' });
   await sleep(150);
-  A.send({ t: 'place', st: { t: 'crate', pl: 'rust', x: 6, y: gy, z: 0, r: 0 } });
+  A.send({ t: 'place', st: { t: 'crate', pl: 'rust', x: 6, y: gy, z: 0, r: 0 } });          // fe -10
+  /* cryopod + respawn point (Outpost P1): must round-trip the restart */
+  A.send({ t: 'place', st: { t: 'cryopod', pl: 'rust', x: -4, y: terrainH(-4, 0, PLANETS.rust), z: 0, r: 0 } });  // fe -18, cy -8, bio -4
+  await sleep(250);
+  A.send({ t: 'setSpawn', x: -4, y: terrainH(-4, 0, PLANETS.rust), z: 0 });
   await sleep(400);
   const feAfter = A.prog && A.prog.res.fe;
-  ok(A.errs.length === 0 && feAfter === 99999 - 10, 'crate placed and paid for (fe ' + feAfter + ')');
+  ok(A.errs.length === 0 && feAfter === 500 - 10 - 18, 'crate + cryopod placed and paid for (fe ' + feAfter + ')');
   A.close();
   await sleep(700);                                       // empty-room world save + progress save
 
@@ -79,9 +85,11 @@ function client() {
   ok(A2.welcome && !A2.welcome.guest, 'known guest: token not re-minted');
   const crate = A2.welcome && A2.welcome.world.structures.find(s => s.t === 'crate' && s.x === 6);
   ok(!!crate, 'placed crate survived the restart');
-  ok(A2.welcome && A2.welcome.prog && A2.welcome.prog.res.fe === 99999 - 10, 'resources survived the restart');
+  ok(A2.welcome && A2.welcome.prog && A2.welcome.prog.res.fe === 472, 'resources survived the restart');
   ok(A2.welcome && A2.welcome.loc && A2.welcome.loc.mode === 'surface' && A2.welcome.loc.pl === 'rust',
     'last position persisted (surface rust)');
+  ok(A2.welcome && A2.welcome.spawn && A2.welcome.spawn.pl === 'rust' && A2.welcome.spawn.x === -4,
+    'cryopod respawn point persisted across restart');
 
   /* progRestore must be dead for a known player */
   A2.send({ t: 'progRestore', prog: { tier: 5, res: { fe: 1, cy: 1, bio: 1, ch: 1, pe: 1 } } });
@@ -89,7 +97,7 @@ function client() {
   await sleep(150);
   A2.send({ t: 'place', st: { t: 'crate', pl: 'rust', x: -6, y: terrainH(-6, 0, PLANETS.rust), z: 0, r: 0 } });
   await sleep(400);
-  ok(A2.prog && A2.prog.res.fe === 99999 - 20 && A2.prog.tier === 1, 'progRestore ignored on rejoin; world still playable');
+  ok(A2.prog && A2.prog.res.fe === 472 - 10 && A2.prog.tier === 2, 'progRestore ignored on rejoin; world still playable');
 
   /* ---------- a second guest joins the persisted world and sees it ---------- */
   const B = client(); await B.ready;
