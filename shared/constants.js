@@ -34,7 +34,7 @@ export const O2_DRAIN_SUBMERGED = 4.6; // per second, under water
 export const O2_REFILL = 28;           // per second near ship/relay/beacon
 export const EVA_O2_DRAIN = 2.6;       // per second in orbital EVA
 export const EVA_O2_REFILL = 30;       // per second near the parked ship in EVA
-export const CARRY_BASE = 300;         // base resource carry capacity
+export const CARRY_BASE = 1000000;     // base resource carry capacity (effectively uncapped)
 export const CARRY_PER_CRATE = 150;    // bonus per live storage crate
 
 /* ---- mining ---- */

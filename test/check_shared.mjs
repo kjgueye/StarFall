@@ -100,8 +100,9 @@ ok(R.canAfford({fe:10,cy:5}, {fe:10}) === true && R.canAfford({fe:9}, {fe:10}) =
 const res = {fe:10,cy:5}; R.payCost(res, {fe:4}); ok(res.fe === 6, 'payCost');
 ok(JSON.stringify(R.refundFor({fe:6,cy:2})) === '{"fe":3,"cy":1}', 'refundFor');
 ok(R.o2Max(1) === 100 && R.o2Max(2) === 160 && R.o2Max(5) === 240, 'o2Max');
-ok(R.carryCap([]) === 300 && R.carryCap([{t:'crate',hp:50},{t:'crate',hp:0}]) === 450, 'carryCap (dead crate excluded)');
-ok(R.carryCap([{t:'crate',hp:50},{t:'silo',hp:100}]) === 850 && R.carryCap([{t:'silo',hp:0}]) === 300, 'carryCap silo +400 (dead silo excluded)');
+const BASE = C.CARRY_BASE;
+ok(R.carryCap([]) === BASE && R.carryCap([{t:'crate',hp:50},{t:'crate',hp:0}]) === BASE+150, 'carryCap (dead crate excluded)');
+ok(R.carryCap([{t:'crate',hp:50},{t:'silo',hp:100}]) === BASE+550 && R.carryCap([{t:'silo',hp:0}]) === BASE, 'carryCap silo +400 (dead silo excluded)');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 10, 10) === true, 'inSafeZone inside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 40, 0) === false, 'inSafeZone outside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'glacius', 1, 1) === false, 'inSafeZone wrong planet');
