@@ -17,7 +17,8 @@
     "test:auth": "node test/auth.mjs 3992",
     "test:link": "node test/link.mjs 3990",
     "test:upgrade": "node test/upgrade.mjs 3988",
-    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist && npm run test:auth && npm run test:link && npm run test:upgrade"
+    "test:redeploy": "node test/redeploy.mjs 3986",
+    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist && npm run test:auth && npm run test:link && npm run test:upgrade && npm run test:redeploy"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
