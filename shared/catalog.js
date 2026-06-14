@@ -133,6 +133,12 @@ export const CAT = {
            {g:'cyl',m:'metal',o:[0,1.1,0],s:[1.5,1.4,1.5]},
            {g:'torus',m:'emisC',o:[0,1.2,0],s:[1.7,1.7,1.7],r:[Math.PI/2,0,0]},
            {g:'sphere',m:'emisC',o:[0,1.95,0],s:[0.7,0.7,0.7]}], glow:{y:1.95,c:'#8ff4ff',s:5}},
+  conduit:{name:'Power Conduit', ic:'╪', tier:2, cost:{fe:5}, hp:70, industry:true,
+    desc:'Carries power — chain generators to extractors across the base',
+    parts:[{g:'cyl',m:'dark',o:[0,0.9,0],s:[0.22,1.8,0.22]},
+           {g:'cyl',m:'metal',o:[0,0.2,0],s:[0.5,0.4,0.5]},
+           {g:'sphere',m:'emisC',o:[0,1.95,0],s:[0.36,0.36,0.36]},
+           {g:'torus',m:'emisC',o:[0,1.95,0],s:[0.55,0.55,0.55],r:[Math.PI/2,0,0]}], glow:{y:1.95,c:'#8ff4ff',s:2}},
   extractor:{name:'Mining Extractor', ic:'⛏', tier:2, cost:{fe:30,cy:10}, hp:120, industry:true, draw:1, rate:0.7,
     desc:'Place on a resource node — auto-mines while powered & you are on-planet',
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[1.9,0.6,1.9]},
@@ -195,7 +201,7 @@ export const CAT = {
    so collision/doors/save/MP all keep working unchanged. */
 export const SNAP_WALLS=['wall','window','door','airlock','halfwall'], SNAP_ROOFS=['dome','roof45','roofcorner','flatroof'], SNAP_FLOORS=['floor','halffloor','foundation'], SNAP_RAMPS=['ramp'];
 export const WALL_LIKE=SNAP_WALLS.concat(SNAP_ROOFS,SNAP_FLOORS);
-export const SNAP_PIECES=new Set(['floor','wall','ramp','door','airlock','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam']);
+export const SNAP_PIECES=new Set(['floor','wall','ramp','door','airlock','window','dome','foundation','pillar','pillar2','pillar3','halfwall','halffloor','roof45','roofcorner','flatroof','beam','conduit']);
 CAT.floor.sockets=[
   {p:[2,0,0],   rots:[1], accept:SNAP_WALLS},   // +x edge wall (runs along z)
   {p:[-2,0,0],  rots:[1], accept:SNAP_WALLS},
@@ -241,6 +247,11 @@ CAT.pillar.sockets=[{p:[0,3,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.pillar2.sockets=[{p:[0,5,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.pillar3.sockets=[{p:[0,7,0],rots:[0],accept:SNAP_FLOORS}];
 CAT.beam.sockets=[{p:[4,0,0],rots:[0],accept:['beam']},{p:[-4,0,0],rots:[0],accept:['beam']}];
+/* conduits chain end-to-end (4m spacing, well within CONDUIT_R) — the power
+   graph itself is distance-based, so free-placed conduits link too */
+CAT.conduit.sockets=[
+  {p:[4,0,0],rots:[0],accept:['conduit']},{p:[-4,0,0],rots:[0],accept:['conduit']},
+  {p:[0,0,4],rots:[0],accept:['conduit']},{p:[0,0,-4],rots:[0],accept:['conduit']}];
 /* roofs chain to each other so multi-tile roofs are buildable (they already snap onto wall tops) */
 CAT.roof45.sockets=[
   {p:[4,0,0], rots:[0], accept:SNAP_ROOFS},{p:[-4,0,0],rots:[0],accept:SNAP_ROOFS},  // tile sideways along the ridge
@@ -302,6 +313,7 @@ export const COLLIDERS={
   beam:    {boxes:[{cx:0,hx:2,hz:0.16}],h:0.3,step:0.3},
   generator:{r:1.35,h:2.7},
   extractor:{r:1.05,h:2.8},
+  conduit: {r:0.3,h:1.9},
 };
 
 /* ---------- orbital station pieces (Phase 7) ---------- */

@@ -8,7 +8,7 @@
    state, so call sites are unchanged.
    ============================================================ */
 import { SAFE_R, CARRY_BASE, CYCLE_S, STATION_MIN_PIECES,
-  MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX, POWER_R, EXTRACT_NODE_R } from './constants.js';
+  MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX, POWER_R, CONDUIT_R, EXTRACT_NODE_R } from './constants.js';
 import { CAT, INDUSTRY, STATION, STATION_KEYS, STATION_POS, CORE_DIRS, facTier } from './catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, CRAFT } from './tiers.js';
 import { PLANETS, terrainH } from './world.js';
@@ -198,6 +198,59 @@ export function computePowerRange(structures, plKey, R){
     }
     if(best){ best._cap--; e._pw=true; e._why=null; }
     else e._why = inRange ? 'overload' : 'unconnected';
+  }
+  return exts;
+}
+
+/* ---- Phase 2: CONDUIT NETWORK (replaces range power) ----
+   The real model. Network pieces (generators, conduits, extractors) link when
+   within CONDUIT_R of each other; a flood fill (union-find) groups them into
+   connected components. Within a component the generator capacities pool and
+   power that many extractors; the rest read 'overload'. A component with no
+   generator leaves its extractors 'unconnected'. Conduits in a live component
+   light up (_pw). Mutates transient fields only; recompute ONLY on network
+   change — never per frame. Returns the planet's live extractor list. */
+export function computePowerNetwork(structures, plKey, R){
+  R=R||CONDUIT_R;
+  const nodes=[];
+  for(const s of structures){
+    if(s.pl!==plKey||s.hp<=0) continue;
+    if(s.t==='generator'||s.t==='conduit'||s.t==='extractor'){
+      if(s.t==='extractor'){ s._pw=false; s._why='unconnected'; }
+      else s._pw=false;   // generator/conduit
+      nodes.push(s);
+    }
+  }
+  const n=nodes.length;
+  if(!n) return [];
+  const parent=new Array(n); for(let i=0;i<n;i++) parent[i]=i;
+  const find=x=>{ while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+  const R2=R*R;
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+    const a=nodes[i], b=nodes[j];
+    const dx=a.x-b.x, dz=a.z-b.z, dy=(a.y||0)-(b.y||0);
+    if(dx*dx+dz*dz+dy*dy<=R2){ const ra=find(i), rb=find(j); if(ra!==rb) parent[ra]=rb; }
+  }
+  const comp={};
+  for(let i=0;i<n;i++){
+    const r=find(i), s=nodes[i];
+    const c=comp[r]||(comp[r]={cap:0,hasGen:false,exts:[],conduits:[],gens:[]});
+    if(s.t==='generator'){ c.cap+=CAT.generator.power|0; c.hasGen=true; c.gens.push(s); }
+    else if(s.t==='extractor') c.exts.push(s);
+    else c.conduits.push(s);
+  }
+  const exts=[];
+  for(const r in comp){
+    const c=comp[r];
+    const live=c.hasGen&&c.cap>0;
+    for(let k=0;k<c.exts.length;k++){
+      const e=c.exts[k];
+      if(c.hasGen&&k<c.cap){ e._pw=true; e._why=null; }
+      else { e._pw=false; e._why=c.hasGen?'overload':'unconnected'; }
+      exts.push(e);
+    }
+    for(const cd of c.conduits) cd._pw=live;
+    for(const g of c.gens) g._pw=live;
   }
   return exts;
 }

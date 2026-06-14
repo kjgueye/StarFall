@@ -73,7 +73,7 @@ import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DY
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
-  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError, computePowerRange } from './shared/rules.js';
+  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError, computePowerNetwork } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 import { openStore } from './store.js';
 
@@ -1292,7 +1292,7 @@ function simCritters(room, pl, dt) {
    on that planet (co-op base output). Power is recomputed here (occupied
    planets only, 4Hz) — cheap over the capped structure set. */
 function simProduction(room, pl, dt) {
-  const exts = computePowerRange(room.structures, pl);
+  const exts = computePowerNetwork(room.structures, pl);
   let rate = 0;
   for (const e of exts) if (e.hp > 0 && e._pw) rate += CAT.extractor.rate;
   if (rate <= 0) return;

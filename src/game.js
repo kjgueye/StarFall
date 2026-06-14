@@ -1418,6 +1418,7 @@ function buildSurface(planetKey){
   buildAmbient();
   SND.ambStart(planetKey);
   refreshStructures();
+  checkConduitMigration();   // one-time nudge for legacy range setups
   if(NET.active&&NET.deadNodes[planetKey]){
     for(const i of NET.deadNodes[planetKey]){
       if(surf.nodes[i]){ surf.nodes[i].alive=false; nodeMatrixUpdate(i); }
@@ -1474,7 +1475,7 @@ function toLocal(st,wx,wz,out){
 }
 /* power state is derived: recompute ONLY here (place/remove/destroy/load all
    funnel through refreshStructures), never per frame. */
-function recomputePower(){ R.computePowerRange(S.structures, S.planet, POWER_R); }
+function recomputePower(){ R.computePowerNetwork(S.structures, S.planet); }
 function refreshStructures(){
   for(const t in CAT) placedByType[t]=[];
   for(const st of S.structures){
@@ -1494,7 +1495,7 @@ function refreshStructures(){
       for(let i=0;i<list.length;i++){
         structMatrix(list[i],part,M); im.setMatrixAt(i,M);
         const c=list[i].col; _pc.set(c!=null?c:0xffffff);
-        if(t==='extractor'&&list[i]._pw!==true) _pc.multiplyScalar(0.42);   // unpowered extractors read dim
+        if((t==='extractor'||t==='conduit')&&list[i]._pw!==true) _pc.multiplyScalar(0.42);   // unpowered network pieces read dim
         im.setColorAt(i,_pc);
       }
       im.instanceMatrix.needsUpdate=true;
@@ -1507,18 +1508,20 @@ function refreshStructures(){
 }
 let shieldDomes=[];   // {x,y,z,r,mesh,st}
 const structGlows=[]; // lamp/beacon glow sprites — brightened at night (own material so node/rover glows stay put)
+const industryGlows=[]; // powered generator/conduit/extractor glows — pulse with energy flow
 function rebuildAux(){
   while(auxGroup.children.length) auxGroup.remove(auxGroup.children[0]);
-  shieldDomes=[]; structGlows.length=0;
+  shieldDomes=[]; structGlows.length=0; industryGlows.length=0;
   for(const st of S.structures){
     if(st.pl!==S.planet) continue;
     const def=CAT[st.t];
     if(def.glow){
       const gl=makeGlow(def.glow.c,def.glow.s);
       gl.material=gl.material.clone();
-      if(st.t==='extractor'&&st._pw!==true) gl.material.opacity*=0.22;   // unpowered extractor reads dark
+      if((st.t==='extractor'||st.t==='conduit')&&st._pw!==true) gl.material.opacity*=0.18;   // unpowered network piece reads dark
       gl.userData._o0=gl.material.opacity;  // isolate from shared cached glowMat
       gl.position.set(st.x,st.y+def.glow.y,st.z); auxGroup.add(gl); structGlows.push(gl);
+      if(def.industry&&st._pw===true) industryGlows.push(gl);   // pulse these in the loop
     }
     if(st.t==='shieldgen'&&st.hp>0){
       const dome=new THREE.Mesh(new THREE.SphereGeometry(def.shieldR,20,12,0,Math.PI*2,0,Math.PI/2),
@@ -1846,9 +1849,33 @@ function industryInfoText(st){
     let on=0; for(const e of exts) if(e.hp>0&&e._pw===true) on++;
     return '<span style="color:#8ff4ff">POWER GENERATOR — capacity '+CAT.generator.power+' · network running '+on+'/'+exts.length+' extractors</span>';
   }
+  if(st.t==='conduit'){
+    return st._pw===true?'<span style="color:#8ff4ff">POWER CONDUIT — carrying power</span>'
+      :'<span style="color:#9fdcf5;opacity:0.8">POWER CONDUIT — dark · not linked to a generator</span>';
+  }
   if(st._pw===true) return '<span style="color:#8fefb0">MINING EXTRACTOR — running · '+RES_NAMES[curP().res]+' +'+CAT.extractor.rate.toFixed(1)+'/s</span>';
   if(st._why==='overload') return '<span style="color:#ff9a8a">EXTRACTOR — insufficient power · build another generator</span>';
-  return '<span style="color:#ff9a8a">EXTRACTOR — not connected · no generator within range</span>';
+  return '<span style="color:#ff9a8a">EXTRACTOR — not connected · run conduits to a generator</span>';
+}
+/* one-time nudge for legacy P1 (range) setups: if an extractor would have been
+   powered by the old range rule but the conduit network leaves it unconnected,
+   tell the player to wire it up. */
+let conduitHintShown=false;
+function checkConduitMigration(){
+  try{ if(localStorage.getItem('astravox_conduit_hint_v1')) conduitHintShown=true; }catch(e){}
+  if(conduitHintShown) return;
+  const exts=placedByType.extractor||[];
+  const gens=placedByType.generator||[];
+  if(!exts.length||!gens.length) return;
+  for(const e of exts){
+    if(e._pw===true) continue;
+    for(const g of gens){ const dx=g.x-e.x, dz=g.z-e.z; if(dx*dx+dz*dz<=POWER_R*POWER_R){
+      conduitHintShown=true;
+      try{ localStorage.setItem('astravox_conduit_hint_v1','1'); }catch(err){}
+      showToast('Power now travels through Conduits — chain conduits from a generator to your extractors',6000);
+      return;
+    } }
+  }
 }
 
 /* ============================================================
@@ -1934,7 +1961,7 @@ function updateGhost(){
   }
   if(!snapped){
     if(def.decor||['crate','lightpole','relay','shieldgen','armory','turret','beacon','rover','pillar','pillar2','pillar3','beam',
-                   'telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
+                   'telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon','generator','extractor','conduit'].indexOf(buildSel)>=0){ gx=Math.round(pt.x*2)/2; gz=Math.round(pt.z*2)/2; }
     else { gx=Math.round(pt.x/GRID)*GRID; gz=Math.round(pt.z/GRID)*GRID; }
     gy=(stackY!==null)?Math.round(stackY/0.5)*0.5:groundYAt(gx,gz,1e9);
     ghostPlaceRot=ghostRot;
@@ -3902,7 +3929,7 @@ function renderBuildGrid(){
   addSection('Outpost Systems');
   for(const k of ['telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon']) addItem(k);
   addSection('Industry — production (planets you control)');
-  for(const k of ['generator','extractor']) addItem(k);
+  for(const k of ['generator','conduit','extractor']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
   addSection('Furniture & Interior');
@@ -5532,6 +5559,8 @@ function loop(now){
   /* animated holo screens (consoles, holo-signs, armory) */
   const ho=0.55+0.3*Math.sin(now*0.005);
   MAT.screen.opacity=ho; MAT.holo.opacity=0.5+0.25*Math.sin(now*0.004+1.3);
+  /* industry: powered network glows pulse with energy flow */
+  if(industryGlows.length){ const ip=0.58+0.42*Math.sin(now*0.006); for(const gl of industryGlows) gl.material.opacity=gl.userData._o0*ip; }
   updateParticles(dt);
   updateFx(dt);
   if(S.running){ renderCompass(dt); updateMinimap(dt); }
@@ -5576,8 +5605,8 @@ Object.assign(window,{
   drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
   damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
   claimSequence,claimStoryLine,claimError:R.claimError,
-  INDUSTRY,canIndustrialize:R.canIndustrialize,computePowerRange:R.computePowerRange,nodeNear:R.nodeNear,
-  recomputePower,updateProduction,industryInfoText,
+  INDUSTRY,canIndustrialize:R.canIndustrialize,computePowerRange:R.computePowerRange,computePowerNetwork:R.computePowerNetwork,nodeNear:R.nodeNear,
+  recomputePower,updateProduction,industryInfoText,checkConduitMigration,
   conquestMission,conquestHint,updateSpaceTarget,CONQUEST_CHAIN,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,

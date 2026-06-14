@@ -106,13 +106,15 @@ const pu = (c, x, z) => c.send({ t: 'pu', pos: [x, ty(x, z) + 0.1, z], yaw: 0, p
   ok(A.placed.filter(s => s.t === 'generator').length === indC && A.errs.some(e => /control this planet/.test(e)), 'generator refused on unclaimed faction planet (server gate)');
   pu(A, 0, 0); await sleep(250);                                                             // back to rust for the rest
 
-  /* ---- 9c. Industry production: a powered extractor auto-mines into the on-planet player (server owns the grant) ---- */
+  /* ---- 9c. Industry production through a CONDUIT CHAIN: server computes the network, owns the grant ---- */
   const nd = NODES_RUST[0];
   pu(A, nd.x + 2, nd.z); await sleep(250);
-  A.send({ t: 'place', st: { t: 'generator', pl: 'rust', x: nd.x + 8, y: ty(nd.x + 8, nd.z), z: nd.z, r: 0 } });
+  A.send({ t: 'place', st: { t: 'generator', pl: 'rust', x: nd.x + 20, y: ty(nd.x + 20, nd.z), z: nd.z, r: 0 } });   // 20m away: needs conduits
+  A.send({ t: 'place', st: { t: 'conduit', pl: 'rust', x: nd.x + 7, y: ty(nd.x + 7, nd.z), z: nd.z, r: 0 } });
+  A.send({ t: 'place', st: { t: 'conduit', pl: 'rust', x: nd.x + 14, y: ty(nd.x + 14, nd.z), z: nd.z, r: 0 } });
   A.send({ t: 'place', st: { t: 'extractor', pl: 'rust', x: nd.x, y: ty(nd.x, nd.z), z: nd.z, r: 0 } });
-  await sleep(400);
-  ok(A.placed.some(s => s.t === 'extractor'), 'extractor placed on a resource node');
+  await sleep(500);
+  ok(A.placed.filter(s => s.t === 'conduit').length === 2 && A.placed.some(s => s.t === 'extractor'), 'generator + conduit chain + extractor placed');
   const feBefore = A.prog.res.fe;
   await sleep(2600);                                          // ~2.5s at 0.7/s -> +1..2 ferrite
   ok(A.prog.res.fe > feBefore, 'powered extractor auto-mines into the on-planet player (server grant ' + feBefore + ' -> ' + A.prog.res.fe + ')');

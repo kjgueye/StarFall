@@ -23,7 +23,7 @@ const SCAT = {
   /* Conquest update */
   claimpost: 500,
   /* Industry update: power network */
-  generator: 160, extractor: 120,
+  generator: 160, extractor: 120, conduit: 70,
 };
 const SCRIT = {
   skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
@@ -171,7 +171,7 @@ const corridor = {t:'corridor',x:corePt[0],y:corePt[1],z:corePt[2],qx:0,qy:0,qz:
 ok(R.stationSocketPoints([corridor]).some(s=>Math.abs(s[2]-(corridor.z+5))<1e-6), 'corridor exposes far socket');
 
 /* --- 13. Industry update: control gate --- */
-ok([...K.INDUSTRY].sort().join(',') === 'extractor,generator', 'INDUSTRY set = generator,extractor');
+ok([...K.INDUSTRY].sort().join(',') === 'conduit,extractor,generator', 'INDUSTRY set = generator,conduit,extractor');
 ok(R.canIndustrialize('rust', 'neutral') === true, 'canIndustrialize starter (neutral) = yes');
 ok(R.canIndustrialize('cinder', 'yours') === true, 'canIndustrialize claimed faction = yes');
 ok(R.canIndustrialize('cinder', 'faction') === false, 'canIndustrialize unclaimed faction = no');
@@ -202,6 +202,34 @@ ok(deadG[1]._pw === false && deadG[1]._why === 'unconnected', 'dead generator po
 ok(R.nodeNear([{ x: 0, z: 0 }], 2, 2, 5) === true && R.nodeNear([{ x: 0, z: 0 }], 10, 10, 5) === false, 'nodeNear radius');
 ok(R.placeError({ structures: [], st: { t: 'extractor', pl: 'rust', x: 0, y: W.terrainH(0, 0, W.PLANETS.rust), z: 0, r: 0 }, tier: 2, res: { fe: 99, cy: 99 }, px: 0, pz: 0, ctl: 'neutral', nodes: [{ x: 0, z: 0 }] }) === null, 'extractor on a node allowed');
 ok(/resource node/.test(R.placeError({ structures: [], st: { t: 'extractor', pl: 'rust', x: 50, y: W.terrainH(50, 50, W.PLANETS.rust), z: 50, r: 0 }, tier: 2, res: { fe: 99, cy: 99 }, px: 50, pz: 50, ctl: 'neutral', nodes: [{ x: 0, z: 0 }] })), 'extractor off-node refused');
+
+/* --- 15. Industry update: conduit network (Phase 2 flood-fill) --- */
+ok(K.SNAP_PIECES.has('conduit') && Array.isArray(K.CAT.conduit.sockets), 'conduit snaps + has sockets');
+const net = [
+  { t: 'generator', pl: 'rust', x: 0, z: 0, hp: 160 },
+  { t: 'conduit', pl: 'rust', x: 6, z: 0, hp: 70 },
+  { t: 'conduit', pl: 'rust', x: 12, z: 0, hp: 70 },
+  { t: 'extractor', pl: 'rust', x: 18, z: 0, hp: 120 },   // 18m from gen: only reachable through the conduit chain
+];
+R.computePowerNetwork(net, 'rust');
+ok(net[3]._pw === true, 'extractor powered through a conduit chain');
+ok(net[1]._pw === true && net[2]._pw === true, 'conduits in a live chain light up');
+ok(net[0]._pw === true, 'generator in a live component lights up');
+const broken = net.slice(); broken.splice(2, 1);                 // pull the mid-chain conduit
+R.computePowerNetwork(broken, 'rust');
+ok(broken[broken.length - 1]._pw === false && broken[broken.length - 1]._why === 'unconnected', 'removing a mid-chain conduit unpowers the downstream extractor');
+const cap = [{ t: 'generator', pl: 'rust', x: 0, z: 0, hp: 160 }];
+for (let i = 0; i < 5; i++) cap.push({ t: 'extractor', pl: 'rust', x: 1 + i, z: 0, hp: 120 });
+R.computePowerNetwork(cap, 'rust');
+ok(cap.filter(s => s.t === 'extractor' && s._pw).length === 4, 'component capacity caps powered extractors at the generator total');
+ok(cap.filter(s => s.t === 'extractor' && s._why === 'overload').length === 1, 'over-capacity extractor in a live component = overload');
+const noG = [{ t: 'extractor', pl: 'rust', x: 0, z: 0, hp: 120 }, { t: 'conduit', pl: 'rust', x: 5, z: 0, hp: 70 }];
+R.computePowerNetwork(noG, 'rust');
+ok(noG[0]._pw === false && noG[0]._why === 'unconnected', 'extractor with no generator in its component = unconnected');
+ok(noG[1]._pw === false, 'conduit with no generator stays dark');
+const deadChain = [{ t: 'generator', pl: 'rust', x: 0, z: 0, hp: 0 }, { t: 'conduit', pl: 'rust', x: 6, z: 0, hp: 70 }, { t: 'extractor', pl: 'rust', x: 6, z: 3, hp: 120 }];
+R.computePowerNetwork(deadChain, 'rust');
+ok(deadChain[2]._pw === false, 'destroyed generator powers nothing through conduits');
 
 console.log(fails === 0 ? '\nALL CHECKS PASS (' + new Date().toISOString() + ')' : '\n' + fails + ' FAILURES');
 process.exitCode = fails ? 1 : 0;

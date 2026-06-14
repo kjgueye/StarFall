@@ -38,7 +38,8 @@ export const CARRY_BASE = 1000000;     // base resource carry capacity (effectiv
 export const CARRY_PER_CRATE = 150;    // bonus per live storage crate
 
 /* ---- industry (power network) ---- */
-export const POWER_R = 26;         // Phase-1 range power: extractor runs if a generator with spare capacity is within this radius (conduits replace this in Phase 2)
+export const POWER_R = 26;         // Phase-1 range power (kept only to detect un-wired legacy setups); P2 uses conduits
+export const CONDUIT_R = 8;        // link distance: two network pieces (generator/conduit/extractor) connect within this radius
 export const EXTRACT_NODE_R = 5;   // an Extractor must be placed on/adjacent to a resource node (this radius)
 
 /* ---- mining ---- */
