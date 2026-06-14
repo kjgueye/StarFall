@@ -92,6 +92,19 @@ const pu = (c, x, z) => c.send({ t: 'pu', pos: [x, ty(x, z) + 0.1, z], yaw: 0, p
   await sleep(300);
   ok(A.nodeDead.length === nd0, 'mine intent out of reach rejected');
 
+  /* ---- 9b. Industry gate: generator builds on the starter world, refused on an unclaimed faction planet ---- */
+  const ind0 = A.placed.filter(s => s.t === 'generator').length;
+  A.send({ t: 'place', st: { t: 'generator', pl: 'rust', x: 6, y: ty(6, 6), z: 6, r: 0 } });
+  await sleep(300);
+  ok(A.placed.filter(s => s.t === 'generator').length === ind0 + 1, 'generator builds on starter world (gate allows)');
+  A.send({ t: 'pu', pos: [0, 0.1, 0], yaw: 0, pitch: 0, mode: 'surface', pl: 'cinder' });   // unclaimed faction world
+  await sleep(250);
+  const indC = A.placed.filter(s => s.t === 'generator').length; A.errs.length = 0;
+  A.send({ t: 'place', st: { t: 'generator', pl: 'cinder', x: 0, y: 0, z: 0, r: 0 } });
+  await sleep(300);
+  ok(A.placed.filter(s => s.t === 'generator').length === indC && A.errs.some(e => /control this planet/.test(e)), 'generator refused on unclaimed faction planet (server gate)');
+  pu(A, 0, 0); await sleep(250);                                                             // back to rust for the rest
+
   /* ---- 10. safe zone: A drops a beacon, B cannot hurt A inside it ---- */
   A.send({ t: 'place', st: { t: 'beacon', pl: 'rust', x: 0, y: ty(0, 0), z: 0, r: 0 } });
   await sleep(300);

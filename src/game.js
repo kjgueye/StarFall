@@ -19,7 +19,7 @@ import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   EVA_SPEED, STATION_REACH, STATION_SNAP } from '../shared/constants.js';
 import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LIKE, SNAP_PIECES,
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
-  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS,
+  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS, INDUSTRY,
   DRONES, FACTION_TIERS, facTier, DRONE_LEASH, DRONE_PATROL } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
 import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout,
@@ -1893,7 +1893,8 @@ function updateGhost(){
   const inB=Math.hypot(gx,gz)<WORLD_R-6;
   const dx=gx-player.x,dz=gz-player.z;
   const claimBad=buildSel==='claimpost'&&R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,gx,gz)!==null;
-  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad;
+  const industryBad=INDUSTRY.has(buildSel)&&!R.canIndustrialize(S.planet,planetCtl(S.planet));
+  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad&&!industryBad;
   ghost.children.forEach(m=>m.material=ghostOK?MAT.ghostOk:MAT.ghostBad);
 }
 function placeStructure(){
@@ -1907,6 +1908,7 @@ function placeStructure(){
     const err=R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,ghostPos.x,ghostPos.z);
     if(err){ showToast(err); SND.denied(); return; }
   }
+  if(INDUSTRY.has(buildSel)&&!R.canIndustrialize(S.planet,planetCtl(S.planet))){ showToast(R.INDUSTRY_GATE_MSG); SND.denied(); return; }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
     NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostPlaceRot}});
@@ -3825,12 +3827,14 @@ function renderBuildGrid(){
   const addSection=t=>{ const d=document.createElement('div'); d.className='bSection'; d.textContent=t; grid.appendChild(d); };
   const addItem=key=>{
     const def=CAT[key];
-    const locked=def.tier>0&&def.tier>S.tier;
+    const tierLocked=def.tier>0&&def.tier>S.tier;
+    const gated=def.industry&&!R.canIndustrialize(S.planet,planetCtl(S.planet));   // industry: planet you control only
+    const locked=tierLocked||gated;
     const d=document.createElement('div');
     d.className='bItem'+(locked?' locked':'');
     d.innerHTML='<div class="ic">'+def.ic+'</div><div class="nm">'+def.name+'</div><div class="cs">'+
       Object.keys(def.cost).map(k=>'<span style="color:'+RES_DOTS[k]+'">'+def.cost[k]+'</span>').join(' · ')+'</div>'+
-      (locked?'<div class="lk">TIER '+def.tier+'</div>':'');
+      (tierLocked?'<div class="lk">TIER '+def.tier+'</div>':(gated?'<div class="lk">CLAIM PLANET</div>':''));
     if(!locked) d.addEventListener('click',()=>{ SND.blip(); selectBuild(key); });
     grid.appendChild(d);
   };
@@ -3842,6 +3846,8 @@ function renderBuildGrid(){
   for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon','claimpost']) addItem(k);
   addSection('Outpost Systems');
   for(const k of ['telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon']) addItem(k);
+  addSection('Industry — production (planets you control)');
+  for(const k of ['generator','extractor']) addItem(k);
   addSection('Decorations — any tier');
   for(const k of ['flag','planter','holosign','lampR','lampG','lampB','table','antenna']) addItem(k);
   addSection('Furniture & Interior');
@@ -5507,6 +5513,7 @@ Object.assign(window,{
   drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
   damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
   claimSequence,claimStoryLine,claimError:R.claimError,
+  INDUSTRY,canIndustrialize:R.canIndustrialize,
   conquestMission,conquestHint,updateSpaceTarget,CONQUEST_CHAIN,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,

@@ -22,6 +22,8 @@ const SCAT = {
   telepad: 90, lift: 120, jumppad: 60, airlock: 120, spotlight: 60, cryopod: 100, silo: 240, navbeacon: 70,
   /* Conquest update */
   claimpost: 500,
+  /* Industry update: power network */
+  generator: 160, extractor: 120,
 };
 const SCRIT = {
   skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
@@ -167,6 +169,20 @@ ok(R.stationPlaceValid([], corePt[0], corePt[1], corePt[2]) === true, 'stationPl
 ok(R.stationPlaceValid([], corePt[0]+5, corePt[1], corePt[2]) === false, 'stationPlaceValid off socket');
 const corridor = {t:'corridor',x:corePt[0],y:corePt[1],z:corePt[2],qx:0,qy:0,qz:0,qw:1};
 ok(R.stationSocketPoints([corridor]).some(s=>Math.abs(s[2]-(corridor.z+5))<1e-6), 'corridor exposes far socket');
+
+/* --- 13. Industry update: control gate --- */
+ok([...K.INDUSTRY].sort().join(',') === 'extractor,generator', 'INDUSTRY set = generator,extractor');
+ok(R.canIndustrialize('rust', 'neutral') === true, 'canIndustrialize starter (neutral) = yes');
+ok(R.canIndustrialize('cinder', 'yours') === true, 'canIndustrialize claimed faction = yes');
+ok(R.canIndustrialize('cinder', 'faction') === false, 'canIndustrialize unclaimed faction = no');
+ok(R.canIndustrialize('glacius', 'neutral') === false, 'canIndustrialize neutral non-starter = no');
+const gyI = W.terrainH(0, 0, W.PLANETS.rust);
+ok(R.placeError({structures:[],st:{t:'generator',pl:'rust',x:0,y:gyI,z:0,r:0},tier:2,res:{fe:99,cy:99},px:0,pz:0,ctl:'neutral'}) === null, 'generator allowed on starter');
+ok(/control this planet/.test(R.placeError({structures:[],st:{t:'generator',pl:'cinder',x:0,y:W.terrainH(0,0,W.PLANETS.cinder),z:0,r:0},tier:2,res:{fe:99,cy:99},px:0,pz:0,ctl:'faction'})), 'generator refused on unclaimed faction planet');
+ok(R.placeError({structures:[],st:{t:'extractor',pl:'cinder',x:0,y:W.terrainH(0,0,W.PLANETS.cinder),z:0,r:0},tier:2,res:{fe:99,cy:99},px:0,pz:0,ctl:'yours'}) === null, 'extractor allowed on claimed faction planet');
+ok(/control this planet/.test(R.placeError({structures:[],st:{t:'extractor',pl:'glacius',x:0,y:W.terrainH(0,0,W.PLANETS.glacius),z:0,r:0},tier:2,res:{fe:99,cy:99},px:0,pz:0,ctl:'neutral'})), 'extractor refused on neutral non-starter planet');
+/* gate runs before tier/cost so the message is always the controlling one */
+ok(/control this planet/.test(R.placeError({structures:[],st:{t:'generator',pl:'cinder',x:0,y:W.terrainH(0,0,W.PLANETS.cinder),z:0,r:0},tier:1,res:{fe:0},px:0,pz:0,ctl:'faction'})), 'gate precedes tier/cost errors');
 
 console.log(fails === 0 ? '\nALL CHECKS PASS (' + new Date().toISOString() + ')' : '\n' + fails + ' FAILURES');
 process.exitCode = fails ? 1 : 0;

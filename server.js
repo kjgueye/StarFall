@@ -785,7 +785,7 @@ async function handle(ws, m) {
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
       }
       const err = placeError({ structures: room.structures, st: { t: s.t, pl: s.pl, x, y, z, r: s.r | 0 },
-        tier: me.tier, res: me.res, px: me.pos[0], pz: me.pos[2] });
+        tier: me.tier, res: me.res, px: me.pos[0], pz: me.pos[2], ctl: room.ctl[s.pl] });
       if (err) { sendTo(ws, { t: 'err', msg: err }); return; }
       payCost(me.res, CAT[s.t].cost);
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: CAT[s.t].hp };

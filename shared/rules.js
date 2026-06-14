@@ -9,7 +9,7 @@
    ============================================================ */
 import { SAFE_R, CARRY_BASE, CYCLE_S, STATION_MIN_PIECES,
   MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX } from './constants.js';
-import { CAT, STATION, STATION_KEYS, STATION_POS, CORE_DIRS, facTier } from './catalog.js';
+import { CAT, INDUSTRY, STATION, STATION_KEYS, STATION_POS, CORE_DIRS, facTier } from './catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, CRAFT } from './tiers.js';
 import { PLANETS, terrainH } from './world.js';
 
@@ -153,12 +153,27 @@ export function claimError(p, ctl, fnHp, x, z){
   return null;
 }
 
+/* ---- industry control gate (Industry update) ----
+   Generators/conduits/extractors may only rise on a planet you control.
+   The starter world counts as yours so a new player can learn production on
+   safe ground before their first conquest. ctlState is the control string
+   for that planet ('neutral' | 'faction' | 'yours'). */
+export function canIndustrialize(plKey, ctlState){
+  if(ctlState==='yours') return true;
+  const p=PLANETS[plKey];
+  return !!(p&&p.starter);
+}
+export const INDUSTRY_GATE_MSG='You must control this planet to build production here — claim it first.';
+
 /* ---- intent validators (server authority; client pre-checks) ---- */
 export const PLACE_RANGE=90;   // generous: covers blueprint stamps placed at aim distance
-/* returns an error string, or null if the placement is legal */
-export function placeError({structures, st, tier, res, px, pz}){
+/* returns an error string, or null if the placement is legal.
+   ctl = the control state for st.pl (passed by the server; the client mirrors
+   the gate separately) — industry pieces are refused unless canIndustrialize. */
+export function placeError({structures, st, tier, res, px, pz, ctl}){
   const def=CAT[st.t];
   if(!def) return 'Unknown structure';
+  if(INDUSTRY.has(st.t)&&!canIndustrialize(st.pl, ctl)) return INDUSTRY_GATE_MSG;
   if(def.tier>0&&def.tier>tier) return 'Requires Tier '+def.tier;
   if(!canAfford(res,def.cost)) return 'Not enough resources';
   if(structures.length>=MAX_STRUCT) return 'Construction limit reached ('+MAX_STRUCT+' pieces)';

@@ -123,6 +123,23 @@ export const CAT = {
            {g:'cyl',m:'metal',o:[0,4.0,0],s:[0.18,7.6,0.18]},
            {g:'sphere',m:'emisR',o:[0,8.0,0],s:[0.5,0.5,0.5]},
            {g:'cyl',m:'beam',o:[0,11.5,0],s:[0.16,7,0.16]}], glow:{y:8.0,c:'#ff7a5a',s:9}},
+  /* ---- Industry update: power network (only on a planet you control) ----
+     industry:true gates placement to canIndustrialize(). power = how many
+     extractors a generator can run; draw = extractor power cost; rate = the
+     planet-resource it auto-mines per second while powered + on-planet. */
+  generator:{name:'Power Generator', ic:'⚡', tier:2, cost:{fe:40,cy:20}, hp:160, industry:true, power:4,
+    desc:'Powers up to 4 extractors — build on a planet you control',
+    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.6,0.6,2.6]},
+           {g:'cyl',m:'metal',o:[0,1.1,0],s:[1.5,1.4,1.5]},
+           {g:'torus',m:'emisC',o:[0,1.2,0],s:[1.7,1.7,1.7],r:[Math.PI/2,0,0]},
+           {g:'sphere',m:'emisC',o:[0,1.95,0],s:[0.7,0.7,0.7]}], glow:{y:1.95,c:'#8ff4ff',s:5}},
+  extractor:{name:'Mining Extractor', ic:'⛏', tier:2, cost:{fe:30,cy:10}, hp:120, industry:true, draw:1, rate:0.7,
+    desc:'Place on a resource node — auto-mines while powered & you are on-planet',
+    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[1.9,0.6,1.9]},
+           {g:'box',m:'metal',o:[0,1.05,0],s:[1.1,1.3,1.1]},
+           {g:'cyl',m:'metal',o:[0,2.0,0],s:[0.26,1.7,0.26]},
+           {g:'cone',m:'emisO',o:[0,0.45,0],s:[0.42,0.8,0.42],r:[Math.PI,0,0]},
+           {g:'box',m:'emisO',o:[0,1.45,0.58],s:[0.5,0.22,0.05]}], glow:{y:1.45,c:'#ffb070',s:2.6}},
   /* decorations */
   flag:   {name:'Flag', ic:'⚑', tier:0, cost:{fe:3}, hp:40, decor:true,
     parts:[{g:'cyl',m:'dark',o:[0,1.25,0],s:[0.1,2.5,0.1]},{g:'box',m:'flagM',o:[0.65,2.1,0],s:[1.2,0.7,0.05]}]},
@@ -283,6 +300,8 @@ export const COLLIDERS={
   pillar2: {r:0.55,h:5},
   pillar3: {r:0.55,h:7},
   beam:    {boxes:[{cx:0,hx:2,hz:0.16}],h:0.3,step:0.3},
+  generator:{r:1.35,h:2.7},
+  extractor:{r:1.05,h:2.8},
 };
 
 /* ---------- orbital station pieces (Phase 7) ---------- */
@@ -369,3 +388,4 @@ export const PAINT_COLORS=[0xff5050,0xff9a4a,0xffd24a,0x9ee84a,0x4adf8a,0x4adfff
 export const OWNED  =new Set(Object.keys(CAT).filter(t=>CAT[t].owned));    // record their placer
 export const NOKILL =new Set(Object.keys(CAT).filter(t=>CAT[t].noKill));   // can't be destroyed (floor at 10hp)
 export const DYNAMIC=new Set(Object.keys(CAT).filter(t=>CAT[t].dynamic));  // movable (rover)
+export const INDUSTRY=new Set(Object.keys(CAT).filter(t=>CAT[t].industry)); // power-network pieces — gated to planets you control
