@@ -16,6 +16,10 @@
                       clock — the authoritative world snapshot)
      player_progress  (player_id, world_id) -> prog jsonb (res, tier,
                       weapons, ammo, medkits, o2, fuel, loc)
+     users            id, email (unique, normalized), password_hash
+                      (bcrypt), email_verified (future seam), created_at
+                      — Phase-1 real accounts; Phase 2 links worlds/progress
+     sessions         token_hash (sha256 of cookie token), user_id, expiry
    ============================================================ */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,7 +64,48 @@ class PgStore {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (player_id, world_id)
       );
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        email_verified BOOLEAN NOT NULL DEFAULT false,   -- future seam (email verification): unused
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,                      -- sha256 of the cookie token; raw token never stored
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at TIMESTAMPTZ NOT NULL
+      );
     `);
+  }
+  /* ---- accounts (Phase 1 auth) ---- */
+  async createUser({ id, email, passwordHash }) {
+    await this.pool.query('INSERT INTO users (id, email, password_hash) VALUES ($1,$2,$3)', [id, email, passwordHash]);
+  }
+  async getUserByEmail(email) {
+    const r = await this.pool.query('SELECT id, email, password_hash FROM users WHERE email=$1', [email]);
+    return r.rows[0] ? { id: r.rows[0].id, email: r.rows[0].email, passwordHash: r.rows[0].password_hash } : null;
+  }
+  async getUserById(id) {
+    const r = await this.pool.query('SELECT id, email FROM users WHERE id=$1', [id]);
+    return r.rows[0] || null;
+  }
+  async createSession({ tokenHash, userId, expiresAt }) {
+    await this.pool.query('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1,$2,$3)', [tokenHash, userId, new Date(expiresAt)]);
+  }
+  async getSession(tokenHash) {
+    const r = await this.pool.query('SELECT user_id, expires_at FROM sessions WHERE token_hash=$1', [tokenHash]);
+    if (!r.rows[0]) return null;
+    const exp = new Date(r.rows[0].expires_at).getTime();
+    if (exp < Date.now()) { await this.deleteSession(tokenHash); return null; }
+    return { userId: r.rows[0].user_id, expiresAt: exp };
+  }
+  async deleteSession(tokenHash) {
+    await this.pool.query('DELETE FROM sessions WHERE token_hash=$1', [tokenHash]);
+  }
+  async sweepSessions() {
+    await this.pool.query('DELETE FROM sessions WHERE expires_at < now()');
   }
   async authPlayer(id, tokenHash) {
     const r = await this.pool.query('SELECT id, name FROM players WHERE id=$1 AND token_hash=$2', [id, tokenHash]);
@@ -112,14 +157,14 @@ class FileStore {
   constructor(dir) {
     this.dir = dir;
     this.file = path.join(dir, 'db.json');
-    this.d = { players: {}, worlds: {}, codes: {}, progress: {} };
+    this.d = { players: {}, worlds: {}, codes: {}, progress: {}, users: {}, usersByEmail: {}, sessions: {} };
     this._t = null;
   }
   get kind() { return 'file:' + this.dir; }
   async init() {
     fs.mkdirSync(this.dir, { recursive: true });
     try { this.d = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch (e) {}
-    for (const k of ['players', 'worlds', 'codes', 'progress']) this.d[k] = this.d[k] || {};
+    for (const k of ['players', 'worlds', 'codes', 'progress', 'users', 'usersByEmail', 'sessions']) this.d[k] = this.d[k] || {};
   }
   _save() {           // debounced atomic write
     if (this._t) return;
@@ -174,6 +219,39 @@ class FileStore {
   async saveProgress(playerId, worldId, prog) {
     this.d.progress[playerId + '|' + worldId] = prog;
     this._save();
+  }
+  /* ---- accounts (Phase 1 auth) ---- */
+  async createUser({ id, email, passwordHash }) {
+    if (this.d.usersByEmail[email]) { const e = new Error('duplicate email'); e.code = '23505'; throw e; }
+    this.d.users[id] = { email, passwordHash, emailVerified: false, createdAt: Date.now() };
+    this.d.usersByEmail[email] = id;
+    this._save();
+  }
+  async getUserByEmail(email) {
+    const id = this.d.usersByEmail[email]; if (!id) return null;
+    const u = this.d.users[id]; if (!u) return null;
+    return { id, email: u.email, passwordHash: u.passwordHash };
+  }
+  async getUserById(id) {
+    const u = this.d.users[id];
+    return u ? { id, email: u.email } : null;
+  }
+  async createSession({ tokenHash, userId, expiresAt }) {
+    this.d.sessions[tokenHash] = { userId, expiresAt };
+    this._save();
+  }
+  async getSession(tokenHash) {
+    const s = this.d.sessions[tokenHash]; if (!s) return null;
+    if (s.expiresAt < Date.now()) { delete this.d.sessions[tokenHash]; this._save(); return null; }
+    return { userId: s.userId, expiresAt: s.expiresAt };
+  }
+  async deleteSession(tokenHash) {
+    if (this.d.sessions[tokenHash]) { delete this.d.sessions[tokenHash]; this._save(); }
+  }
+  async sweepSessions() {
+    const now = Date.now(); let ch = false;
+    for (const k in this.d.sessions) if (this.d.sessions[k].expiresAt < now) { delete this.d.sessions[k]; ch = true; }
+    if (ch) this._save();
   }
   async flush() { if (this._t) { clearTimeout(this._t); this._t = null; } this._write(); }
   async close() { await this.flush(); }

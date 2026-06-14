@@ -58,6 +58,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +110,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (url === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); return; }
+  if (url.startsWith('/api/')) { handleApi(req, res, url).catch(() => { try { sendJson(res, 500, { error: 'Server error' }); } catch (e) {} }); return; }
   const rel = url === '/' ? 'index.html' : url.slice(1);
   const file = path.normalize(path.join(DIST, rel));
   if (!file.startsWith(DIST)) { res.writeHead(403); res.end('forbidden'); return; }   // traversal guard
@@ -387,9 +389,14 @@ function welcomeMsg(room, pid) {
 /* ---------- websocket ---------- */
 const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.room = null; ws.pid = null;
+  /* Phase-1 seam: resolve any logged-in session from the upgrade request's
+     cookie. Stored for Phase 2 (which will prefer userId over the guest
+     token); nothing reads it yet, so guest behaviour is unchanged. */
+  ws.userId = null;
+  sessionUser(req).then(u => { ws.userId = u ? u.id : null; }).catch(() => {});
   ws.q = Promise.resolve();             // per-socket queue: messages handled strictly in order
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => {});
@@ -425,6 +432,147 @@ async function resolveGuest(m, name) {
   const tok = crypto.randomBytes(16).toString('hex');
   await store.createPlayer({ id, tokenHash: hashTok(tok), name });
   return { id, tok };                               // fresh guest; token goes back in welcome
+}
+
+/* ---------- accounts / auth (Phase 1) ----------
+   Real email+password identity layered on the Phase-3 persistence.
+   - Passwords are hashed with bcrypt (bcryptjs, a pure-JS implementation) —
+     never stored or logged in plaintext.
+   - Session tokens are cryptographically random; only their sha256 hash is
+     stored (table `sessions`), and the raw token rides in an httpOnly cookie.
+   - Login returns ONE generic error for unknown-email and wrong-password
+     alike, and is rate-limited per email+IP.
+   Phase 2 links worlds/progress to a logged-in user id. For now the game is
+   unchanged: sessionUser() is resolved on WS connect into ws.userId as a
+   seam, but nothing reads it yet.
+   DEFERRED (not built, clean seams only): password reset, email verification,
+   account recovery, OAuth, 2FA. */
+const SESSION_COOKIE = 'sf_session';
+const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;        // 30 days
+const BCRYPT_COST = 10;                              // bcryptjs default cost
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PW_MIN = 8, PW_MAX = 72;                       // bcrypt truncates beyond 72 bytes
+/* equalises login timing whether or not the email exists (anti-enumeration) */
+const DUMMY_HASH = bcrypt.hashSync('x'.repeat(24), BCRYPT_COST);
+
+const normEmail = e => String(e || '').trim().toLowerCase();
+const validEmail = e => e.length >= 3 && e.length <= 254 && EMAIL_RE.test(e);
+
+/* brute-force guard: per email+IP failed-attempt counter with cooldown.
+   In-memory is fine at this scale — a redeploy reset only forgives, never
+   punishes, so it can't lock anyone out. */
+const RL_MAX = 8, RL_WINDOW_MS = 15 * 60 * 1000, RL_COOLDOWN_MS = 15 * 60 * 1000;
+const loginAttempts = new Map();                     // key -> {n, reset, until}
+function rlBlocked(key) { const e = loginAttempts.get(key); return !!(e && e.until && Date.now() < e.until); }
+function rlHit(key) {
+  const now = Date.now();
+  let e = loginAttempts.get(key);
+  if (!e || now > e.reset) e = { n: 0, reset: now + RL_WINDOW_MS, until: 0 };
+  e.n++; if (e.n >= RL_MAX) e.until = now + RL_COOLDOWN_MS;
+  loginAttempts.set(key, e);
+}
+function rlReset(key) { loginAttempts.delete(key); }
+
+function clientIp(req) {
+  return (String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+}
+function parseCookies(req) {
+  const out = {}; const h = req.headers.cookie; if (!h) return out;
+  for (const part of h.split(';')) {
+    const i = part.indexOf('='); if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function readBody(req, cap = 8192) {
+  return new Promise(resolve => {
+    let data = '', tooBig = false;
+    req.on('data', c => { data += c; if (data.length > cap) { tooBig = true; req.destroy(); } });
+    req.on('end', () => resolve(tooBig ? null : data));
+    req.on('error', () => resolve(null));
+  });
+}
+function sendJson(res, status, obj, headers) {
+  res.writeHead(status, Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, headers || {}));
+  res.end(JSON.stringify(obj));
+}
+function cookieStr(token, req, maxAgeSec) {
+  const secure = req.headers['x-forwarded-proto'] === 'https';   // Railway TLS sets this; absent locally over http
+  let c = `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSec}`;
+  if (secure) c += '; Secure';
+  return c;
+}
+async function startSession(req, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await store.createSession({ tokenHash: hashTok(token), userId, expiresAt: Date.now() + SESSION_TTL_MS });
+  return cookieStr(token, req, Math.floor(SESSION_TTL_MS / 1000));
+}
+/* resolve a request's session cookie to its user row, or null (the Phase-2 seam) */
+async function sessionUser(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token) return null;
+  const sess = await store.getSession(hashTok(token)).catch(() => null);
+  if (!sess) return null;
+  return await store.getUserById(sess.userId).catch(() => null);
+}
+async function jsonBody(req) {
+  const raw = await readBody(req);
+  try { const b = JSON.parse(raw || ''); return (b && typeof b === 'object') ? b : null; } catch (e) { return null; }
+}
+
+async function handleApi(req, res, url) {
+  if (req.method === 'POST' && url === '/api/signup') return apiSignup(req, res);
+  if (req.method === 'POST' && url === '/api/login')  return apiLogin(req, res);
+  if (req.method === 'POST' && url === '/api/logout') return apiLogout(req, res);
+  if (req.method === 'GET'  && url === '/api/me')     return apiMe(req, res);
+  return sendJson(res, 404, { error: 'Not found' });
+}
+async function apiSignup(req, res) {
+  const b = await jsonBody(req);
+  if (!b) return sendJson(res, 400, { error: 'Invalid request' });
+  const email = normEmail(b.email);
+  const password = typeof b.password === 'string' ? b.password : '';
+  if (!validEmail(email)) return sendJson(res, 400, { error: 'Enter a valid email address' });
+  if (password.length < PW_MIN || password.length > PW_MAX)
+    return sendJson(res, 400, { error: `Password must be ${PW_MIN}–${PW_MAX} characters` });
+  const hash = await bcrypt.hash(password, BCRYPT_COST);
+  const id = 'u' + crypto.randomBytes(8).toString('hex');
+  try {
+    await store.createUser({ id, email, passwordHash: hash });
+  } catch (e) {
+    if (e && e.code === '23505') return sendJson(res, 409, { error: 'That email is already registered' });
+    console.error('signup: store error');            // never log credentials or the hash
+    return sendJson(res, 500, { error: 'Could not create account' });
+  }
+  const cookie = await startSession(req, id);
+  return sendJson(res, 200, { ok: true, email }, { 'set-cookie': cookie });
+}
+async function apiLogin(req, res) {
+  const b = await jsonBody(req);
+  const email = normEmail(b && b.email);
+  const password = (b && typeof b.password === 'string') ? b.password : '';
+  const key = email + '|' + clientIp(req);
+  if (rlBlocked(key)) return sendJson(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+  const user = (validEmail(email) && password) ? await store.getUserByEmail(email).catch(() => null) : null;
+  let ok = false;
+  if (user) ok = await bcrypt.compare(password, user.passwordHash).catch(() => false);
+  else await bcrypt.compare(password || 'x', DUMMY_HASH).catch(() => {});   // burn ~equal time when email is unknown
+  if (!ok) { rlHit(key); return sendJson(res, 401, { error: 'Invalid email or password' }); }
+  rlReset(key);
+  const cookie = await startSession(req, user.id);
+  return sendJson(res, 200, { ok: true, email: user.email }, { 'set-cookie': cookie });
+}
+async function apiLogout(req, res) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (token) await store.deleteSession(hashTok(token)).catch(() => {});
+  const secure = req.headers['x-forwarded-proto'] === 'https';
+  let clear = `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  if (secure) clear += '; Secure';
+  return sendJson(res, 200, { ok: true }, { 'set-cookie': clear });
+}
+async function apiMe(req, res) {
+  const u = await sessionUser(req);
+  return sendJson(res, 200, { user: u ? { id: u.id, email: u.email } : null });
 }
 
 async function joinRoom(ws, room, name, opts) {
@@ -1262,6 +1410,14 @@ setInterval(() => {
     for (const p of room.players.values()) saveProgressOf(room, p);
   }
 }, AUTOSAVE_MS);
+
+/* hourly hygiene: drop expired sessions from the store and stale rate-limit
+   entries from memory */
+setInterval(() => {
+  store.sweepSessions().catch(() => {});
+  const now = Date.now();
+  for (const [k, e] of loginAttempts) if (now > e.reset && (!e.until || now > e.until)) loginAttempts.delete(k);
+}, 3600 * 1000);
 
 /* flush everything on shutdown so a deploy/restart never eats progress */
 let shuttingDown = false;
