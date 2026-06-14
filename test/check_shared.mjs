@@ -184,5 +184,24 @@ ok(/control this planet/.test(R.placeError({structures:[],st:{t:'extractor',pl:'
 /* gate runs before tier/cost so the message is always the controlling one */
 ok(/control this planet/.test(R.placeError({structures:[],st:{t:'generator',pl:'cinder',x:0,y:W.terrainH(0,0,W.PLANETS.cinder),z:0,r:0},tier:1,res:{fe:0},px:0,pz:0,ctl:'faction'})), 'gate precedes tier/cost errors');
 
+/* --- 14. Industry power network (range power, Phase 1) --- */
+const gen0 = { t: 'generator', pl: 'rust', x: 0, z: 0, hp: 160 };
+const e1 = { t: 'extractor', pl: 'rust', x: 5, z: 0, hp: 120 };     // within POWER_R
+const e2 = { t: 'extractor', pl: 'rust', x: 200, z: 0, hp: 120 };   // far away
+R.computePowerRange([gen0, e1, e2], 'rust');
+ok(e1._pw === true && e1._why === null, 'extractor in range is powered');
+ok(e2._pw === false && e2._why === 'unconnected', 'extractor out of range = unconnected');
+const many = [{ t: 'generator', pl: 'rust', x: 0, z: 0, hp: 160 }];
+for (let i = 0; i < 5; i++) many.push({ t: 'extractor', pl: 'rust', x: 1 + i * 0.5, z: 0, hp: 120 });
+R.computePowerRange(many, 'rust');
+ok(many.filter(s => s.t === 'extractor' && s._pw).length === 4, 'generator caps at its power (4 extractors)');
+ok(many.filter(s => s.t === 'extractor' && s._why === 'overload').length === 1, 'over-capacity extractor flagged overload');
+const deadG = [{ t: 'generator', pl: 'rust', x: 0, z: 0, hp: 0 }, { t: 'extractor', pl: 'rust', x: 3, z: 0, hp: 120 }];
+R.computePowerRange(deadG, 'rust');
+ok(deadG[1]._pw === false && deadG[1]._why === 'unconnected', 'dead generator powers nothing');
+ok(R.nodeNear([{ x: 0, z: 0 }], 2, 2, 5) === true && R.nodeNear([{ x: 0, z: 0 }], 10, 10, 5) === false, 'nodeNear radius');
+ok(R.placeError({ structures: [], st: { t: 'extractor', pl: 'rust', x: 0, y: W.terrainH(0, 0, W.PLANETS.rust), z: 0, r: 0 }, tier: 2, res: { fe: 99, cy: 99 }, px: 0, pz: 0, ctl: 'neutral', nodes: [{ x: 0, z: 0 }] }) === null, 'extractor on a node allowed');
+ok(/resource node/.test(R.placeError({ structures: [], st: { t: 'extractor', pl: 'rust', x: 50, y: W.terrainH(50, 50, W.PLANETS.rust), z: 50, r: 0 }, tier: 2, res: { fe: 99, cy: 99 }, px: 50, pz: 50, ctl: 'neutral', nodes: [{ x: 0, z: 0 }] })), 'extractor off-node refused');
+
 console.log(fails === 0 ? '\nALL CHECKS PASS (' + new Date().toISOString() + ')' : '\n' + fails + ' FAILURES');
 process.exitCode = fails ? 1 : 0;

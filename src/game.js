@@ -16,7 +16,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
   WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, DRONE_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
-  EVA_SPEED, STATION_REACH, STATION_SNAP } from '../shared/constants.js';
+  EVA_SPEED, STATION_REACH, STATION_SNAP, POWER_R, EXTRACT_NODE_R } from '../shared/constants.js';
 import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LIKE, SNAP_PIECES,
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
   CRITTERS, CRIT_BY_PLANET, PAINT_COLORS, INDUSTRY,
@@ -96,7 +96,7 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='astravox_save_v1';
-const SAVE_VER=9;   // v8: + intro (pre-v8 = veterans skip onboarding). v9: + ctl/fnHp (Conquest) — missing fields default per planet
+const SAVE_VER=10;  // v8: + intro. v9: + ctl/fnHp (Conquest). v10: Industry update (generator/extractor are plain structures; power state is derived, nothing new to persist) — missing fields default per planet
 /* device-scoped intro markers so MP guests (no solo save) also skip on replay */
 const CINE_SEEN_KEY='astravox_cine_seen_v1', INTRO_DONE_KEY='astravox_intro_done_v1';
 function cineSeenDevice(){ try{ return !!localStorage.getItem(CINE_SEEN_KEY); }catch(e){ return false; } }
@@ -1472,6 +1472,9 @@ function toLocal(st,wx,wz,out){
   const dx=wx-st.x, dz=wz-st.z;
   out.lx=dx*c-dz*s; out.lz=dx*s+dz*c; out.c=c; out.s=s;
 }
+/* power state is derived: recompute ONLY here (place/remove/destroy/load all
+   funnel through refreshStructures), never per frame. */
+function recomputePower(){ R.computePowerRange(S.structures, S.planet, POWER_R); }
 function refreshStructures(){
   for(const t in CAT) placedByType[t]=[];
   for(const st of S.structures){
@@ -1479,6 +1482,7 @@ function refreshStructures(){
     if(CAT[st.t].doorParts) st.open=0;     // door-like pieces re-animate from closed
     if(st.t==='lift') st.lift=0;           // lift platforms re-animate from down
   }
+  recomputePower();
   const M=new THREE.Matrix4();
   for(const t in CAT){
     const def=CAT[t];
@@ -1489,7 +1493,9 @@ function refreshStructures(){
       im.count=list.length;
       for(let i=0;i<list.length;i++){
         structMatrix(list[i],part,M); im.setMatrixAt(i,M);
-        const c=list[i].col; _pc.set(c!=null?c:0xffffff); im.setColorAt(i,_pc);
+        const c=list[i].col; _pc.set(c!=null?c:0xffffff);
+        if(t==='extractor'&&list[i]._pw!==true) _pc.multiplyScalar(0.42);   // unpowered extractors read dim
+        im.setColorAt(i,_pc);
       }
       im.instanceMatrix.needsUpdate=true;
       if(im.instanceColor) im.instanceColor.needsUpdate=true;
@@ -1509,7 +1515,9 @@ function rebuildAux(){
     const def=CAT[st.t];
     if(def.glow){
       const gl=makeGlow(def.glow.c,def.glow.s);
-      gl.material=gl.material.clone(); gl.userData._o0=gl.material.opacity;  // isolate from shared cached glowMat
+      gl.material=gl.material.clone();
+      if(st.t==='extractor'&&st._pw!==true) gl.material.opacity*=0.22;   // unpowered extractor reads dark
+      gl.userData._o0=gl.material.opacity;  // isolate from shared cached glowMat
       gl.position.set(st.x,st.y+def.glow.y,st.z); auxGroup.add(gl); structGlows.push(gl);
     }
     if(st.t==='shieldgen'&&st.hp>0){
@@ -1799,6 +1807,51 @@ function updateNodes(dt){
 }
 
 /* ============================================================
+   INDUSTRY — auto-production from powered extractors
+   Runs only while on this planet. Solo grants locally; in co-op the SERVER
+   owns the grant (we only render the running visuals). _pw is computed on
+   network change by refreshStructures, not here.
+   ============================================================ */
+const prodAccum={fe:0,cy:0,bio:0,ch:0,pe:0};
+let prodSaveT=0, prodHumT=0;
+function updateProduction(dt){
+  const exts=placedByType.extractor||[];
+  if(!exts.length) return;
+  const key=curP().res;
+  let running=0;
+  for(const e of exts){
+    if(e.hp<=0||e._pw!==true) continue;
+    running++;
+    if(Math.random()<dt*2.2) spawnBurst(e.x,e.y+2.3,e.z,curP().nodeCol,1,1.0,1.8,0.55,5);   // production puff
+  }
+  if(running<=0) return;
+  /* soft running hum (throttled) */
+  prodHumT-=dt; if(prodHumT<=0){ prodHumT=0.9+Math.random()*0.5; SND.tone(120+running*6,0.12,'sine',0.018); }
+  if(NET.active) return;   // co-op: server grants via prog; client just shows the visuals
+  prodAccum[key]+=running*CAT.extractor.rate*dt;
+  if(prodAccum[key]>=1){
+    const cap=carryCap();
+    if(S.res[key]>=cap){ prodAccum[key]=0; }
+    else {
+      const add=Math.min(Math.floor(prodAccum[key]),cap-S.res[key]);
+      if(add>0){ S.res[key]=Math.min(cap,S.res[key]+add); prodAccum[key]-=add; updateHUDRes(); }
+    }
+  }
+  prodSaveT-=dt;
+  if(prodSaveT<=0){ prodSaveT=5; saveGame(); }   // persist the drip every ~5s, not every grant
+}
+function industryInfoText(st){
+  if(st.t==='generator'){
+    const exts=placedByType.extractor||[];
+    let on=0; for(const e of exts) if(e.hp>0&&e._pw===true) on++;
+    return '<span style="color:#8ff4ff">POWER GENERATOR — capacity '+CAT.generator.power+' · network running '+on+'/'+exts.length+' extractors</span>';
+  }
+  if(st._pw===true) return '<span style="color:#8fefb0">MINING EXTRACTOR — running · '+RES_NAMES[curP().res]+' +'+CAT.extractor.rate.toFixed(1)+'/s</span>';
+  if(st._why==='overload') return '<span style="color:#ff9a8a">EXTRACTOR — insufficient power · build another generator</span>';
+  return '<span style="color:#ff9a8a">EXTRACTOR — not connected · no generator within range</span>';
+}
+
+/* ============================================================
    BUILDING — ghost, placement, removal, repair
    ============================================================ */
 const raycaster=new THREE.Raycaster();
@@ -1894,7 +1947,8 @@ function updateGhost(){
   const dx=gx-player.x,dz=gz-player.z;
   const claimBad=buildSel==='claimpost'&&R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,gx,gz)!==null;
   const industryBad=INDUSTRY.has(buildSel)&&!R.canIndustrialize(S.planet,planetCtl(S.planet));
-  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad&&!industryBad;
+  const nodeBad=buildSel==='extractor'&&!R.nodeNear(surf.nodes,gx,gz,EXTRACT_NODE_R);
+  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad&&!industryBad&&!nodeBad;
   ghost.children.forEach(m=>m.material=ghostOK?MAT.ghostOk:MAT.ghostBad);
 }
 function placeStructure(){
@@ -1909,6 +1963,7 @@ function placeStructure(){
     if(err){ showToast(err); SND.denied(); return; }
   }
   if(INDUSTRY.has(buildSel)&&!R.canIndustrialize(S.planet,planetCtl(S.planet))){ showToast(R.INDUSTRY_GATE_MSG); SND.denied(); return; }
+  if(buildSel==='extractor'&&!R.nodeNear(surf.nodes,ghostPos.x,ghostPos.z,EXTRACT_NODE_R)){ showToast('Place the Extractor on a resource node'); SND.denied(); return; }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
     NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostPlaceRot}});
@@ -4938,6 +4993,7 @@ function updateSurface(dt){
   const pod=(!buildSel&&!nearShip&&!roverHere&&!arm&&!pad)?nearCryopod():null;
   const aimed=buildSel?null:aimedStructure();
   const damaged=(aimed&&aimed.hp<CAT[aimed.t].hp&&!roverHere&&!arm&&!pad&&!pod)?aimed:null;
+  const ind=(aimed&&!damaged&&CAT[aimed.t].industry&&!roverHere&&!arm&&!pad&&!pod)?aimed:null;
   let prompted=false; mFire=false;
   if(bpStamp){
     updateStampGhost();
@@ -4950,7 +5006,10 @@ function updateSurface(dt){
   } else if(buildSel){
     updateGhost();
     setPrompt(ghostOK?'<span class="key">CLICK</span>PLACE '+CAT[buildSel].name+' · <span class="key">R</span>ROTATE · <span class="key">X</span>CANCEL'
-      :'<span style="color:#ff9a8a">CANNOT PLACE HERE'+(canAfford(CAT[buildSel].cost)?'':' — NEED '+costStr(CAT[buildSel].cost))+'</span>');
+      :'<span style="color:#ff9a8a">CANNOT PLACE HERE'+(
+        (INDUSTRY.has(buildSel)&&!R.canIndustrialize(S.planet,planetCtl(S.planet)))?' — CLAIM THIS PLANET FIRST'
+        :(buildSel==='extractor'&&!R.nodeNear(surf.nodes,ghostPos.x,ghostPos.z,EXTRACT_NODE_R))?' — PLACE ON A RESOURCE NODE'
+        :(canAfford(CAT[buildSel].cost)?'':' — NEED '+costStr(CAT[buildSel].cost)))+'</span>');
     setMAct('—'); prompted=true;
     updateMining(0,false);
   } else if(nearShip){
@@ -4982,6 +5041,9 @@ function updateSurface(dt){
     setMAct('REPAIR'); prompted=true;
     $('prog').classList.toggle('hidden',!busy);
     $('progFill').style.width=(repairHold/0.8*100)+'%';
+    updateMining(0,false);
+  } else if(ind){
+    setPrompt(industryInfoText(ind)); setMAct('—'); prompted=true;
     updateMining(0,false);
   } else {
     updateRepair(0,false,null);
@@ -5023,6 +5085,7 @@ function updateSurface(dt){
   justE=false;
   /* timers */
   updateNodes(dt);
+  updateProduction(dt);
   updateMeteors(dt);
   updateLoot(dt);
   updateTurrets(dt);
@@ -5513,7 +5576,8 @@ Object.assign(window,{
   drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
   damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
   claimSequence,claimStoryLine,claimError:R.claimError,
-  INDUSTRY,canIndustrialize:R.canIndustrialize,
+  INDUSTRY,canIndustrialize:R.canIndustrialize,computePowerRange:R.computePowerRange,nodeNear:R.nodeNear,
+  recomputePower,updateProduction,industryInfoText,
   conquestMission,conquestHint,updateSpaceTarget,CONQUEST_CHAIN,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,

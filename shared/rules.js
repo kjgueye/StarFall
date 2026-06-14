@@ -8,7 +8,7 @@
    state, so call sites are unchanged.
    ============================================================ */
 import { SAFE_R, CARRY_BASE, CYCLE_S, STATION_MIN_PIECES,
-  MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX } from './constants.js';
+  MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX, POWER_R, EXTRACT_NODE_R } from './constants.js';
 import { CAT, INDUSTRY, STATION, STATION_KEYS, STATION_POS, CORE_DIRS, facTier } from './catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, CRAFT } from './tiers.js';
 import { PLANETS, terrainH } from './world.js';
@@ -165,15 +165,53 @@ export function canIndustrialize(plKey, ctlState){
 }
 export const INDUSTRY_GATE_MSG='You must control this planet to build production here — claim it first.';
 
+/* an Extractor must sit on/adjacent to a resource node. nodes = the planet's
+   static node layout ([{x,z}...]); liveness is irrelevant for placement. */
+export function nodeNear(nodes, x, z, r){
+  if(!Array.isArray(nodes)) return true;   // no node data supplied -> skip (defensive)
+  const r2=(r||EXTRACT_NODE_R)*(r||EXTRACT_NODE_R);
+  for(const n of nodes){ const dx=n.x-x, dz=n.z-z; if(dx*dx+dz*dz<=r2) return true; }
+  return false;
+}
+
+/* ---- power network (Industry update) ----
+   Phase 1: RANGE power. Each generator powers up to CAT.generator.power
+   extractors within POWER_R; extractors greedily claim the nearest generator
+   with spare capacity. Mutates transient fields on the live pieces of plKey:
+   extractor._pw (boolean) + extractor._why ('unconnected' | 'overload' | null),
+   generator._cap (remaining capacity). Recompute ONLY on network change — never
+   per frame. Returns the planet's live extractor list. */
+export function computePowerRange(structures, plKey, R){
+  R=R||POWER_R;
+  const gens=[], exts=[];
+  for(const s of structures){
+    if(s.pl!==plKey||s.hp<=0) continue;
+    if(s.t==='generator'){ s._cap=CAT.generator.power|0; gens.push(s); }
+    else if(s.t==='extractor'){ s._pw=false; s._why='unconnected'; exts.push(s); }
+  }
+  const R2=R*R;
+  for(const e of exts){
+    let best=null, bd=R2, inRange=false;
+    for(const g of gens){
+      const dx=g.x-e.x, dz=g.z-e.z, d=dx*dx+dz*dz;
+      if(d<=R2){ inRange=true; if(g._cap>0&&d<=bd){ bd=d; best=g; } }
+    }
+    if(best){ best._cap--; e._pw=true; e._why=null; }
+    else e._why = inRange ? 'overload' : 'unconnected';
+  }
+  return exts;
+}
+
 /* ---- intent validators (server authority; client pre-checks) ---- */
 export const PLACE_RANGE=90;   // generous: covers blueprint stamps placed at aim distance
 /* returns an error string, or null if the placement is legal.
    ctl = the control state for st.pl (passed by the server; the client mirrors
    the gate separately) — industry pieces are refused unless canIndustrialize. */
-export function placeError({structures, st, tier, res, px, pz, ctl}){
+export function placeError({structures, st, tier, res, px, pz, ctl, nodes}){
   const def=CAT[st.t];
   if(!def) return 'Unknown structure';
   if(INDUSTRY.has(st.t)&&!canIndustrialize(st.pl, ctl)) return INDUSTRY_GATE_MSG;
+  if(st.t==='extractor'&&nodes!==undefined&&!nodeNear(nodes, st.x, st.z, EXTRACT_NODE_R)) return 'Place the Extractor on a resource node';
   if(def.tier>0&&def.tier>tier) return 'Requires Tier '+def.tier;
   if(!canAfford(res,def.cost)) return 'Not enough resources';
   if(structures.length>=MAX_STRUCT) return 'Construction limit reached ('+MAX_STRUCT+' pieces)';

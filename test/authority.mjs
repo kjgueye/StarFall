@@ -3,7 +3,8 @@
      PORT=3996 node server.js &   then   PORT=3996 node test/authority.mjs
    (mp_smoke.cjs covers the legit-play side; this file covers the tamper side.) */
 import { WebSocket } from 'ws';
-import { terrainH, PLANETS } from '../shared/world.js';
+import { terrainH, PLANETS, surfaceLayout } from '../shared/world.js';
+const NODES_RUST = surfaceLayout(PLANETS.rust).nodes;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const URL = 'ws://127.0.0.1:' + (process.env.PORT || 3996);
@@ -104,6 +105,22 @@ const pu = (c, x, z) => c.send({ t: 'pu', pos: [x, ty(x, z) + 0.1, z], yaw: 0, p
   await sleep(300);
   ok(A.placed.filter(s => s.t === 'generator').length === indC && A.errs.some(e => /control this planet/.test(e)), 'generator refused on unclaimed faction planet (server gate)');
   pu(A, 0, 0); await sleep(250);                                                             // back to rust for the rest
+
+  /* ---- 9c. Industry production: a powered extractor auto-mines into the on-planet player (server owns the grant) ---- */
+  const nd = NODES_RUST[0];
+  pu(A, nd.x + 2, nd.z); await sleep(250);
+  A.send({ t: 'place', st: { t: 'generator', pl: 'rust', x: nd.x + 8, y: ty(nd.x + 8, nd.z), z: nd.z, r: 0 } });
+  A.send({ t: 'place', st: { t: 'extractor', pl: 'rust', x: nd.x, y: ty(nd.x, nd.z), z: nd.z, r: 0 } });
+  await sleep(400);
+  ok(A.placed.some(s => s.t === 'extractor'), 'extractor placed on a resource node');
+  const feBefore = A.prog.res.fe;
+  await sleep(2600);                                          // ~2.5s at 0.7/s -> +1..2 ferrite
+  ok(A.prog.res.fe > feBefore, 'powered extractor auto-mines into the on-planet player (server grant ' + feBefore + ' -> ' + A.prog.res.fe + ')');
+  A.send({ t: 'pu', pos: [0, 8, 0], yaw: 0, pitch: 0, mode: 'space', pl: 'rust' }); await sleep(300);   // leave the surface
+  const feLeft = A.prog.res.fe;
+  await sleep(1500);
+  ok(A.prog.res.fe === feLeft, 'production stops crediting a player who left the surface');
+  pu(A, 0, 0); await sleep(250);
 
   /* ---- 10. safe zone: A drops a beacon, B cannot hurt A inside it ---- */
   A.send({ t: 'place', st: { t: 'beacon', pl: 'rust', x: 0, y: ty(0, 0), z: 0, r: 0 } });

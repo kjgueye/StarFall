@@ -73,7 +73,7 @@ import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DY
 import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
-  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError } from './shared/rules.js';
+  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError, computePowerRange } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 import { openStore } from './store.js';
 
@@ -157,6 +157,7 @@ function makeRoom(world, code) {
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
+    prodAccum: {},                                    // per-planet fractional extractor output (Industry)
     ctl: readCtl(world && world.ctl),                 // faction control per planet (Conquest)
     drones: {}, droneT: {}, nextDrone: 1,             // faction drones per planet (server-simulated)
     fnodeHp: readFnodeHp(world && world.fnodeHp),     // Command Node HP per faction planet
@@ -164,7 +165,7 @@ function makeRoom(world, code) {
     station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
   };
-  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; room.drones[pl] = []; room.droneT[pl] = 0; }
+  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; room.drones[pl] = []; room.droneT[pl] = 0; room.prodAccum[pl] = 0; }
   if (world && Array.isArray(world.structures)) {
     for (const s of world.structures) {
       if (room.structures.length >= MAX_STRUCT) break;
@@ -785,7 +786,7 @@ async function handle(ws, m) {
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
       }
       const err = placeError({ structures: room.structures, st: { t: s.t, pl: s.pl, x, y, z, r: s.r | 0 },
-        tier: me.tier, res: me.res, px: me.pos[0], pz: me.pos[2], ctl: room.ctl[s.pl] });
+        tier: me.tier, res: me.res, px: me.pos[0], pz: me.pos[2], ctl: room.ctl[s.pl], nodes: NODES[s.pl] });
       if (err) { sendTo(ws, { t: 'err', msg: err }); return; }
       payCost(me.res, CAT[s.t].cost);
       const st = { id: room.nextId++, t: s.t, pl: s.pl, x, y, z, r: ((s.r | 0) % 4 + 4) % 4, hp: CAT[s.t].hp };
@@ -1286,6 +1287,26 @@ function simCritters(room, pl, dt) {
   }
 }
 
+/* industry: powered extractors auto-mine the planet resource. Server owns the
+   grant — runs only while the surface is occupied; credits every player present
+   on that planet (co-op base output). Power is recomputed here (occupied
+   planets only, 4Hz) — cheap over the capped structure set. */
+function simProduction(room, pl, dt) {
+  const exts = computePowerRange(room.structures, pl);
+  let rate = 0;
+  for (const e of exts) if (e.hp > 0 && e._pw) rate += CAT.extractor.rate;
+  if (rate <= 0) return;
+  room.prodAccum[pl] = (room.prodAccum[pl] || 0) + rate * dt;
+  const whole = Math.floor(room.prodAccum[pl]);
+  if (whole <= 0) return;
+  room.prodAccum[pl] -= whole;
+  const rk = PDATA[pl].res;
+  for (const [pid, p] of room.players) {
+    if (p.mode !== 'surface' || p.pl !== pl) continue;
+    if (grantRes(room, p, rk, whole) > 0) sendProg(room, pid);   // silent HUD update; particles are the feedback
+  }
+}
+
 /* faction drones (Conquest): server-side sim while the surface is occupied
    and faction-held. Deliberately dumb: detect, close to ~9m, orbit, fire on
    a cooldown. Sentries ring the Command Node and never move. */
@@ -1395,6 +1416,7 @@ setInterval(() => {
       let occupied = false;
       for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
       if (!occupied) continue;
+      simProduction(room, pl, dt);
       simCritters(room, pl, dt);
       simDrones(room, pl, dt);
       simTurrets(room, pl, dt);
