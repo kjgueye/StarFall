@@ -392,11 +392,12 @@ const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.room = null; ws.pid = null;
-  /* Phase-1 seam: resolve any logged-in session from the upgrade request's
-     cookie. Stored for Phase 2 (which will prefer userId over the guest
-     token); nothing reads it yet, so guest behaviour is unchanged. */
+  /* Phase 2: resolve any logged-in session from the upgrade request's cookie.
+     resolveIdentity() prefers ws.userId over the guest token, so a logged-in
+     player's worlds/progress key to their account. `userReady` lets host/join
+     await this lookup before deciding identity (no guest-vs-user race). */
   ws.userId = null;
-  sessionUser(req).then(u => { ws.userId = u ? u.id : null; }).catch(() => {});
+  ws.userReady = sessionUser(req).then(u => { ws.userId = u ? u.id : null; }).catch(() => { ws.userId = null; });
   ws.q = Promise.resolve();             // per-socket queue: messages handled strictly in order
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => {});
@@ -434,6 +435,22 @@ async function resolveGuest(m, name) {
   return { id, tok };                               // fresh guest; token goes back in welcome
 }
 
+/* ---------- persistence identity (Phase 2) ----------
+   The one place that decides WHO a connection's worlds/progress belong to:
+   - logged in (session cookie resolved into ws.userId) -> the user id, backed
+     by an account `players` row. The user's data follows them to any device.
+   - otherwise -> the existing per-browser guest token, entirely unchanged.
+   Returns the same {id, tok} shape resolveGuest does; tok is null for accounts
+   (they authenticate by cookie, so nothing is sent back to the client). */
+async function resolveIdentity(ws, m, name) {
+  try { await ws.userReady; } catch (e) {}
+  if (ws.userId) {
+    await store.ensureUserPlayer(ws.userId, name).catch(() => {});
+    return { id: ws.userId, tok: null, user: true };
+  }
+  return resolveGuest(m, name);
+}
+
 /* ---------- accounts / auth (Phase 1) ----------
    Real email+password identity layered on the Phase-3 persistence.
    - Passwords are hashed with bcrypt (bcryptjs, a pure-JS implementation) —
@@ -442,9 +459,9 @@ async function resolveGuest(m, name) {
      stored (table `sessions`), and the raw token rides in an httpOnly cookie.
    - Login returns ONE generic error for unknown-email and wrong-password
      alike, and is rate-limited per email+IP.
-   Phase 2 links worlds/progress to a logged-in user id. For now the game is
-   unchanged: sessionUser() is resolved on WS connect into ws.userId as a
-   seam, but nothing reads it yet.
+   Phase 2 links worlds/progress to a logged-in user id: resolveIdentity()
+   keys persistence to ws.userId when a session is present, falling back to the
+   guest token otherwise (see resolveIdentity / GET /api/worlds).
    DEFERRED (not built, clean seams only): password reset, email verification,
    account recovery, OAuth, 2FA. */
 const SESSION_COOKIE = 'sf_session';
@@ -525,6 +542,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url === '/api/login')  return apiLogin(req, res);
   if (req.method === 'POST' && url === '/api/logout') return apiLogout(req, res);
   if (req.method === 'GET'  && url === '/api/me')     return apiMe(req, res);
+  if (req.method === 'GET'  && url === '/api/worlds') return apiWorlds(req, res);
   return sendJson(res, 404, { error: 'Not found' });
 }
 async function apiSignup(req, res) {
@@ -573,6 +591,14 @@ async function apiLogout(req, res) {
 async function apiMe(req, res) {
   const u = await sessionUser(req);
   return sendJson(res, 200, { user: u ? { id: u.id, email: u.email } : null });
+}
+/* Phase 2: the logged-in user's own worlds, so they can rejoin from any device.
+   Account-scoped — guests (no session) get an empty list, never another user's. */
+async function apiWorlds(req, res) {
+  const u = await sessionUser(req);
+  if (!u) return sendJson(res, 200, { worlds: [] });
+  const worlds = await store.listWorldsByOwner(u.id).catch(() => []);
+  return sendJson(res, 200, { worlds });
 }
 
 async function joinRoom(ws, room, name, opts) {
@@ -656,7 +682,7 @@ async function handle(ws, m) {
     case 'host': {
       if (ws.room) return;
       if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
-      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      const guest = await resolveIdentity(ws, m, String(m.name || '').trim().slice(0, 16));
       /* a legacy snapshot whose worldId we already persist = that world, not a copy */
       if (m.world && typeof m.world.worldId === 'string') {
         let existing = null;
@@ -683,7 +709,7 @@ async function handle(ws, m) {
     case 'join': {
       if (ws.room) return;
       const code = String(m.code || '').trim().toUpperCase();
-      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      const guest = await resolveIdentity(ws, m, String(m.name || '').trim().slice(0, 16));
       let room = rooms.get(code);
       if (!room) {
         const w = await store.getWorldByCode(code).catch(() => null);

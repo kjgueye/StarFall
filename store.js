@@ -8,8 +8,9 @@
 
    Tables / shapes:
      players          id, token_hash, name, created_at, last_seen
-                      (guest accounts; "upgrade to real auth" is a future
-                       seam — add columns, keep the id)
+                      (a player identity: a GUEST keyed by token_hash, OR —
+                       Phase 2 — an account-backed row whose id IS a user id
+                       and whose token_hash is an unusable sentinel)
      worlds           id, code (invite, unique), owner_id, created_at,
                       last_active
      world_state      world_id -> state jsonb (structures, station, beacon,
@@ -26,6 +27,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/* Phase 2: a logged-in user is backed by a row in `players` (so worlds/progress
+   FKs resolve), keyed by the user id. Its token_hash is a sentinel that can
+   NEVER equal a sha256 hex digest, so an account-backed player can never be
+   claimed through the guest auth{id,tok} path — accounts authenticate only via
+   their session cookie. */
+const ACCOUNT_PLAYER_TOKEN = 'account';
 
 /* ---------- Postgres backend ---------- */
 class PgStore {
@@ -117,6 +125,13 @@ class PgStore {
   async touchPlayer(id, name) {
     await this.pool.query('UPDATE players SET last_seen=now(), name=COALESCE($2,name) WHERE id=$1', [id, name || null]);
   }
+  /* Phase 2: ensure an account-backed players row exists for a logged-in user.
+     Idempotent — runs on every host/join while logged in. */
+  async ensureUserPlayer(id, name) {
+    await this.pool.query(
+      'INSERT INTO players (id, token_hash, name) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING',
+      [id, ACCOUNT_PLAYER_TOKEN, name || 'PLAYER']);
+  }
   async getWorldByCode(code) {
     const r = await this.pool.query(
       'SELECT w.id, w.code, w.owner_id, s.state FROM worlds w LEFT JOIN world_state s ON s.world_id=w.id WHERE w.code=$1', [code]);
@@ -139,6 +154,13 @@ class PgStore {
   async countWorldsByOwner(ownerId) {
     const r = await this.pool.query('SELECT count(*)::int AS n FROM worlds WHERE owner_id=$1', [ownerId]);
     return r.rows[0].n;
+  }
+  /* Phase 2: a user's owned worlds, newest-active first — lets a logged-in
+     player find their worlds from any device. */
+  async listWorldsByOwner(ownerId) {
+    const r = await this.pool.query(
+      'SELECT code, created_at, last_active FROM worlds WHERE owner_id=$1 ORDER BY last_active DESC', [ownerId]);
+    return r.rows.map(x => ({ code: x.code, createdAt: x.created_at, lastActive: x.last_active }));
   }
   async getProgress(playerId, worldId) {
     const r = await this.pool.query('SELECT prog FROM player_progress WHERE player_id=$1 AND world_id=$2', [playerId, worldId]);
@@ -190,6 +212,11 @@ class FileStore {
     p.lastSeen = Date.now(); if (name) p.name = name;
     this._save();
   }
+  async ensureUserPlayer(id, name) {
+    if (this.d.players[id]) return;
+    this.d.players[id] = { tokenHash: ACCOUNT_PLAYER_TOKEN, name: name || 'PLAYER', account: true, createdAt: Date.now(), lastSeen: Date.now() };
+    this._save();
+  }
   async getWorldByCode(code) {
     const id = this.d.codes[code];
     return id ? this.getWorldById(id) : null;
@@ -212,6 +239,15 @@ class FileStore {
     let n = 0;
     for (const id in this.d.worlds) if (this.d.worlds[id].ownerId === ownerId) n++;
     return n;
+  }
+  async listWorldsByOwner(ownerId) {
+    const out = [];
+    for (const id in this.d.worlds) {
+      const w = this.d.worlds[id];
+      if (w.ownerId === ownerId) out.push({ code: w.code, createdAt: w.createdAt, lastActive: w.lastActive });
+    }
+    out.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+    return out;
   }
   async getProgress(playerId, worldId) {
     return this.d.progress[playerId + '|' + worldId] || null;
