@@ -24,7 +24,7 @@ export const CAT = {
            {g:'sphere',m:'emisC',o:[0,2.55,0],s:[0.34,0.34,0.34]}], glow:{y:2.55,c:'#8ff4ff',s:4}},
   shieldgen:{name:'Shield Gen', ic:'◖', tier:2, cost:{fe:30,cy:15}, hp:150, shieldR:18,
     parts:[{g:'cyl',m:'dark',o:[0,0.25,0],s:[2.8,0.5,2.8]},{g:'cyl',m:'metal',o:[0,0.8,0],s:[1.2,0.7,1.2]},
-           {g:'sphere',m:'emisC',o:[0,1.5,0],s:[1.1,1.1,1.1]}], glow:{y:1.5,c:'#7fd6ff',s:6}},
+           {g:'sphere',m:'emisP',o:[0,1.5,0],s:[1.1,1.1,1.1]}], glow:{y:1.5,c:'#c08aff',s:6}},
   window: {name:'Window Wall', ic:'⊞', tier:2, cost:{fe:6,cy:2}, hp:80,
     parts:[{g:'box',m:'metal',o:[0,2.8,0],s:[4,0.4,0.3]},{g:'box',m:'metal',o:[0,0.3,0],s:[4,0.6,0.3]},
            {g:'box',m:'metal',o:[-1.8,1.55,0],s:[0.4,2.1,0.3]},{g:'box',m:'metal',o:[1.8,1.55,0],s:[0.4,2.1,0.3]},
@@ -33,7 +33,7 @@ export const CAT = {
     doorParts:[3,4], doorSlide:[1.55,1.55], doorSpeed:6,   // panel+seam slide together
     parts:[{g:'box',m:'metal',o:[-1.45,1.5,0],s:[1.1,3,0.3]},{g:'box',m:'metal',o:[1.45,1.5,0],s:[1.1,3,0.3]},
            {g:'box',m:'metal',o:[0,2.8,0],s:[1.8,0.4,0.3]},{g:'box',m:'doorM',o:[0,1.3,0],s:[1.7,2.6,0.14]},
-           {g:'box',m:'emisC',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
+           {g:'box',m:'emisM',o:[0,1.3,0.08],s:[0.08,2.2,0.02]}]},
   airlock:{name:'Airlock Door', ic:'⎕', tier:2, cost:{fe:12,cy:5}, hp:120,
     doorParts:[3,4], doorSlide:[-0.82,0.82], doorSpeed:3.5,   // two half-panels part to the sides, heavier/slower
     parts:[{g:'box',m:'dark',o:[-1.45,1.5,0],s:[1.1,3,0.3]},{g:'box',m:'dark',o:[1.45,1.5,0],s:[1.1,3,0.3]},
@@ -41,7 +41,7 @@ export const CAT = {
            {g:'box',m:'metal',o:[-0.45,1.3,0],s:[0.86,2.6,0.18]},{g:'box',m:'metal',o:[0.45,1.3,0],s:[0.86,2.6,0.18]},
            {g:'box',m:'emisO',o:[0,2.62,0.16],s:[1.5,0.12,0.04]}]},
   dome:   {name:'Dome Roof', ic:'◠', tier:2, cost:{fe:10,cy:4}, hp:90,
-    parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisC',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
+    parts:[{g:'dome',m:'metal',o:[0,0,0],s:[2.9,2.2,2.9]},{g:'sphere',m:'emisP',o:[0,2.25,0],s:[0.3,0.3,0.3]}]},
   /* ---- Phase 2 building pieces ---- */
   foundation:{name:'Foundation', ic:'▰', tier:1, cost:{fe:6}, hp:140,
     parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[4,1,4]},{g:'box',m:'trim',o:[0,1.01,0],s:[3.8,0.04,3.8]}]},
@@ -66,7 +66,7 @@ export const CAT = {
   armory:{name:'Armory', ic:'⚒', tier:2, cost:{fe:35,cy:15}, hp:120, interact:'armory',
     parts:[{g:'box',m:'dark',o:[0,0.5,0],s:[2.6,1.0,1.4]},{g:'box',m:'metal',o:[0,1.06,0],s:[2.75,0.12,1.55]},
            {g:'box',m:'dark',o:[0,1.55,-0.62],s:[2.5,1.1,0.14]},{g:'box',m:'holo',o:[0,1.62,-0.53],s:[1.8,0.8,0.03]},
-           {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisC',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
+           {g:'box',m:'emisO',o:[-0.95,1.14,0.4],s:[0.5,0.05,0.5]},{g:'box',m:'emisPk',o:[0.95,1.14,0.4],s:[0.5,0.05,0.5]}],
     glow:{y:1.6,c:'#ffb070',s:3}},
   rover:  {name:'Rover', ic:'⛟', tier:2, cost:{fe:60,cy:10}, hp:160, dynamic:true, parts:[], desc:'Drive — E to enter'},
   turret: {name:'Sentry Turret', ic:'⌖', tier:3, cost:{fe:40,cy:20}, hp:110, owned:true, headParts:[2,3,4],
@@ -76,19 +76,26 @@ export const CAT = {
   beacon: {name:'COLONY BEACON', ic:'✦', tier:4, cost:{fe:25,cy:15,bio:10}, hp:500, noKill:true, o2r:50,
     parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.8,0],s:[1.1,4.5,1.1]},
            {g:'sphere',m:'emisG',o:[0,5.3,0],s:[0.8,0.8,0.8]},{g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.3,c:'#aef9c8',s:8}},
+  /* Conquest: planting this in faction territory (control node down) flips the planet to yours */
+  claimpost:{name:'CLAIM BEACON', ic:'✪', tier:1, cost:{fe:25,cy:10}, hp:500, noKill:true, o2r:30,
+    desc:'Plant in the contested zone once the faction control node is down',
+    parts:[{g:'cyl',m:'dark',o:[0,0.3,0],s:[2.4,0.6,2.4]},{g:'cone',m:'metal',o:[0,2.6,0],s:[1.0,4.2,1.0]},
+           {g:'sphere',m:'emisM',o:[0,5.0,0],s:[0.85,0.85,0.85]},
+           {g:'torus',m:'emisT',o:[0,1.0,0],s:[2.2,2.2,2.2],r:[Math.PI/2,0,0]},
+           {g:'cyl',m:'beam',o:[0,21,0],s:[0.5,32,0.5]}], glow:{y:5.0,c:'#ff7ad0',s:8}},
   /* ---- Outpost update: functional pieces ---- */
   telepad:{name:'Teleporter Pad', ic:'⊙', tier:2, cost:{fe:20,cy:10}, hp:90,
     desc:'Paint two pads the same colour to link — stand on one and press E',
     parts:[{g:'cyl',m:'dark',o:[0,0.15,0],s:[2.4,0.3,2.4]},
-           {g:'torus',m:'emisC',o:[0,0.36,0],s:[1.7,1.7,1.7],r:[Math.PI/2,0,0]},
-           {g:'cyl',m:'emisC',o:[0,0.33,0],s:[0.5,0.06,0.5]}], glow:{y:0.6,c:'#8ff4ff',s:3}},
+           {g:'torus',m:'emisPk',o:[0,0.36,0],s:[1.7,1.7,1.7],r:[Math.PI/2,0,0]},
+           {g:'cyl',m:'emisPk',o:[0,0.33,0],s:[0.5,0.06,0.5]}], glow:{y:0.6,c:'#ff9ad0',s:3}},
   lift:   {name:'Lift Platform', ic:'⇕', tier:2, cost:{fe:25,cy:8}, hp:120,
     liftH:6, liftParts:[2,3], desc:'Step on to rise; step off to send it back down',
     parts:[{g:'cyl',m:'dark',o:[0,0.25,0],s:[1.0,0.5,1.0]},                              // base pedestal
            {g:'cyl',m:'metal',o:[0,3.3,0],s:[0.3,6.6,0.3]},                              // mast (static)
            {g:'cyl',m:'metal',o:[0,0.55,0],s:[2.6,0.18,2.6]},                            // platform disc (animated)
-           {g:'torus',m:'emisC',o:[0,0.6,0],s:[1.25,1.25,1.25],r:[Math.PI/2,0,0]}],      // platform ring (animated)
-    glow:{y:0.6,c:'#8ff4ff',s:2.5}},
+           {g:'torus',m:'emisT',o:[0,0.6,0],s:[1.25,1.25,1.25],r:[Math.PI/2,0,0]}],      // platform ring (animated)
+    glow:{y:0.6,c:'#7affe0',s:2.5}},
   jumppad:{name:'Jump Pad', ic:'⏫', tier:1, cost:{fe:8}, hp:60,
     parts:[{g:'cyl',m:'dark',o:[0,0.15,0],s:[2.2,0.3,2.2]},
            {g:'cyl',m:'emisG',o:[0,0.33,0],s:[1.6,0.1,1.6]},
@@ -123,7 +130,7 @@ export const CAT = {
     parts:[{g:'cyl',m:'pot',o:[0,0.3,0],s:[0.9,0.6,0.9]},{g:'cone',m:'plant',o:[0,1.05,0],s:[0.7,1,0.7]},
            {g:'sphere',m:'plant',o:[0.25,0.85,0.15],s:[0.4,0.4,0.4]}]},
   holosign:{name:'Holo-Sign', ic:'◭', tier:0, cost:{fe:5}, hp:40, decor:true,
-    parts:[{g:'cyl',m:'dark',o:[0,0.9,0],s:[0.12,1.8,0.12]},{g:'box',m:'holo',o:[0,2.3,0],s:[1.8,1,0.04]}], glow:{y:2.3,c:'#5fe0ff',s:3}},
+    parts:[{g:'cyl',m:'dark',o:[0,0.9,0],s:[0.12,1.8,0.12]},{g:'box',m:'holo',o:[0,2.3,0],s:[1.8,1,0.04]}], glow:{y:2.3,c:'#c08aff',s:3}},
   lampR:  {name:'Red Lamp', ic:'●', tier:0, cost:{fe:3}, hp:30, decor:true,
     parts:[{g:'cyl',m:'dark',o:[0,0.55,0],s:[0.14,1.1,0.14]},{g:'sphere',m:'emisR',o:[0,1.25,0],s:[0.45,0.45,0.45]}], glow:{y:1.25,c:'#ff6a5a',s:3}},
   lampG:  {name:'Green Lamp', ic:'●', tier:0, cost:{fe:3}, hp:30, decor:true,
@@ -157,7 +164,7 @@ export const CAT = {
            {g:'box',m:'emisW',o:[0,2.03,0],s:[0.85,0.05,0.85]}], glow:{y:2.0,c:'#eaf6ff',s:4}},
   locker: {name:'Locker', ic:'▯', tier:0, cost:{fe:6}, hp:50, decor:true,
     parts:[{g:'box',m:'metal',o:[0,1.1,0],s:[0.9,2.2,0.6]},{g:'box',m:'dark',o:[0,1.1,0.31],s:[0.8,2.0,0.04]},
-           {g:'box',m:'emisC',o:[0.25,1.45,0.34],s:[0.06,0.3,0.02]}]},
+           {g:'box',m:'emisM',o:[0.25,1.45,0.34],s:[0.06,0.3,0.02]}]},
   railing:{name:'Railing', ic:'╫', tier:0, cost:{fe:4}, hp:30, decor:true,
     parts:[{g:'box',m:'metal',o:[0,1.0,0],s:[4,0.08,0.08]},{g:'box',m:'metal',o:[0,0.6,0],s:[4,0.08,0.08]},
            {g:'cyl',m:'dark',o:[-1.85,0.6,0],s:[0.08,1.2,0.08]},{g:'cyl',m:'dark',o:[0,0.6,0],s:[0.08,1.2,0.08]},
@@ -254,6 +261,7 @@ export const COLLIDERS={
   armory: {boxes:[{cx:0,hx:1.35,hz:0.72}],h:1.5,step:0.6},
   turret: {r:0.8,h:1.6},
   beacon: {r:1.4,h:5},
+  claimpost:{r:1.3,h:4.6},
   lightpole:{r:0.22,h:3},
   relay:  {r:0.35,h:2.4},
   flag:   {r:0.14,h:2.5},
@@ -283,12 +291,12 @@ export const COLLIDERS={
 export const STATION={
   corridor:{name:'Corridor Tube', ic:'▭', cost:{fe:40,cy:20},
     parts:[{g:'cyl',m:'metal',o:[0,0,2.5],s:[1.5,5,1.5],r:[Math.PI/2,0,0]},
-           {g:'torus',m:'emisC',o:[0,0,0.15],s:[1.6,1.6,1.6]},{g:'torus',m:'emisC',o:[0,0,4.85],s:[1.6,1.6,1.6]}],
+           {g:'torus',m:'emisT',o:[0,0,0.15],s:[1.6,1.6,1.6]},{g:'torus',m:'emisT',o:[0,0,4.85],s:[1.6,1.6,1.6]}],
     out:[{p:[0,0,5],d:[0,0,1]}]},
   habitat:{name:'Habitat Module', ic:'⬢', cost:{fe:80,cy:50,bio:20,pe:8},
     parts:[{g:'cyl',m:'metal',o:[0,0,2],s:[4.4,4,4.4],r:[Math.PI/2,0,0]},
            {g:'cyl',m:'dark',o:[0,0,2],s:[4.7,1.0,4.7],r:[Math.PI/2,0,0]},
-           {g:'box',m:'glass',o:[0,2.05,2],s:[1.5,0.6,1.7]},{g:'torus',m:'emisC',o:[0,0,0.15],s:[4.4,4.4,4.4]}],
+           {g:'box',m:'glass',o:[0,2.05,2],s:[1.5,0.6,1.7]},{g:'torus',m:'emisM',o:[0,0,0.15],s:[4.4,4.4,4.4]}],
     out:[{p:[0,0,4],d:[0,0,1]},{p:[2.2,0,2],d:[1,0,0]},{p:[-2.2,0,2],d:[-1,0,0]},{p:[0,2.2,2],d:[0,1,0]},{p:[0,-2.2,2],d:[0,-1,0]}]},
   solar:{name:'Solar Wing', ic:'❉', cost:{fe:50,cy:30,pe:5},
     parts:[{g:'cyl',m:'metal',o:[0,0,1],s:[0.3,2,0.3],r:[Math.PI/2,0,0]},
@@ -296,7 +304,7 @@ export const STATION={
     out:[]},
   dome:{name:'Observation Dome', ic:'◓', cost:{fe:40,cy:40,bio:15,pe:6},
     parts:[{g:'dome',m:'glass',o:[0,0,0.2],s:[2.4,2.4,2.4],r:[-Math.PI/2,0,0]},
-           {g:'torus',m:'metal',o:[0,0,0.15],s:[4.6,4.6,4.6]},{g:'sphere',m:'emisC',o:[0,0,1.4],s:[0.3,0.3,0.3]}],
+           {g:'torus',m:'metal',o:[0,0,0.15],s:[4.6,4.6,4.6]},{g:'sphere',m:'emisP',o:[0,0,1.4],s:[0.3,0.3,0.3]}],
     out:[]},
   dock:{name:'Docking Ring', ic:'◎', cost:{fe:60,cy:30,ch:20,pe:6},
     parts:[{g:'torus',m:'metal',o:[0,0,1],s:[5,5,5]},{g:'cyl',m:'dark',o:[0,0,1],s:[3,2,3],r:[Math.PI/2,0,0]},
@@ -327,7 +335,32 @@ export const CRIT_BY_PLANET={
   glacius:['skitterer','floater'],
   verdant:['grazer','floater','hopper'],
   pelagos:['skimmer','floater'],
+  cinder: ['skitterer','hopper'],
+  umbra:  ['floater','hopper'],
+  noctis: ['skitterer','floater'],
 };
+
+/* ---------- faction drones (Conquest) ----------
+   Deliberately dumb defenders guarding the Command Node: detect within a
+   radius, close to ~9m and orbit, fire on a cooldown. Server-simulated in
+   MP (coarse snapshots like critters), local in solo. fe = ferrite salvage
+   dropped on shutdown. */
+export const DRONES={
+  stinger:{name:'Stinger Drone', hp:24, speed:6.0, hover:1.6, bob:0.25, dmg:6,  range:18, fireCd:1.3, detectR:30, fe:[2,4]},
+  sentry: {name:'Sentry Drone',  hp:40, turret:true, hover:2.6, bob:0.12, dmg:8, range:24, fireCd:1.1, detectR:26, fe:[3,5]},
+  heavy:  {name:'Devastator',    hp:70, speed:3.4, hover:1.3, bob:0.2,  dmg:12, range:20, fireCd:1.6, detectR:34, fe:[4,7]},
+};
+/* per-planet defense scaling, indexed by PLANETS[pl].fac.diff (1-based):
+   roamer population, sentries ringing the node, HP/damage multipliers,
+   and the Command Node's own HP */
+export const FACTION_TIERS=[
+  {count:3, roam:['stinger'],                   sentries:1, hpMul:1,   dmgMul:0.85, nodeHp:300, reward:{fe:40,cy:20}},
+  {count:5, roam:['stinger','stinger','heavy'], sentries:2, hpMul:1.4, dmgMul:1.3, nodeHp:550, reward:{fe:80,cy:40}},
+  {count:7, roam:['stinger','heavy','heavy'],   sentries:3, hpMul:1.9, dmgMul:1.7, nodeHp:850, reward:{fe:150,cy:80,bio:30}},
+];
+export function facTier(p){ return p&&p.fac?FACTION_TIERS[Math.min(FACTION_TIERS.length,Math.max(1,p.fac.diff))-1]:null; }
+export const DRONE_LEASH=110;       // drones never chase farther than this from the node
+export const DRONE_PATROL=55;       // roamer wander radius around the node
 
 /* ---------- paint palette ---------- */
 export const PAINT_COLORS=[0xff5050,0xff9a4a,0xffd24a,0x9ee84a,0x4adf8a,0x4adfff,0x4a9aff,0x9a6aff,0xff6ad0,0xffffff,0x8fa0b0,0x2a2f38];

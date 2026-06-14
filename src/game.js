@@ -12,15 +12,18 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { MAX_STRUCT, GRID, SNAP_R, BP_MAX, HP_MAX, SPAWN_PROT, SAFE_R,
   GREN_R, GREN_DMG, GREN_FUSE, SHIELD_LIFE, SHIELD_CD, TURRET_R, TURRET_DMG, TURRET_CD,
-  WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
+  WORLD_R, SEA_Y, CYCLE_S, CRIT_CAP, DRONE_CAP, STATION_MAX, STATION_MIN_PIECES, CORE_R,
   EVA_SPEED, STATION_REACH, STATION_SNAP } from '../shared/constants.js';
 import { RAMP_ANG, CAT, SNAP_WALLS, SNAP_ROOFS, SNAP_FLOORS, SNAP_RAMPS, WALL_LIKE, SNAP_PIECES,
   COLLIDERS, STATION, STATION_KEYS, STATION_POS as STATION_POS_ARR, CORE_DIRS as CORE_DIRS_ARR,
-  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS } from '../shared/catalog.js';
+  CRITTERS, CRIT_BY_PLANET, PAINT_COLORS,
+  DRONES, FACTION_TIERS, facTier, DRONE_LEASH, DRONE_PATROL } from '../shared/catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, SLOT_ICONS, AMMO_NAMES, WEP_KEYS, AMMO_KEYS, CRAFT } from '../shared/tiers.js';
-import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout } from '../shared/world.js';
+import { PLANETS, RES_NAMES, RES_DOTS, mulberry32, hash2, vnoise, fbm, terrainH, terrainHWater, surfaceLayout,
+  defaultCtl, readCtl, CONQUEST_CHAIN } from '../shared/world.js';
 import * as R from '../shared/rules.js';
 
 /* ---------- tiny utils ---------- */
@@ -79,6 +82,8 @@ const S={
   structures:[],            // {t, pl, x,y,z, r, hp, owner?}
   o2:100, fuel:100, beacon:false, victoryShown:false,
   station:[], stationOnline:false,
+  ctl:defaultCtl(),         // per-planet faction control: neutral | faction | yours
+  fnHp:R.readFnodeHp(null), // per-faction-planet Command Node HP (0 = downed)
   ppos:[0,0,0], pyaw:0,
   spos:[300,8,100], syaw:Math.PI*0.9, spitch:0, sspeed:0,
   pendingCutscene:null,
@@ -91,7 +96,11 @@ function readAmmo(a){ a=a||{}; const o={}; for(const k of AMMO_KEYS) o[k]=Math.m
 function saveWeapons(){ const o={}; for(const k of WEP_KEYS) o[k]=!!S.weapons[k]; return o; }
 function saveAmmo(){ const o={}; for(const k of AMMO_KEYS) o[k]=S.ammo[k]|0; return o; }
 const SAVE_KEY='astravox_save_v1';
-const SAVE_VER=7;   // v7: + rsp (cryopod respawn point); older saves load with it null
+const SAVE_VER=9;   // v8: + intro (pre-v8 = veterans skip onboarding). v9: + ctl/fnHp (Conquest) — missing fields default per planet
+/* device-scoped intro markers so MP guests (no solo save) also skip on replay */
+const CINE_SEEN_KEY='astravox_cine_seen_v1', INTRO_DONE_KEY='astravox_intro_done_v1';
+function cineSeenDevice(){ try{ return !!localStorage.getItem(CINE_SEEN_KEY); }catch(e){ return false; } }
+function introDoneDevice(){ try{ return !!localStorage.getItem(INTRO_DONE_KEY); }catch(e){ return false; } }
 const MP_WORLD_KEY='astravox_mp_world_v1';
 /* Phase 3 — guest identity + persistent worlds */
 const GUEST_KEY='astravox_guest_v1';            // server-minted {id,tok}; our passwordless identity
@@ -193,6 +202,12 @@ function netHandle(m){
     case 'clock': if(typeof m.tod==='number') dayClock=m.tod*CYCLE_S; break;
     case 'critSnap': applyCritSnap(m.pl,m.crit||[]); break;
     case 'critDead': onCritDead(m); break;
+    case 'ctl': applyCtl(m.pl,m.ctl,m.by); break;
+    case 'droneSnap': applyDroneSnap(m.pl,m.drones||[]); break;
+    case 'droneDead': onDroneDead(m); break;
+    case 'dfire': onDFire(m); break;
+    case 'fnodeHp': onFnodeHp(m); break;
+    case 'fnodeDown': onFnodeDown(m); break;
     case 'nade': onRemoteNade(m); break;
     case 'shield': onRemoteShield(m); break;
     case 'stationPlaced': applyStationPlaced(m.st,m.by===NET.pid); break;
@@ -230,6 +245,66 @@ function onPDeath(m){
   if(S.mode==='surface'&&surf.built) respawnPlayer();
   else { player.hp=HP_MAX; player.invuln=SPAWN_PROT; }
 }
+/* ---- faction control flips (Conquest) — server-owned in MP, local in solo ---- */
+function applyCtl(pl,ctl,by){
+  if(!PLANETS[pl]||['neutral','faction','yours'].indexOf(ctl)<0) return;
+  const was=S.ctl[pl];
+  S.ctl[pl]=ctl;
+  updateCtlRings();
+  if(S.mode==='surface'&&S.planet===pl) applyFnodeState();   // hide the contested-zone ring on claim
+  if(ctl==='yours'&&was!=='yours') onPlanetClaimed(pl,by);
+  saveGame();
+}
+/* ---- claim payoff (Conquest P3): the biggest celebration since the station ---- */
+function onPlanetClaimed(pl,by){ claimSequence(pl); }
+function claimSequence(pl){
+  const p=PLANETS[pl];
+  SND.claimFanfare();
+  $('claimName').textContent=p.name+' IS YOURS';
+  $('claimStory').textContent=claimStoryLine(pl);
+  $('claimBanner').classList.remove('hidden');
+  setTimeout(()=>$('claimBanner').classList.add('hidden'),5600);
+  flashFx();
+  if(S.mode==='surface'&&S.planet===pl&&surf.built){
+    /* the defense powers down in sequence — capture positions now, the
+       server's snapshots may clear the entities underneath us */
+    const ds=drones.map(d=>({id:d.id,x:d.x,y:d.y,z:d.z}));
+    ds.forEach((d,i)=>setTimeout(()=>{ if(!S.running) return; droneDeathFx(d.x,d.y,d.z); removeDroneEntity(d.id); },350+i*170));
+    /* light cascade rings rolling outward from the new Claim Beacon */
+    const cp=S.structures.find(s=>s.t==='claimpost'&&s.pl===pl)||surf.fnode||{x:player.x,z:player.z};
+    const cols=[0xff7ad0,0x5affd8,0x7fff9a,0xb46aff];
+    for(let ring=0;ring<6;ring++) setTimeout(()=>{
+      if(!S.running||S.planet!==pl) return;
+      const r=5+ring*8;
+      for(let i=0;i<12;i++){
+        const a=i/12*6.283, x=cp.x+Math.cos(a)*r, z=cp.z+Math.sin(a)*r;
+        spawnBurst(x,terrainH(x,z,p)+0.8,z,cols[ring%cols.length],7,1.6,4.5,1.1,2);
+      }
+      SND.tone(523+ring*110,0.22,'sine',0.05);
+    },420+ring*230);
+    /* the beacon itself flares */
+    setTimeout(()=>{ if(S.running&&S.planet===pl){
+      spawnBurst(cp.x,terrainH(cp.x,cp.z,p)+5,cp.z,0xff7ad0,30,5,7,1.6,2);
+      const fl=makeGlow('#ff9ae0',30); fl.position.set(cp.x,terrainH(cp.x,cp.z,p)+5,cp.z); pushFx(fl,0.8,0.9);
+    } },380);
+  }
+  missionEvent('claim',pl);
+  renderMission();
+}
+/* one-line story beat per conquest (the chain reads outward to the stronghold) */
+function claimStoryLine(pl){
+  return {
+    cinder:'The faction\'s mining grip on the ember wastes is broken. Their signals point further out.',
+    umbra:'The violet relay falls silent. Whatever commands these drones is running out of places to hide.',
+    noctis:'The stronghold is yours. Across the system, the faction\'s lights blink out — for now.',
+  }[pl]||PLANETS[pl].name+' has joined your colony network.';
+}
+SND.claimFanfare=function(){
+  const seq=[392,523,659,784,1046,1318,1568,2093];
+  seq.forEach((f,i)=>setTimeout(()=>this.tone(f,0.5,'triangle',0.09),i*130));
+  setTimeout(()=>this.tone(98,2.4,'sawtooth',0.05,96),200);                       // low triumphant pad
+  setTimeout(()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>this.tone(f,0.9,'sine',0.06),i*40));},1350);  // closing chord
+};
 function onTurretFire(m){
   if(S.mode!=='surface') return;
   const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
@@ -262,7 +337,7 @@ function applyProg(m){
   saveGame();
 }
 function progEvent(ev){
-  if(ev.type==='gain'&&ev.amt>0){ SND.collect(); showToast('+'+ev.amt+' '+RES_NAMES[ev.k]); }
+  if(ev.type==='gain'&&ev.amt>0){ SND.collect(); showToast('+'+ev.amt+' '+RES_NAMES[ev.k]); missionEvent('mine'); }
   else if(ev.type==='craft'){
     const c=CRAFT[ev.key];
     if(c){ SND.craft();
@@ -277,6 +352,10 @@ function progEvent(ev){
     /* hp itself arrived in this prog snapshot */
     SND.heal(); spawnBurst(player.x,player.y+1,player.z,0x8affb0,12,2,3,0.6,2);
     showToast('+50 HP');
+  }
+  else if(ev.type==='claim'){
+    const t=facTier(PLANETS[ev.pl]);
+    if(t&&t.reward) showToast('Claim reward: '+costStr(t.reward),4000);
   }
   else if(ev.type==='tier') applyTierUp(ev.n);
 }
@@ -330,6 +409,8 @@ function renderCompass(dt){
   if(surf.built) mk(surf.shipPos.x,surf.shipPos.z,'⌂','#7fd6f5');
   const b=beaconOnPlanet(S.planet); if(b) mk(b.x,b.z,'★','#aef9c8');
   for(const s of placedByType.navbeacon||[]){ if(s.hp>0) mk(s.x,s.z,'✧','#'+new THREE.Color(s.col!=null?s.col:0xff7a5a).getHexString()); }
+  if(surf.poi) for(const o of surf.poi) mk(o.x,o.z,o.label,o.col);
+  if(surf.fnode) mk(surf.fnode.x,surf.fnode.z,'⬢',fnodeAlive()?'#ff5a4a':'#8a6a64');
   if(S.structures.some(s=>s.pl===S.planet&&s.t!=='beacon')){ const c=baseCentroid(); mk(c.x,c.z,'⌗','#ffd9a0'); }
   /* nearest critter — points the way to the hunt */
   if(critters.length){ let best=null,bd=1e9; for(const c of critters){ const dx=c.x-px,dz=c.z-pz,d=dx*dx+dz*dz; if(d<bd){bd=d;best=c;} }
@@ -364,8 +445,14 @@ function drawMinimap(){
     dot(s.x,s.z, s.t==='beacon'?'#aef9c8':(s.t==='turret'?'#ff7a6a':(s.t==='rover'?'#ffd060':'#8fb6cc')), s.t==='beacon'?3:2); }
   // wildlife (critters — hunt for Chitin)
   for(const c of critters) dot(c.x,c.z,'#d8b878',1.8);
+  // faction forces (Conquest): drones hot red, Command Node a marked square
+  for(const d of drones) dot(d.x,d.z,'#ff4a3a',2.2);
+  if(surf.fnode){ const m2=w2m(surf.fnode.x,surf.fnode.z);
+    g.fillStyle=fnodeAlive()?'#ff3a2a':'#7a4a44'; g.fillRect(m2[0]-3.5,m2[1]-3.5,7,7); }
   // ship
   if(surf.built) dot(surf.shipPos.x,surf.shipPos.z,'#7fd6f5',3);
+  // starter-world landmarks
+  if(surf.poi) for(const o of surf.poi) dot(o.x,o.z,o.col,3);
   // active meteor zone
   const ms=NET.active?(NET.meteor[S.planet]&&NET.meteor[S.planet].phase!=='idle'):(meteorState.phase!=='idle');
   if(ms){ const c=baseCentroid(); const m=w2m(c.x,c.z); g.strokeStyle='rgba(255,90,60,0.8)'; g.lineWidth=2; g.beginPath(); g.arc(m[0],m[1],50*scale,0,Math.PI*2); g.stroke(); }
@@ -412,10 +499,13 @@ function buildSaveObj(){
     ppos:S.ppos.map(v=>+v.toFixed(2)), pyaw:+S.pyaw.toFixed(3),
     spos:S.spos.map(v=>+v.toFixed(2)), syaw:+S.syaw.toFixed(3), spitch:+S.spitch.toFixed(3),
     o2:S.o2|0, fuel:S.fuel|0, beacon:!!S.beacon, victoryShown:!!S.victoryShown,
+    ctl:Object.assign({},S.ctl), fnHp:Object.assign({},S.fnHp),
     rsp:S.respawnPt||null,
+    intro:{done:!!S.intro.done,step:S.intro.step|0,cineSeen:!!S.intro.cineSeen,granted:!!S.intro.granted},
+    cine:S.cine===true,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
-    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true};
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true, neon:S.neon||'med'};
 }
 function saveGame(){
   if(!S.running) return;
@@ -451,14 +541,21 @@ function parseSave(json){
       syaw:Number(d.syaw)||0, spitch:clamp(Number(d.spitch)||0,-1.2,1.2),
       o2:clamp(Number(d.o2)||100,5,200), fuel:clamp(Number(d.fuel)||100,0,100),
       beacon:!!d.beacon, victoryShown:!!d.victoryShown,
+      /* pre-v9 saves: faction worlds default to faction-held, the rest neutral */
+      ctl:readCtl(d.ctl), fnHp:R.readFnodeHp(d.fnHp),
       rsp:(d.rsp&&PLANETS[d.rsp.pl]&&isFinite(+d.rsp.x)&&isFinite(+d.rsp.y)&&isFinite(+d.rsp.z))
         ?{pl:d.rsp.pl,x:+d.rsp.x,y:+d.rsp.y,z:+d.rsp.z}:null,
+      /* pre-v8 saves = veterans: intro complete, never replays */
+      intro:(d.v>=8&&d.intro)?{done:!!d.intro.done,step:d.intro.step|0,cineSeen:!!d.intro.cineSeen,granted:!!d.intro.granted}
+        :{done:true,step:99,cineSeen:true,granted:true},
+      cine:d.cine===true,
       pc:(d.pc&&SHIELDED[d.pc])?d.pc:(d.pvc?'verdant':null),
       sound:d.sound!==false,
       weapons:readWeapons(d.weapons),
       ammo:readAmmo(d.ammo),
       medkits:Math.max(0,d.medkits|0), headbob:d.headbob!==false,
-      fx:typeof d.fx==='boolean'?d.fx:null, amb:d.amb===true};
+      fx:typeof d.fx==='boolean'?d.fx:null, amb:d.amb===true,
+      neon:['low','med','high'].indexOf(d.neon)>=0?d.neon:null};
     if(Array.isArray(d.structures)){
       for(const s of d.structures){
         if(out.structures.length>=MAX_STRUCT) break;
@@ -496,12 +593,15 @@ function applySave(d){
   S.tier=d.tier; S.res=d.res; S.structures=d.structures; S.mode=d.mode; S.planet=d.planet;
   S.ppos=d.ppos; S.pyaw=d.pyaw; S.spos=d.spos; S.syaw=d.syaw; S.spitch=d.spitch;
   S.o2=d.o2; S.fuel=d.fuel; S.beacon=d.beacon; S.victoryShown=d.victoryShown;
+  S.ctl=d.ctl; S.fnHp=d.fnHp; updateCtlRings();
   S.respawnPt=d.rsp||null;
   S.station=d.station||[]; S.stationOnline=!!d.stationOnline;
   S.pendingCutscene=d.pc; SND.on=d.sound;
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
   if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
   S.amb=d.amb===true;
+  if(d.neon){ S.neon=d.neon; applyNeon(); }
+  S.intro=d.intro; S.cine=d.cine;
 }
 function exportSave(){
   const code=btoa(unescape(encodeURIComponent(JSON.stringify(buildSaveObj()))));
@@ -553,8 +653,53 @@ window.addEventListener('resize',()=>{
    renderer path, pixel-identical to pre-P4. Default: on for desktop, off for
    touch. Built lazily so fx-off devices never pay for the render targets. */
 function fxDefault(){ return !(('ontouchstart' in window)||navigator.maxTouchPoints>0); }
-const FX_EXPOSURE={rust:1.06,glacius:1.12,verdant:0.96,pelagos:1.02,space:1.0};
-let composer=null,renderPassFx=null,bloomPass=null;
+/* per-planet mood: ACES exposure + a gentle linear-space tint */
+const FX_MOOD={
+  rust:   {exposure:1.06, tint:[1.04,0.97,1.00]},
+  glacius:{exposure:1.12, tint:[0.96,1.00,1.08]},
+  verdant:{exposure:0.96, tint:[0.95,1.05,0.98]},
+  pelagos:{exposure:1.02, tint:[0.96,1.02,1.06]},
+  cinder: {exposure:1.04, tint:[1.07,0.96,0.94]},
+  umbra:  {exposure:1.00, tint:[1.02,0.96,1.08]},
+  noctis: {exposure:0.94, tint:[1.06,0.94,0.96]},
+  space:  {exposure:1.00, tint:[1.00,1.00,1.00]},
+};
+/* synthwave grade: saturation + magenta-highlight / teal-shadow split-tone,
+   applied in linear space before OutputPass tone-maps. fx-off never runs it. */
+const GRADE_SHADER={
+  uniforms:{ tDiffuse:{value:null}, sat:{value:1.18}, split:{value:0.10}, tint:{value:new THREE.Vector3(1,1,1)} },
+  vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader:[
+    'uniform sampler2D tDiffuse; uniform float sat; uniform float split; uniform vec3 tint;',
+    'varying vec2 vUv;',
+    'void main(){',
+    '  vec4 c=texture2D(tDiffuse,vUv);',
+    '  float l=dot(c.rgb,vec3(0.2126,0.7152,0.0722));',
+    '  c.rgb=mix(vec3(l),c.rgb,sat);',
+    '  float t=smoothstep(0.04,0.85,l);',
+    '  vec3 grade=mix(vec3(-0.20,0.10,0.14),vec3(0.22,-0.06,0.12),t);   // teal shadows -> magenta highlights',
+    '  c.rgb+=grade*split*(0.15+l);',
+    '  c.rgb=max(c.rgb,0.0)*tint;',
+    '  gl_FragColor=c;',
+    '}'].join('\n'),
+};
+let composer=null,renderPassFx=null,bloomPass=null,gradePass=null;
+/* Neon Intensity: one knob scaling the whole look (bloom, grade, night
+   emissive boost, nebula). Persisted in the solo save WITHOUT a version
+   bump — absent field just means the default. */
+const NEON_LEVELS={
+  low: {bloom:0.18, sat:1.08, split:0.06, nightK:0.25, neb:0.35},
+  med: {bloom:0.26, sat:1.18, split:0.10, nightK:0.40, neb:0.60},
+  high:{bloom:0.36, sat:1.30, split:0.15, nightK:0.55, neb:0.85},
+};
+let neonNightK=0.40;
+function applyNeon(){
+  const L=NEON_LEVELS[S.neon]||NEON_LEVELS.med;
+  if(bloomPass) bloomPass.strength=L.bloom;
+  if(gradePass){ gradePass.uniforms.sat.value=L.sat; gradePass.uniforms.split.value=L.split; }
+  if(nebula) nebula.material.opacity=L.neb;
+  neonNightK=L.nightK;
+}
 function buildComposer(){
   const half=!fxDefault();                       // touch devices: half-res bloom
   composer=new EffectComposer(renderer);
@@ -563,12 +708,14 @@ function buildComposer(){
      lifts emissive surfaces and hot pixels, it must not double the halos */
   bloomPass=new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth>>(half?1:0),window.innerHeight>>(half?1:0)),0.26,0.25,0.88);
+  gradePass=new ShaderPass(GRADE_SHADER);
   composer.addPass(renderPassFx);
   composer.addPass(bloomPass);
+  composer.addPass(gradePass);
   composer.addPass(new OutputPass());
 }
 function applyFx(){
-  if(S.fx&&!composer) buildComposer();
+  if(S.fx&&!composer){ buildComposer(); applyNeon(); }
   renderer.toneMapping=S.fx?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;
 }
 
@@ -608,9 +755,14 @@ const MAT={
   emisR:emisMat(0xff7a6a,0xcc2210,2.0),
   emisG:emisMat(0x8affa8,0x10cc44,2.0),
   emisB:emisMat(0x7aa8ff,0x1040cc,2.0),
+  /* Neon Horizon spectrum — hot accents that the bloom threshold catches */
+  emisM:emisMat(0xff5ad0,0xcc1080,2.1),    // hot magenta
+  emisP:emisMat(0xb46aff,0x6a10cc,2.1),    // electric purple
+  emisPk:emisMat(0xff7ab8,0xcc1060,2.1),   // hot pink
+  emisT:emisMat(0x5affd8,0x10ccaa,2.1),    // neon teal
   beam:new THREE.MeshBasicMaterial({color:0x9fffc8,transparent:true,opacity:0.28,blending:THREE.AdditiveBlending,depthWrite:false}),
   lightcone:new THREE.MeshBasicMaterial({color:0xeaf6ff,transparent:true,opacity:0.14,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
-  holo:new THREE.MeshBasicMaterial({color:0x5fe0ff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
+  holo:new THREE.MeshBasicMaterial({color:0xb46aff,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}),
   flagM:emisMat(0xff6a4a,0x661505,0.6),
   pot:stdMat(0x7a5a40,{roughness:0.9,metalness:0.05}),
   plant:emisMat(0x4adf6a,0x0a5520,0.7),
@@ -705,6 +857,34 @@ spaceScene.background=new THREE.Color(0x01030a);
   stars.frustumCulled=false;
   spaceScene.add(stars);
 }
+/* nebula backdrop (Neon Horizon P4): additive procedural color fields on a
+   far BackSide sphere — deep space stays black, bands of magenta/violet/teal
+   drift across it. One draw call, one 512^2 canvas texture. */
+let nebula=null;
+{
+  const cv=document.createElement('canvas'); cv.width=cv.height=512;
+  const g2=cv.getContext('2d');
+  g2.fillStyle='#000'; g2.fillRect(0,0,512,512);
+  const blobs=[
+    [120,150,150,'rgba(255,60,190,0.30)'],   // magenta
+    [330,90,120,'rgba(140,70,255,0.26)'],    // violet
+    [410,300,160,'rgba(40,230,210,0.20)'],   // teal
+    [200,380,130,'rgba(255,110,200,0.20)'],  // pink
+    [60,330,100,'rgba(80,90,255,0.18)'],     // deep blue
+    [470,450,90,'rgba(255,60,120,0.16)'],    // hot red-pink
+  ];
+  for(const b of blobs){
+    const rg=g2.createRadialGradient(b[0],b[1],0,b[0],b[1],b[2]);
+    rg.addColorStop(0,b[3]); rg.addColorStop(1,'rgba(0,0,0,0)');
+    g2.fillStyle=rg; g2.beginPath(); g2.arc(b[0],b[1],b[2],0,6.283); g2.fill();
+  }
+  nebula=new THREE.Mesh(new THREE.SphereGeometry(2600,24,16),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cv),side:THREE.BackSide,transparent:true,
+      opacity:0.6,depthWrite:false,blending:THREE.AdditiveBlending,fog:false}));
+  nebula.frustumCulled=false;
+  nebula.renderOrder=-1;
+  spaceScene.add(nebula);
+}
 /* sun */
 {
   const sun=new THREE.Mesh(new THREE.SphereGeometry(38,24,18),new THREE.MeshBasicMaterial({color:0xffe8b0}));
@@ -730,6 +910,8 @@ const spacePlanets={};
 const SHIELDED={ verdant:{tier:3,col:0xb05aff,wire:0xd08aff,res:'Biolume'},
                  pelagos:{tier:5,col:0x36c6ff,wire:0x8af0ff,res:'Abyssal Pearl'} };
 const shieldGroups={};
+const ctlRings={};   // per-planet control-state ring (Conquest): faction red / yours green
+const CTL_COLORS={faction:0xff5040, yours:0x5aff8a};
 for(const key in PLANETS){
   const p=PLANETS[key];
   const m=new THREE.Mesh(new THREE.SphereGeometry(p.r,28,20),
@@ -739,6 +921,18 @@ for(const key in PLANETS){
   const atmo=makeGlow('#'+new THREE.Color(p.surfCol).offsetHSL(0,0.1,0.25).getHexString(),p.r*3.4);
   atmo.position.copy(m.position); spaceScene.add(atmo);
   spacePlanets[key]=m;
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(p.r*1.5,p.r*0.045,8,48),
+    new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
+  ring.rotation.x=Math.PI/2; ring.position.copy(m.position); ring.visible=false;
+  spaceScene.add(ring); ctlRings[key]=ring;
+}
+function planetCtl(pl){ return S.ctl[pl]||'neutral'; }
+function updateCtlRings(){
+  for(const key in ctlRings){
+    const c=planetCtl(key), ring=ctlRings[key];
+    ring.visible=c!=='neutral';
+    if(ring.visible) ring.material.color.set(CTL_COLORS[c]);
+  }
 }
 for(const key in SHIELDED){ /* signal-interference shields (verdant, pelagos) */
   const cfg=SHIELDED[key], p=PLANETS[key];
@@ -985,6 +1179,81 @@ function updateWater(){
   pos.needsUpdate=true;
 }
 
+/* ---------- starter-world points of interest (First Light P2) ----------
+   Hand-authored landmarks near the Rust landing zone so a new player never
+   spawns staring at empty desert: a glowing crystal spire (visible from
+   spawn), a crashed derelict, and alien ruins. Scene objects, not
+   buildables; simple cylinder colliders keep the player out of them. */
+const POIM={
+  crystal:emisMat(0xffa050,0xb34400,1.5),
+  hull:stdMat(0x3c4450,{roughness:0.55,metalness:0.7}),
+  scorch:stdMat(0x241a14,{roughness:0.95,metalness:0.1}),
+  stone:stdMat(0x6b4632,{roughness:0.9,metalness:0.05}),
+  rune:new THREE.MeshBasicMaterial({color:0x7fd6f5,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}),
+};
+function buildStarterPOIs(g,p){
+  surf.poi=[]; surf.poiCols=[];
+  const T=(x,z)=>terrainH(x,z,p);
+  const add=(m)=>{ g.add(m); return m; };
+  /* --- crystal spire (75,-10): tall, glowing, clear of the ship from spawn --- */
+  {
+    const x=75,z=-10,y=T(x,z);
+    for(let i=0;i<5;i++){
+      const a=i*1.26, r=i===0?0:2.4;
+      const cx=x+Math.cos(a)*r, cz=z+Math.sin(a)*r;
+      const h=i===0?15:6+i*1.6;
+      const c=add(new THREE.Mesh(GEO.ico,POIM.crystal));
+      c.position.set(cx,T(cx,cz)+h*0.42,cz);
+      c.scale.set(1.6+(i===0?1.2:0),h,1.6+(i===0?1.2:0));
+      c.rotation.set(0.12*((i%3)-1),a,0.1*((i%2)?1:-1));
+    }
+    const gl=makeGlow('#ffb070',16); gl.position.set(x,y+10,z); g.add(gl);
+    surf.poi.push({x,z,label:'✦',col:'#ffb070',name:'Crystal Spire'});
+    surf.poiCols.push({x,z,r:3.4});
+    surf.spire={x,z};
+  }
+  /* --- crashed derelict (-65,45): half-buried hull, broken wing, sparks --- */
+  {
+    const x=-65,z=45,y=T(x,z);
+    const hull=add(new THREE.Mesh(GEO.cyl,POIM.hull));
+    hull.position.set(x,y+1.6,z); hull.scale.set(3.2,16,3.2);
+    hull.rotation.set(Math.PI/2-0.18,0,0.5);
+    const nose=add(new THREE.Mesh(GEO.cone,POIM.hull));
+    nose.position.set(x+1.2,y+2.8,z-7.6); nose.scale.set(2.6,4,2.6); nose.rotation.set(Math.PI/2-0.18,0,0.5);
+    const wing=add(new THREE.Mesh(GEO.box,POIM.scorch));
+    wing.position.set(x-6,y+0.7,z+3); wing.scale.set(7,0.4,3); wing.rotation.set(0.1,0.7,0.35);
+    for(let i=0;i<5;i++){
+      const d=add(new THREE.Mesh(GEO.box,POIM.scorch));
+      const a=i*1.3, r=6+i*2;
+      d.position.set(x+Math.cos(a)*r,T(x+Math.cos(a)*r,z+Math.sin(a)*r)+0.3,z+Math.sin(a)*r);
+      d.scale.set(0.8+i*0.2,0.5,0.7); d.rotation.set(0,a,0.2);
+    }
+    const spark=add(new THREE.Mesh(GEO.sphere,MAT.emisO));
+    spark.position.set(x+1.4,y+3.4,z+4.6); spark.scale.setScalar(0.4);
+    const gl=makeGlow('#ffb070',6); gl.position.set(x+1.4,y+3.6,z+4.6); g.add(gl);
+    surf.poi.push({x,z,label:'☠',col:'#c8a98a',name:'Derelict Wreck'});
+    surf.poiCols.push({x,z,r:4.2});
+  }
+  /* --- alien ruins (-45,-75): pillar ring + humming monolith --- */
+  {
+    const x=-45,z=-75;
+    for(let i=0;i<7;i++){
+      const a=i*0.897, px=x+Math.cos(a)*9, pz=z+Math.sin(a)*9, py=T(px,pz);
+      const pil=add(new THREE.Mesh(GEO.cyl,POIM.stone));
+      if(i%3===2){ pil.position.set(px,py+0.6,pz); pil.scale.set(0.9,4.6,0.9); pil.rotation.set(0,a,1.35); }   // toppled
+      else { pil.position.set(px,py+2.2,pz); pil.scale.set(0.9,4.6,0.9); surf.poiCols.push({x:px,z:pz,r:1.0}); }
+    }
+    const my=T(x,z);
+    const mono=add(new THREE.Mesh(GEO.box,POIM.stone));
+    mono.position.set(x,my+3.4,z); mono.scale.set(2.2,6.8,1.2); mono.rotation.y=0.5;
+    const rune=add(new THREE.Mesh(GEO.box,POIM.rune));
+    rune.position.set(x,my+3.4,z); rune.scale.set(2.35,5.4,1.0); rune.rotation.y=0.5;
+    const gl=makeGlow('#7fd6f5',7); gl.position.set(x,my+6.4,z); g.add(gl);
+    surf.poi.push({x,z,label:'◬',col:'#9fdcf5',name:'Ancient Ruins'});
+    surf.poiCols.push({x,z,r:2});
+  }
+}
+
 /* ---------- ambient planet atmosphere (Outpost P5) ----------
    One small Points cloud (dust/snow/spores/mist per PLANETS.ambient data)
    wrapped in a 50m box around the player. Near-free: positions stream once
@@ -1121,7 +1390,7 @@ function buildSurface(planetKey){
   /* resource nodes (instanced crystals) */
   {
     surf.nodes=[];
-    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,1.9),layout.nodes.length);
+    const im=new THREE.InstancedMesh(GEO.ico,emisMat(p.nodeCol,p.nodeEmis,2.1),layout.nodes.length);
     const d=new THREE.Object3D();
     layout.nodes.forEach((nd,i)=>{
       surf.nodes.push({x:nd.x,y:nd.y,z:nd.z,s:nd.s,alive:true,respawn:0,rot:nd.rot});
@@ -1142,6 +1411,9 @@ function buildSurface(planetKey){
   const sx=8, sz=2;
   surf.shipPos.set(sx,terrainH(sx,sz,p)+2.3,sz);
 
+  surf.poi=[]; surf.poiCols=[]; surf.spire=null;
+  if(p.starter) buildStarterPOIs(g,p);
+  buildFnode(g,p);
   surfScene.add(g);
   buildAmbient();
   SND.ambStart(planetKey);
@@ -1280,6 +1552,17 @@ function collidePlayer(){
     if(d<3.1&&player.y<surf.shipPos.y+1.6){
       const f=d<0.001?3.1:3.1/d;
       player.x=surf.shipPos.x+dsx*f; player.z=surf.shipPos.z+dsz*f;
+    }
+  }
+  /* starter-world POI hulls (cylinders) */
+  if(surf.poiCols&&surf.poiCols.length){
+    for(const c of surf.poiCols){
+      const dx=player.x-c.x, dz=player.z-c.z;
+      const d=Math.hypot(dx,dz), rr=c.r+PR;
+      if(d<rr){
+        if(d<0.001){ player.x=c.x+rr; }                 // dead center: push out along +x
+        else { const f=rr/d; player.x=c.x+dx*f; player.z=c.z+dz*f; }
+      }
     }
   }
   for(let it=0;it<2;it++){
@@ -1489,6 +1772,7 @@ function applyNodeDead(pl,i,byMe){
     }
   }
   if(byMe&&!NET.active){   // co-op: the server grants and confirms via prog
+    missionEvent('mine');
     const key=PLANETS[pl].res, amt=4+Math.floor(Math.random()*3);
     S.res[key]=Math.max(S.res[key],Math.min(carryCap(),S.res[key]+amt));
     SND.collect();
@@ -1533,6 +1817,12 @@ function selectBuild(t){
   const def=CAT[t];
   if(def.tier>0&&def.tier>S.tier){ SND.denied(); showToast('Requires Tier '+def.tier); return; }
   if(t==='beacon'&&S.beacon){ showToast('The Beacon is already placed'); return; }
+  if(t==='claimpost'){
+    /* check everything except placement range (the ghost handles that) */
+    const p=curP(), fn=p.fnode||{x:0,z:0};
+    const err=R.claimError(p,planetCtl(S.planet),S.fnHp[S.planet]||0,fn.x,fn.z);
+    if(err){ showToast(err); SND.denied(); return; }
+  }
   buildSel=t; removeMode=false;
   if(ghost){ surfScene.remove(ghost); ghost=null; }
   ghost=new THREE.Group();
@@ -1602,7 +1892,8 @@ function updateGhost(){
   ghost.position.copy(ghostPos);
   const inB=Math.hypot(gx,gz)<WORLD_R-6;
   const dx=gx-player.x,dz=gz-player.z;
-  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz);
+  const claimBad=buildSel==='claimpost'&&R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,gx,gz)!==null;
+  ghostOK=inB&&(dx*dx+dz*dz<500)&&canAfford(def.cost)&&structCount()<MAX_STRUCT&&!occupiedAt(gx,gy,gz)&&!claimBad;
   ghost.children.forEach(m=>m.material=ghostOK?MAT.ghostOk:MAT.ghostBad);
 }
 function placeStructure(){
@@ -1612,6 +1903,10 @@ function placeStructure(){
   if(buildSel==='turret'){ let mine=0; for(const s of S.structures) if(s.t==='turret'&&s.owner===myPid()) mine++;
     if(mine>=8){ showToast('Turret limit reached (8 per player)'); SND.denied(); return; } }
   if(!canAfford(def.cost)){ showToast('Need '+costStr(def.cost)); SND.denied(); return; }
+  if(buildSel==='claimpost'){
+    const err=R.claimError(curP(),planetCtl(S.planet),S.fnHp[S.planet]||0,ghostPos.x,ghostPos.z);
+    if(err){ showToast(err); SND.denied(); return; }
+  }
   if(!ghostOK){ SND.denied(); return; }
   if(NET.active){
     NET.send({t:'place',st:{t:buildSel,pl:S.planet,x:+ghostPos.x.toFixed(2),y:+ghostPos.y.toFixed(2),z:+ghostPos.z.toFixed(2),r:ghostPlaceRot}});
@@ -1633,10 +1928,21 @@ function applyPlaced(m,byMe){
     spawnBurst(st.x,st.y+1,st.z,0x7fd6ff,12,3,3,0.6,5);
   } else updateCapNote();
   if(byMe){ if(!NET.active) payCost(def.cost); SND.place(); }   // co-op: server pays, prog confirms
+  if(byMe) missionEvent('place',st);
   if(st.t==='beacon'){
     S.beacon=true;
     if(byMe) cancelBuild();
     triggerVictory(); saveGame(); return;
+  }
+  if(st.t==='claimpost'){
+    if(byMe) cancelBuild();
+    /* solo: flip the planet here; in co-op the server flips and broadcasts ctl */
+    if(!NET.active&&planetCtl(st.pl)==='faction'){
+      const tier=facTier(PLANETS[st.pl]);
+      if(tier&&tier.reward){ for(const k in tier.reward) S.res[k]=Math.min(carryCap(),(S.res[k]|0)+tier.reward[k]); updateHUDRes(); }
+      applyCtl(st.pl,'yours','self');
+    }
+    saveGame(); return;
   }
   if(byMe){
     if(!canAfford(def.cost)){ cancelBuild(); showToast('Out of resources for '+def.name); }
@@ -1895,7 +2201,8 @@ SND.ambStart=function(planet){
     for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
     const src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
     const f=ctx.createBiquadFilter(); f.type='lowpass';
-    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05]}[planet]||[420,0.04];
+    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05],
+               cinder:[260,0.05],umbra:[620,0.04],noctis:[180,0.045]}[planet]||[420,0.04];
     f.frequency.value=cfg[0];
     const g=ctx.createGain();
     g.gain.setValueAtTime(0.0001,ctx.currentTime);
@@ -2054,13 +2361,48 @@ function doAttack(w,wp,kind){
       hitDist=tca; critTarget=c; hitPid=null;
     }
   }
-  let end = critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
+  /* faction drones — same hit competition as critters */
+  let droneTarget=null;
+  for(const d of drones){
+    if(d.pl!==S.planet) continue;
+    const cx=d.x-_cw.x, cyv=d.y-_cw.y, cz=d.z-_cw.z;
+    const tca=cx*_cf.x+cyv*_cf.y+cz*_cf.z;
+    if(tca<0||tca>hitDist) continue;
+    if(kind==='melee'){
+      const dd=Math.hypot(cx,cyv,cz)||1;
+      if((cx/dd)*_cf.x+(cyv/dd)*_cf.y+(cz/dd)*_cf.z<1-w.arc) continue;
+      if(dd>w.range) continue;
+      hitDist=dd; droneTarget=d; critTarget=null; hitPid=null;
+    } else {
+      const perp2=cx*cx+cyv*cyv+cz*cz-tca*tca;
+      if(perp2>0.9*0.9) continue;
+      hitDist=tca; droneTarget=d; critTarget=null; hitPid=null;
+    }
+  }
+  /* faction Command Node core — a big, forgiving target */
+  let fnodeAim=null;
+  if(surf.fnode&&fnodeAlive()){
+    const f=surf.fnode;
+    const cx=f.x-_cw.x, cyv=(f.y+5.5)-_cw.y, cz=f.z-_cw.z;
+    const tca=cx*_cf.x+cyv*_cf.y+cz*_cf.z;
+    if(tca>0&&tca<=hitDist){
+      const perp2=cx*cx+cyv*cyv+cz*cz-tca*tca;
+      const hitR=kind==='melee'?3.2:2.6;
+      const dd=Math.hypot(cx,cyv,cz);
+      if(perp2<hitR*hitR&&(kind!=='melee'||dd<w.range+3)){
+        hitDist=tca; fnodeAim=[f.x,f.y+5.5,f.z]; droneTarget=null; critTarget=null; hitPid=null;
+      }
+    }
+  }
+  let end = fnodeAim ? fnodeAim
+            : droneTarget ? [droneTarget.x,droneTarget.y,droneTarget.z]
+            : critTarget ? [critTarget.x,critTarget.y+0.45,critTarget.z]
             : hitPid!==null ? avatarHitCenter(remotes.get(hitPid))
             : (kind==='ranged' ? aimPoint(w.range) : aimPoint(w.range*0.7));
   /* deployable shield walls block ranged shots */
   if(kind==='ranged'){
     const b=shotBlocked([_cw.x,_cw.y,_cw.z],end);
-    if(b){ end=b; hitPid=null; critTarget=null; spawnBurst(b[0],b[1],b[2],0x7fdcff,9,2.4,2.4,0.4,2); SND.shieldHit(); }
+    if(b){ end=b; hitPid=null; critTarget=null; droneTarget=null; fnodeAim=null; spawnBurst(b[0],b[1],b[2],0x7fdcff,9,2.4,2.4,0.4,2); SND.shieldHit(); }
   }
   if(kind==='ranged') tracerFx([_cw.x+_cf.x*0.45,_cw.y+_cf.y*0.45-0.08,_cw.z+_cf.z*0.45],end,w.col,w.lance?0.16:0);
   else spawnBurst(end[0],end[1],end[2],0x9feaff,5,2,2,0.3,1);
@@ -2070,6 +2412,8 @@ function doAttack(w,wp,kind){
       target:hitPid!==null?hitPid:undefined});   // damage is computed server-side
   }
   if(critTarget) hitCritter(critTarget,w.dmg,end,wp);
+  else if(droneTarget) hitDrone(droneTarget,w.dmg,end,wp);
+  else if(fnodeAim) hitFnode(w.dmg,end,wp);
 }
 function muzzleAt(pos,col){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW_TEX,color:col,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -2206,7 +2550,7 @@ function updateRover(dt){
   /* exit */
   if(justE){ exitRover(); justE=false; }
   /* world timers still run while driving */
-  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateHeavyWeapons(dt); updateWater();
+  updateNodes(dt); updateMeteors(dt); updateLoot(dt); updateTurrets(dt); updateRoverMeshes(dt); updateCritters(dt); updateDrones(dt); updateFnode(dt); updateHeavyWeapons(dt); updateWater();
   dayClock+=dt; applyDayNight();
   S.ppos=[player.x,player.y,player.z]; S.pyaw=st.ry||0;
   renderRoverCam();
@@ -2692,7 +3036,314 @@ function soloSpawnInitial(){
   if(NET.active) return;
   const n=Math.min(CRIT_CAP,6+Math.floor(Math.random()*3));
   for(let i=0;i<n;i++) critSpawnSolo();
+  /* starter world: guarantee visible, lively wildlife near the landing zone */
+  if(curP().starter){
+    const types=CRIT_BY_PLANET[S.planet]||['skitterer'];
+    for(let i=0;i<3;i++){
+      const ang=i*2.1+0.5, rad=20+i*7;
+      const x=player.x+Math.cos(ang)*rad, z=player.z+Math.sin(ang)*rad;
+      if(inSafeZone(x,z)||Math.hypot(x,z)>WORLD_R-10) continue;
+      spawnCritterEntity('cs'+(soloCritId++),types[i%types.length],x,z);
+    }
+  }
   critSpawnT=4+Math.random()*6;
+}
+
+/* ============================================================
+   FACTION FORCES (Conquest P2) — drone defenders + Command Node.
+   Drones are deliberately dumb: detect within a radius, close to
+   ~9m, orbit, fire on a cooldown. Server owns spawns/positions/HP
+   in co-op (coarse droneSnap, like critters); solo runs the same
+   logic locally. Destroyed = sparks + shutdown, never gore.
+   ============================================================ */
+SND.droneShoot=function(){ this.tone(1240,0.07,'square',0.045,520); };
+SND.droneDie=function(){ this.tone(880,0.3,'sawtooth',0.07,90); setTimeout(()=>this.tone(220,0.25,'square',0.05,40),120); };
+SND.droneAlert=function(){ this.tone(740,0.09,'square',0.05); setTimeout(()=>this.tone(990,0.11,'square',0.05),110); };
+SND.fnodeHit=function(){ this.tone(360,0.1,'square',0.05,220); };
+SND.fnodeDown=function(){ this.tone(60,0.8,'sawtooth',0.16,24); setTimeout(()=>this.tone(1800,1.2,'sine',0.05,80),150); setTimeout(()=>this.tone(120,0.5,'square',0.08,40),350); };
+
+const drones=[];                  // client entities (solo + MP)
+let droneSpawnT=0, soloDroneId=1, droneAlerted=false;
+const DRONE_MAT={
+  body:stdMat(0x3a3540,{roughness:0.35,metalness:0.85}),
+  vane:stdMat(0x55505e,{roughness:0.3,metalness:0.75}),
+  eyeIdle:emisMat(0xff7a5a,0x991505,1.2),
+  eyeHot:emisMat(0xff3a2a,0xee1500,2.6),
+};
+function curFacTier(){ return facTier(curP()); }
+function fnodeAlive(pl){ return (S.fnHp[pl||S.planet]||0)>0; }
+function buildDrone(type){
+  const def=DRONES[type], g=new THREE.Group();
+  let eye;
+  if(type==='sentry'){
+    const pod=new THREE.Mesh(GEO.cyl,DRONE_MAT.body); pod.scale.set(0.9,0.7,0.9); g.add(pod);
+    const ring=new THREE.Mesh(GEO.torus,DRONE_MAT.vane); ring.scale.set(1.5,1.5,1.5); ring.rotation.x=Math.PI/2; g.add(ring);
+    const cap=new THREE.Mesh(GEO.dome,DRONE_MAT.vane); cap.scale.set(0.5,0.3,0.5); cap.position.y=0.35; g.add(cap);
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.3,0.3,0.3); eye.position.set(0,0,0.46); g.add(eye);
+  } else if(type==='heavy'){
+    const body=new THREE.Mesh(GEO.box,DRONE_MAT.body); body.scale.set(1.3,0.6,1.5); g.add(body);
+    const top=new THREE.Mesh(GEO.dome,DRONE_MAT.vane); top.scale.set(0.65,0.4,0.75); top.position.y=0.3; g.add(top);
+    for(const sx of [-0.8,0.8]){ const v=new THREE.Mesh(GEO.box,DRONE_MAT.vane); v.scale.set(0.5,0.12,1.0); v.position.set(sx,0.1,0); v.rotation.z=sx*0.5; g.add(v); }
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.34,0.34,0.34); eye.position.set(0,0.05,0.78); g.add(eye);
+  } else { /* stinger */
+    const body=new THREE.Mesh(GEO.sphere,DRONE_MAT.body); body.scale.set(0.55,0.45,0.65); g.add(body);
+    for(const sx of [-0.45,0.45]){ const v=new THREE.Mesh(GEO.box,DRONE_MAT.vane); v.scale.set(0.4,0.06,0.5); v.position.set(sx,0.12,0); v.rotation.z=sx*0.9; g.add(v); }
+    eye=new THREE.Mesh(GEO.sphere,DRONE_MAT.eyeIdle); eye.scale.set(0.22,0.22,0.22); eye.position.set(0,0,0.34); g.add(eye);
+  }
+  const gl=makeGlow('#ff5a4a',1.6); gl.position.y=-0.3; g.add(gl);
+  return {group:g,eye};
+}
+function droneById(id){ for(const d of drones) if(d.id===id) return d; return null; }
+function spawnDroneEntity(id,type,x,z){
+  const def=DRONES[type]; if(!def) return null;
+  const built=buildDrone(type);
+  surfScene.add(built.group);
+  const tier=curFacTier()||FACTION_TIERS[0];
+  const d={id,type,def,pl:S.planet,group:built.group,eye:built.eye,
+    x,z,y:0,hd:Math.random()*6.283,wt:1+Math.random()*2,st:0,hp:Math.round(def.hp*tier.hpMul),
+    fireT:1+Math.random(),bobP:Math.random()*6,sx:undefined,sz:undefined};
+  built.group.position.set(x,critGroundY(x,z)+def.hover,z);
+  drones.push(d); return d;
+}
+function removeDroneEntity(id){
+  const i=drones.findIndex(d=>d.id===id); if(i<0) return;
+  surfScene.remove(drones[i].group);
+  drones.splice(i,1);
+}
+function clearDrones(){ for(let i=drones.length-1;i>=0;i--) removeDroneEntity(drones[i].id); droneAlerted=false; }
+function droneDeathFx(x,y,z){
+  spawnBurst(x,y,z,0xffa040,18,3.5,3,0.7,5);      // sparks
+  spawnBurst(x,y,z,0x8a8a92,10,2,2.5,1.2,1);      // smoke puffs
+  spawnBurst(x,y,z,0xff5a4a,8,2.5,2,0.4,3);
+  SND.droneDie();
+}
+/* shared mesh placement + hover animation */
+function updateDroneMesh(d,dt){
+  const def=d.def;
+  d.bobP+=dt*1.8;
+  d.y=terrainH(d.x,d.z,curP())+def.hover+Math.sin(d.bobP)*(def.bob||0.2);
+  d.group.position.set(d.x,d.y,d.z);
+  /* face heading (or the player when engaged) */
+  const yaw=d.st?Math.atan2(player.x-d.x,player.z-d.z):Math.atan2(Math.cos(d.hd),Math.sin(d.hd));
+  let dy=yaw-d.group.rotation.y; dy=((dy+Math.PI)%6.283+6.283)%6.283-Math.PI;
+  d.group.rotation.y+=dy*Math.min(1,dt*(d.st?8:3));
+  d.eye.material=d.st?DRONE_MAT.eyeHot:DRONE_MAT.eyeIdle;
+  if(d.st) d.group.rotation.z=Math.sin(performance.now()*0.012)*0.06; else d.group.rotation.z*=0.9;
+}
+function droneFireFx(d,tp){
+  tracerFx([d.x,d.y,d.z],tp,0xff4a5a);
+  const dx=player.x-d.x,dz=player.z-d.z;
+  if(dx*dx+dz*dz<2500) SND.droneShoot();
+}
+/* one alert ping the first time the defense notices you (per landing) */
+function droneAlertPing(){
+  if(droneAlerted) return; droneAlerted=true;
+  SND.droneAlert(); showToast('⚠ Faction defense drones have detected you');
+}
+/* ---- solo sim (identical numbers to the server) ---- */
+function updateDronesSolo(dt){
+  const p=curP();
+  if(!p.fac||planetCtl(S.planet)!=='faction') return;
+  const tier=curFacTier(), fn=p.fnode;
+  /* population: instant seed on arrival, slow upkeep after */
+  if(fnodeAlive()){
+    if(drones.length===0){
+      for(let i=0;i<tier.sentries;i++){ const a=i*(Math.PI*2/tier.sentries)+0.7;
+        spawnDroneEntity('ds'+(soloDroneId++),'sentry',fn.x+Math.cos(a)*9,fn.z+Math.sin(a)*9); }
+      for(let i=0;i<tier.count&&drones.length<DRONE_CAP;i++){
+        const type=tier.roam[i%tier.roam.length];
+        const a=Math.random()*6.283,r=12+Math.random()*DRONE_PATROL;
+        spawnDroneEntity('ds'+(soloDroneId++),type,fn.x+Math.cos(a)*r,fn.z+Math.sin(a)*r);
+      }
+      droneSpawnT=4;
+    } else if(drones.length<tier.sentries+tier.count&&drones.length<DRONE_CAP){
+      droneSpawnT-=dt;
+      if(droneSpawnT<=0){
+        droneSpawnT=3+Math.random()*4;
+        let sentries=0; for(const d of drones) if(d.def.turret) sentries++;
+        if(sentries<tier.sentries){ const a=sentries*(Math.PI*2/tier.sentries)+0.7;
+          spawnDroneEntity('ds'+(soloDroneId++),'sentry',fn.x+Math.cos(a)*9,fn.z+Math.sin(a)*9); }
+        else { const type=tier.roam[Math.floor(Math.random()*tier.roam.length)];
+          const a=Math.random()*6.283,r=12+Math.random()*DRONE_PATROL;
+          spawnDroneEntity('ds'+(soloDroneId++),type,fn.x+Math.cos(a)*r,fn.z+Math.sin(a)*r); }
+      }
+    }
+  }
+  const targetable=player.invuln<=0&&!inSafeZone(player.x,player.z)&&!driving;
+  for(const d of drones){
+    const def=d.def;
+    const dx=d.x-player.x, dz=d.z-player.z, dist=Math.hypot(dx,dz);
+    const engaged=targetable&&dist<def.detectR;
+    if(engaged){ if(!d.st) droneAlertPing(); d.st=1; }
+    else if(d.st&&(!targetable||dist>def.detectR*1.4)) d.st=0;
+    if(!def.turret){
+      if(d.st&&targetable){
+        const dirx=-dx/(dist||1), dirz=-dz/(dist||1);
+        if(dist>9){ d.x+=dirx*def.speed*dt; d.z+=dirz*def.speed*dt; }
+        else { d.x+=-dirz*def.speed*0.6*dt; d.z+=dirx*def.speed*0.6*dt; }
+      } else {
+        d.wt-=dt;
+        if(d.wt<=0){ d.wt=1.5+Math.random()*2.5; d.hd=Math.random()*6.283; }
+        d.x+=Math.cos(d.hd)*def.speed*0.4*dt; d.z+=Math.sin(d.hd)*def.speed*0.4*dt;
+        const hx=d.x-fn.x,hz=d.z-fn.z,hd2=Math.hypot(hx,hz);
+        if(hd2>DRONE_PATROL){ d.x=fn.x+hx/hd2*DRONE_PATROL; d.z=fn.z+hz/hd2*DRONE_PATROL; d.hd+=Math.PI; }
+      }
+      const lx=d.x-fn.x,lz=d.z-fn.z,ld=Math.hypot(lx,lz);
+      if(ld>DRONE_LEASH){ d.x=fn.x+lx/ld*DRONE_LEASH; d.z=fn.z+lz/ld*DRONE_LEASH; }
+    }
+    d.fireT-=dt;
+    if(d.st&&targetable&&dist<def.range&&d.fireT<=0){
+      d.fireT=def.fireCd;
+      droneFireFx(d,[player.x,player.y+1,player.z]);
+      applyDamageToSelf(Math.round(def.dmg*(curFacTier()||{dmgMul:1}).dmgMul));
+    }
+    updateDroneMesh(d,dt);
+  }
+}
+/* ---- MP: server snapshots, client interpolation ---- */
+function applyDroneSnap(pl,list){
+  if(!NET.active) return;
+  if(pl!==S.planet||S.mode!=='surface') return;
+  const seen=new Set();
+  for(const it of list){
+    if(!DRONES[it.ty]) continue;
+    seen.add(it.id);
+    let d=droneById(it.id);
+    if(!d) d=spawnDroneEntity(it.id,it.ty,it.x,it.z);
+    if(d){ d.sx=it.x; d.sz=it.z;
+      if(it.st&&!d.st) droneAlertPing();
+      d.st=it.st|0; }
+  }
+  for(let i=drones.length-1;i>=0;i--) if(!seen.has(drones[i].id)) removeDroneEntity(drones[i].id);
+}
+function updateDronesMP(dt){
+  for(const d of drones){
+    if(d.sx===undefined){ updateDroneMesh(d,dt); continue; }
+    const k=Math.min(1,dt*6);
+    const ox=d.x;
+    d.x=lerp(d.x,d.sx,k); d.z=lerp(d.z,d.sz,k);
+    if(Math.abs(d.x-ox)>0.005) d.hd=Math.atan2(d.x-ox,0.001);
+    updateDroneMesh(d,dt);
+  }
+}
+function updateDrones(dt){ if(NET.active) updateDronesMP(dt); else updateDronesSolo(dt); }
+function onDroneDead(m){
+  const d=droneById(m.id);
+  const x=d?d.x:m.x, z=d?d.z:m.z, y=d?d.y:terrainH(m.x,m.z,curP())+1.5;
+  droneDeathFx(x,y,z);
+  if(d) removeDroneEntity(m.id);
+  /* the Ferrite salvage arrives via the server's prog snapshot */
+}
+function onDFire(m){
+  if(S.mode!=='surface') return;
+  const d=droneById(m.id);
+  if(d&&Array.isArray(m.p)) droneFireFx(d,m.p);
+  /* damage (if we were the target) arrives via the server 'hurt' message */
+}
+/* damage to a drone (server-authoritative in MP) */
+function damageDrone(d,dmg,wp){
+  if(NET.active){ NET.send({t:'droneHit',id:d.id,wp:wp===undefined?S.slot:wp}); d.st=1; return; }
+  d.hp-=dmg; d.st=1;
+  if(d.hp<=0){
+    const r=d.def.fe, n=r[0]+Math.floor(Math.random()*(r[1]-r[0]+1));
+    droneDeathFx(d.x,d.y,d.z);
+    S.res.fe=Math.min(carryCap(),(S.res.fe|0)+n);
+    updateHUDRes(); SND.collect(); showToast('+'+n+' Ferrite salvaged');
+    removeDroneEntity(d.id);
+  }
+}
+function hitDrone(d,dmg,pos,wp){
+  spawnBurst(pos[0],pos[1],pos[2],0xffc060,6,1.8,1.8,0.3,2);
+  damageDrone(d,dmg,wp);
+}
+/* ---- Command Node: the objective the drones guard ---- */
+const FNODE_MAT={
+  base:stdMat(0x2a242c,{roughness:0.45,metalness:0.85}),
+  fin:stdMat(0x453a44,{roughness:0.35,metalness:0.7}),
+  coreOn:emisMat(0xff5a3a,0xcc1505,2.4),
+  coreOff:stdMat(0x2e1a16,{roughness:0.7,metalness:0.3}),
+  ringM:new THREE.MeshBasicMaterial({color:0xff5040,transparent:true,opacity:0.22,side:THREE.DoubleSide,depthWrite:false}),
+};
+function buildFnode(g,p){
+  surf.fnode=null;
+  if(!p.fac) return;
+  const x=p.fnode.x,z=p.fnode.z,y=terrainH(x,z,p);
+  const grp=new THREE.Group();
+  const base=new THREE.Mesh(GEO.cyl,FNODE_MAT.base); base.scale.set(7,1.4,7); base.position.y=0.7; grp.add(base);
+  const mid=new THREE.Mesh(GEO.cyl,FNODE_MAT.fin); mid.scale.set(3.6,1.6,3.6); mid.position.y=2.1; grp.add(mid);
+  const pylon=new THREE.Mesh(GEO.cyl,FNODE_MAT.base); pylon.scale.set(1.0,4.2,1.0); pylon.position.y=4.6; grp.add(pylon);
+  const core=new THREE.Mesh(GEO.sphere,FNODE_MAT.coreOn); core.scale.set(2.0,2.0,2.0); core.position.y=7.2; grp.add(core);
+  for(let i=0;i<3;i++){ const a=i*2.094;
+    const fin=new THREE.Mesh(GEO.box,FNODE_MAT.fin);
+    fin.scale.set(0.45,4.6,1.9); fin.position.set(Math.cos(a)*2.4,4.4,Math.sin(a)*2.4); fin.rotation.y=-a; grp.add(fin); }
+  const glow=makeGlow('#ff6a4a',12); glow.position.y=7.2; grp.add(glow);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(9.6,10.3,48),FNODE_MAT.ringM);
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.14; grp.add(ring);
+  /* contested-zone ring: shows where the Claim Beacon may rise once the node falls */
+  const claimRing=new THREE.Mesh(new THREE.RingGeometry(R.CLAIM_R-0.8,R.CLAIM_R,72),
+    new THREE.MeshBasicMaterial({color:0x5aff9a,transparent:true,opacity:0.18,side:THREE.DoubleSide,depthWrite:false}));
+  claimRing.rotation.x=-Math.PI/2; claimRing.position.y=0.16; claimRing.visible=false; grp.add(claimRing);
+  grp.position.set(x,y,z);
+  g.add(grp);
+  surf.fnode={x,z,y,group:grp,core,glow,ring,claimRing,half:false};
+  surf.poiCols.push({x,z,r:3.9});
+  applyFnodeState();
+}
+function applyFnodeState(){
+  const f=surf.fnode; if(!f) return;
+  const alive=fnodeAlive();
+  f.core.material=alive?FNODE_MAT.coreOn:FNODE_MAT.coreOff;
+  f.glow.visible=alive; f.ring.visible=alive;
+  f.claimRing.visible=!alive&&planetCtl(S.planet)==='faction';   // node down, not yet claimed
+}
+function updateFnode(dt){
+  const f=surf.fnode; if(!f) return;
+  if(fnodeAlive()){
+    const k=1+Math.sin(performance.now()*0.004)*0.12;
+    f.core.scale.set(2*k,2*k,2*k);
+    f.glow.scale.setScalar(12+Math.sin(performance.now()*0.004)*2.5);
+  } else if(Math.random()<dt*3){
+    spawnBurst(f.x,f.y+6.5,f.z,0x555555,2,1,1.6,1.6,-1.2);   // dead node smolders
+  }
+}
+function fnodeDownFx(pl){
+  showToast('☒ FACTION CONTROL NODE DESTROYED — '+PLANETS[pl].name+' can be claimed',6000);
+  SND.fnodeDown();
+  const f=surf.fnode;
+  if(f&&pl===S.planet){
+    spawnBurst(f.x,f.y+7,f.z,0xff8030,40,8,7,1.2,4);
+    spawnBurst(f.x,f.y+7,f.z,0xffe070,20,6,6,0.8,2);
+    spawnBurst(f.x,f.y+5,f.z,0x554444,24,5,4,2,1.5);
+    const fl=makeGlow('#ffb070',26); fl.position.set(f.x,f.y+7,f.z); pushFx(fl,0.5,0.95);
+    applyFnodeState();
+  }
+  missionEvent('fnode',pl);
+}
+/* shots at the node — server owns HP in MP, save owns it solo */
+function hitFnode(dmg,end,wp){
+  spawnBurst(end[0],end[1],end[2],0xff7a4a,7,2,2,0.35,3);
+  SND.fnodeHit();
+  const pl=S.planet;
+  if(!(S.fnHp[pl]>0)) return;
+  if(NET.active){ NET.send({t:'fnodeHit',pl,wp:wp===undefined?S.slot:wp}); return; }
+  const tier=curFacTier();
+  S.fnHp[pl]=Math.max(0,S.fnHp[pl]-dmg);
+  const f=surf.fnode;
+  if(f&&!f.half&&S.fnHp[pl]<=tier.nodeHp*0.5&&S.fnHp[pl]>0){ f.half=true; showToast('Control node at 50% — keep firing!'); }
+  if(S.fnHp[pl]<=0) fnodeDownFx(pl);
+  saveGame();
+}
+function onFnodeHp(m){
+  if(!PLANETS[m.pl]) return;
+  const tier=facTier(PLANETS[m.pl]); if(!tier) return;
+  S.fnHp[m.pl]=clamp(m.hp|0,0,tier.nodeHp);
+  const f=surf.fnode;
+  if(f&&m.pl===S.planet&&!f.half&&S.fnHp[m.pl]<=tier.nodeHp*0.5&&S.fnHp[m.pl]>0){ f.half=true; showToast('Control node at 50% — keep firing!'); }
+}
+function onFnodeDown(m){
+  if(!PLANETS[m.pl]) return;
+  S.fnHp[m.pl]=0;
+  fnodeDownFx(m.pl);
 }
 
 /* ============================================================
@@ -2765,11 +3416,15 @@ function explodeGrenade(t){
   /* players: each client applies blast to ITSELF (safe zone / invuln respected) */
   const dx=player.x-t.x, dy=(player.y+1)-t.y, dz=player.z-t.z, d=Math.hypot(dx,dy,dz);
   if(d<GREN_R){ const dmg=Math.round(GREN_DMG*(1-d/GREN_R)); if(dmg>0) applyDamageToSelf(dmg); }
-  /* critters: solo only — in co-op the server resolves the blast on its own sim */
+  /* critters + drones: solo only — in co-op the server resolves the blast on its own sim */
   if(t.owned&&!NET.active){
     for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(c.pl!==S.planet) continue;
       const cd=Math.hypot(c.x-t.x,(c.y+0.4)-t.y,c.z-t.z);
       if(cd<GREN_R) damageCritter(c,Math.round(GREN_DMG*(1-cd/GREN_R)),6);
+    }
+    for(let k=drones.length-1;k>=0;k--){ const d=drones[k]; if(d.pl!==S.planet) continue;
+      const dd=Math.hypot(d.x-t.x,d.y-t.y,d.z-t.z);
+      if(dd<GREN_R) damageDrone(d,Math.round(GREN_DMG*(1-dd/GREN_R)),6);
     }
   }
   /* grenades do NOT damage structures (by design) */
@@ -2852,6 +3507,17 @@ function fireInferno(w){
       if(d>w.range||d<0.1) continue;
       if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
       damageCritter(c,w.dmg,5);
+    }
+    for(let k=drones.length-1;k>=0;k--){ const dr=drones[k]; if(dr.pl!==S.planet) continue;
+      const dx=dr.x-_cw.x, dy=dr.y-_cw.y, dz=dr.z-_cw.z, d=Math.hypot(dx,dy,dz);
+      if(d>w.range||d<0.1) continue;
+      if((dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z<w.coneCos) continue;
+      damageDrone(dr,w.dmg,5);
+    }
+    if(surf.fnode&&fnodeAlive()){
+      const f=surf.fnode, dx=f.x-_cw.x, dy=(f.y+5.5)-_cw.y, dz=f.z-_cw.z, d=Math.hypot(dx,dy,dz);
+      if(d<=w.range&&d>0.1&&(dx/d)*_cf.x+(dy/d)*_cf.y+(dz/d)*_cf.z>=w.coneCos)
+        hitFnode(w.dmg,[f.x,f.y+5.5,f.z],5);
     }
     if(NET.active){
       const tip=aimPoint(w.range);
@@ -2936,7 +3602,7 @@ function meteorActiveNow(){
 }
 /* the emissive hot set runs brighter after dark; bases recorded once so the
    boost never compounds and can be reset when leaving the surface */
-const EMIS_NIGHT=[MAT.emisC,MAT.emisW,MAT.emisO,MAT.emisR,MAT.emisG,MAT.emisB];
+const EMIS_NIGHT=[MAT.emisC,MAT.emisW,MAT.emisO,MAT.emisR,MAT.emisG,MAT.emisB,MAT.emisM,MAT.emisP,MAT.emisPk,MAT.emisT];
 for(const m of EMIS_NIGHT) m.userData._ei0=m.emissiveIntensity;
 function resetEmisBoost(){ for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0; }
 function applyDayNight(){
@@ -2944,14 +3610,18 @@ function applyDayNight(){
   const p=curP(), tod=todNow();
   const sunUp=Math.sin((tod-0.25)*Math.PI*2);      // 1 noon, -1 midnight
   const day=clamp((sunUp+0.25)/1.15,0,1);
-  if(surf.hemi) surf.hemi.intensity=0.12+0.78*day;
+  if(surf.hemi) surf.hemi.intensity=0.22+0.68*day;          // night floor raised: navigable, still dark
   if(surf.dirLight){
-    surf.dirLight.intensity=0.08+1.2*day;
+    surf.dirLight.intensity=0.12+1.16*day;
     /* horizon light warms toward the planet's dusk tint at dawn/sunset */
     const duskK=clamp(1-Math.abs(sunUp)*2.6,0,1)*0.85;
     surf.dirLight.color.set(p.sun).lerp(_tmpC2.set(p.dusk!==undefined?p.dusk:0xffb070),duskK);
   }
-  if(surf.amb) surf.amb.intensity=0.16+0.34*day;
+  if(surf.amb){
+    surf.amb.intensity=0.30+0.20*day;
+    /* colored ambient bounce: shadows fill with the planet's neon-night tint */
+    surf.amb.color.set(p.nightAmb!==undefined?p.nightAmb:0x2a1c50).lerp(_tmpC2.set(0x404050),day);
+  }
   dnBaseSky.set(p.nightSky!==undefined?p.nightSky:0x05070d).lerp(_tmpC.set(p.sky),day);
   dnBaseFog.set(p.nightFog!==undefined?p.nightFog:0x080c16).lerp(_tmpC.set(p.fog),day);
   surfScene.background=dnBaseSky;
@@ -2962,7 +3632,7 @@ function applyDayNight(){
   for(const gl of structGlows) gl.material.opacity=Math.min(1,gl.userData._o0*glowK);
   /* emissive materials run hotter at night (shared with the space scene —
      reset on launch) */
-  const nightK=1+0.4*(1-day);
+  const nightK=1+neonNightK*(1-day);
   for(const m of EMIS_NIGHT) m.emissiveIntensity=m.userData._ei0*nightK;
 }
 const _tmpC=new THREE.Color(), _tmpC2=new THREE.Color();
@@ -3139,7 +3809,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu','authPanel'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -3169,7 +3839,7 @@ function renderBuildGrid(){
   tool('◑','Paint Tool',()=>{ renderPaintGrid(); openPanel('paintPanel'); });
   tool('▤','Blueprints',openBlueprints);
   addSection('Structures');
-  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon']) addItem(k);
+  for(const k of ['floor','halffloor','foundation','wall','halfwall','window','door','airlock','ramp','beam','pillar','pillar2','pillar3','flatroof','dome','roof45','roofcorner','lightpole','crate','relay','shieldgen','armory','turret','rover','beacon','claimpost']) addItem(k);
   addSection('Outpost Systems');
   for(const k of ['telepad','lift','jumppad','spotlight','cryopod','silo','navbeacon']) addItem(k);
   addSection('Decorations — any tier');
@@ -3429,7 +4099,10 @@ function openSettings(){
   $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
   $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF');
+  $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY');
+  $('btnNeon').textContent='Neon Intensity: '+(S.neon||'med').toUpperCase();
   $('importWrap').classList.add('hidden');
+  updateAcctUI();
   openPanel('settings');
 }
 $('btnExport').addEventListener('click',()=>{ saveGame(); exportSave(); });
@@ -3445,6 +4118,24 @@ $('btnAmb').addEventListener('click',()=>{
   S.amb=!S.amb;
   if(S.amb&&S.running&&S.mode==='surface') SND.ambStart(S.planet); else SND.ambStop();
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF'); SND.blip(); saveGame();
+});
+$('btnCine').addEventListener('click',()=>{
+  S.cine=!S.cine;
+  $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY'); SND.blip(); saveGame();
+});
+$('btnNeon').addEventListener('click',()=>{
+  const order=['low','med','high'];
+  S.neon=order[(order.indexOf(S.neon||'med')+1)%3];
+  applyNeon();
+  $('btnNeon').textContent='Neon Intensity: '+S.neon.toUpperCase(); SND.blip(); saveGame();
+});
+$('btnReplayIntro').addEventListener('click',()=>{
+  S.intro={done:false,step:0,cineSeen:false,granted:true};   // no double starter kit
+  try{ localStorage.removeItem(CINE_SEEN_KEY); localStorage.removeItem(INTRO_DONE_KEY); }catch(e){}
+  saveGame(); SND.blip();
+  showToast('Intro will replay on your next landing');
+  closeAllPanels();
+  if(S.running&&S.mode==='surface') missionBegin();
 });
 $('btnQuit').addEventListener('click',()=>{ saveGame(); NET.quitting=true; location.reload(); });
 $('mChat').addEventListener('touchstart',e=>{ e.preventDefault(); openChat(); },{passive:false});
@@ -3477,6 +4168,7 @@ function enterSurface(planetKey,fromSave){
   updateViewmodel();
   clearMeteors();
   clearCritters(); soloSpawnInitial();
+  clearDrones();
   clearThrowables(); clearShieldWalls();
   if(fromSave&&S.ppos&&Math.hypot(S.ppos[0],S.ppos[2])<WORLD_R){
     player.x=S.ppos[0]; player.z=S.ppos[2];
@@ -3486,12 +4178,23 @@ function enterSurface(planetKey,fromSave){
     player.x=1; player.z=-4;
     player.y=groundYAt(player.x,player.z,1e9);
     player.yaw=Math.atan2(-(surf.shipPos.x-player.x),-(surf.shipPos.z-player.z));
+    /* starter world: open the first view so both the ship and the crystal
+       spire landmark are in frame — never a wall of empty desert */
+    if(surf.spire){
+      const a1=player.yaw, a2=Math.atan2(-(surf.spire.x-player.x),-(surf.spire.z-player.z));
+      let d=a2-a1; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+      player.yaw=a1+d*0.55;
+    }
   }
   player.vy=0; player.pitch=0;
   refreshMobileUI();
+  setTimeout(()=>{ if(S.running&&S.mode==='surface') missionBegin(); },400);
   /* one-time hint: wildlife is the Chitin source (it isn't mined) */
   try{ if(!localStorage.getItem('sf_huntHint')){ localStorage.setItem('sf_huntHint','1');
-    setTimeout(()=>{ if(S.running&&S.mode==='surface') showToast('Wildlife roams here — track the tan dots on your map (M) and defeat them with a weapon to harvest Chitin',5500); },3000); } }catch(e){}
+    const hint=()=>{ if(!S.running||S.mode!=='surface') return;
+      if(arr.active){ setTimeout(hint,4000); return; }   // never talk over the arrival cinematic
+      showToast('Wildlife roams here — track the tan dots on your map (M) and defeat them with a weapon to harvest Chitin',5500); };
+    setTimeout(hint,3000); } }catch(e){}
 }
 function enterSpace(fromPlanetKey,fromSave){
   if(driving){ driving=null; }
@@ -3504,7 +4207,7 @@ function enterSpace(fromPlanetKey,fromSave){
   updateViewmodel();
   cancelBuild();
   clearMeteors();
-  clearCritters();
+  clearCritters(); clearDrones();
   clearThrowables(); clearShieldWalls();
   $('waterVig').style.opacity=0;
   if(camera.fov!==74){ camera.fov=74; camera.updateProjectionMatrix(); }
@@ -3518,15 +4221,25 @@ function enterSpace(fromPlanetKey,fromSave){
     S.sspeed=6;
   }
   refreshMobileUI();
+  renderMission();
   if(S.pendingCutscene) setTimeout(()=>{ if(S.mode==='space'&&S.running) startShieldCutscene(S.pendingCutscene); },1200);
 }
 function doLand(planetKey){
   if(transitioning) return;
   saveGame();
-  fadeTo('DESCENDING TO '+PLANETS[planetKey].name,()=>{ enterSurface(planetKey,false); saveGame(); });
+  /* cinematic descent: a new player's first landing (or every landing with
+     the Settings flourish on). Camera-only — in MP other players just see
+     your avatar appear, nothing global changes. */
+  const cine=(S.intro&&!S.intro.done&&!S.intro.cineSeen&&!cineSeenDevice())||S.cine===true;
+  fadeTo('DESCENDING TO '+PLANETS[planetKey].name,()=>{
+    enterSurface(planetKey,false);
+    saveGame();
+    if(cine) startArrival();
+  });
 }
 function doLaunch(){
   if(transitioning) return;
+  if(missionOn()&&S.intro.step===3) missionAdvance();   // launching counts as opening the world
   resetEmisBoost();   // night emissive boost is surface-only; mats are shared with space
   SND.ambStop();
   fadeTo('LAUNCHING',()=>{ enterSpace(S.planet,false); saveGame(); });
@@ -3540,6 +4253,244 @@ function doBlackout(){
     player.vy=0; S.o2=o2Max();
   });
 }
+
+/* ============================================================
+   CINEMATIC ARRIVAL (First Light P1) — the ship drops out of the
+   sky onto the pad while an external camera watches, dust + shake
+   on touchdown, then the camera blends into first-person. Pure
+   client spectacle: ~7s, skippable with any key/tap.
+   ============================================================ */
+const arr={active:false,t:0,dur:7.4,base:null,touched:false,shake:0,skip:false};
+const _arrV=new THREE.Vector3(), _arrQ=new THREE.Quaternion(), _arrE=new THREE.Euler(0,0,0,'YXZ');
+function startArrival(){
+  arr.active=true; arr.t=0; arr.touched=false; arr.skip=false; arr.shake=0;
+  arr.base=surf.shipPos.clone();
+  ship.position.set(arr.base.x,arr.base.y+170,arr.base.z);
+  ship.getObjectByName('engGlow').visible=true;
+  tool.visible=false;                                  // no first-person viewmodel in the cinematic
+  for(const k in weaponVM) weaponVM[k].visible=false;
+  if(!S.intro.done&&!NET.active) dayClock=CYCLE_S*0.38;  // first light: a new player arrives in bright morning
+  applyDayNight();
+  document.body.classList.add('cutsceneOn');
+  showToast('TAP or press any key to skip',2600);
+  SND.tone&&SND.tone(46,2.8,'sawtooth',0.055,120);     // entry rumble builds
+  if(SND.tone) setTimeout(()=>arr.active&&SND.tone(70,2.2,'sawtooth',0.06,140),2400);
+}
+function finishArrival(){
+  arr.active=false;
+  ship.position.copy(arr.base);
+  ship.getObjectByName('engGlow').visible=false;
+  updateViewmodel();                                   // restore the FP tool/weapon
+  document.body.classList.remove('cutsceneOn');
+  S.intro.cineSeen=true;
+  try{ localStorage.setItem(CINE_SEEN_KEY,'1'); }catch(e){}
+  saveGame();
+  renderMission();
+}
+function updateArrival(dt){
+  arr.t+=dt;
+  if(arr.skip){ if(!arr.touched) SND.impact(); finishArrival(); return; }
+  const t=arr.t;
+  /* ship descends 170m, decelerating into the pad */
+  const k=smooth(0.2,4.8,t);
+  ship.position.set(arr.base.x,arr.base.y+(1-k)*170,arr.base.z);
+  if(!arr.touched&&Math.random()<dt*36)
+    spawnBurst(ship.position.x,ship.position.y-2.2,ship.position.z,0xffc060,3,2.2,-7,0.45,-5);
+  if(!arr.touched&&k>0.6&&Math.random()<dt*20)          // ground dust kicked up by the wash
+    spawnBurst(arr.base.x+(Math.random()-0.5)*8,arr.base.y-1.8,arr.base.z+(Math.random()-0.5)*8,0xa9764f,4,5,1.5,0.8,2);
+  if(k>=1&&!arr.touched){
+    arr.touched=true; arr.shake=0.9;
+    ship.getObjectByName('engGlow').visible=false;
+    spawnBurst(arr.base.x,arr.base.y-1.8,arr.base.z,0xb07a50,42,9,2.6,1.3,4);
+    spawnBurst(arr.base.x,arr.base.y-1.8,arr.base.z,0x7a5236,26,13,1,1.8,3);
+    SND.impact();
+    if(SND.tone) setTimeout(()=>SND.tone(2400,0.8,'sine',0.02,700),260);   // settling hiss
+  }
+  arr.shake=Math.max(0,arr.shake-dt*1.1);
+  /* camera: side vantage watching the descent, then blend into first-person */
+  const eyeY=player.y+player.h;
+  const camK=smooth(5.2,arr.dur-0.15,t);
+  const vx=arr.base.x+13, vz=arr.base.z+15;            // NE vantage — clear sightline past the spawn boulder
+  const vy=groundYAt(vx,vz,1e9)+5;
+  camera.position.set(vx+(player.x-vx)*camK,vy+(eyeY-vy)*camK,vz+(player.z-vz)*camK);
+  if(camK<0.02){
+    /* keep the shot level on the pad/horizon (Rust's sky is near-black —
+       pitching up reads as a void); the ship drops INTO frame for touchdown */
+    _arrV.set(ship.position.x,arr.base.y+Math.min(7,(ship.position.y-arr.base.y)*0.12)+1.2,ship.position.z);
+    camera.lookAt(_arrV);
+  } else {
+    camera.lookAt(ship.position.x,arr.base.y+1.5,ship.position.z);
+    _arrE.set(0,player.yaw,0); _arrQ.setFromEuler(_arrE);
+    camera.quaternion.slerp(_arrQ,camK*camK);            // settle onto the FP view direction
+  }
+  camera.position.x+=(Math.random()-0.5)*arr.shake*0.5;
+  camera.position.y+=(Math.random()-0.5)*arr.shake*0.4;
+  if(t>=arr.dur) finishArrival();
+}
+/* skip on any key/tap while the arrival plays */
+window.addEventListener('keydown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
+window.addEventListener('pointerdown',()=>{ if(arr.active&&arr.t>0.4) arr.skip=true; });
+
+/* ============================================================
+   "ESTABLISH YOUR OUTPOST" — opening mission (First Light P3).
+   Four beats, each an immediately-rewarding action, zero grind
+   (starter supplies granted up front). Client-side and per-player;
+   persists in S.intro.step and never repeats once done (save flag
+   + device marker).
+   ============================================================ */
+const MISSION_STEPS=[
+  {t:'Drop your first structure', d:'Open the build menu (B / BUILD), pick a Floor, click to place'},
+  {t:'Harvest a glowing crystal', d:'Walk to the crystal cluster and hold E'},
+  {t:'Raise a Nav Beacon',        d:'Build menu → Outpost Systems → Nav Beacon — light the way home'},
+  {t:'Explore the Crystal Spire', d:'Follow the ✦ marker on your compass — or launch back to space'},
+];
+function missionOn(){ return S.running&&S.intro&&!S.intro.done; }
+function renderMission(){
+  const card=$('missionCard');
+  if(!S.running||arr.active){ card.classList.add('hidden'); return; }
+  if(missionOn()){
+    /* First Light onboarding keeps priority (surface only, as before) */
+    if(S.mode!=='surface'){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    $('missionTitle').textContent='ESTABLISH YOUR OUTPOST';
+    $('missionSkip').style.display='';
+    const list=$('missionSteps'); list.innerHTML='';
+    MISSION_STEPS.forEach((st,i)=>{
+      const d=document.createElement('div');
+      d.className='mStep'+(i<S.intro.step?' done':(i===S.intro.step?' cur':''));
+      d.innerHTML=(i<S.intro.step?'✓ ':'▸ ')+st.t+(i===S.intro.step?'<div class="mHint">'+st.d+'</div>':'');
+      list.appendChild(d);
+    });
+    return;
+  }
+  /* Conquest thread (the PULL): fully derived from world state — the
+     current goal is the first chain planet that isn't yours yet */
+  if(S.mode!=='surface'&&S.mode!=='space'){ card.classList.add('hidden'); return; }
+  const m=conquestMission();
+  if(m.kind==='done'&&conqDismissed()){ card.classList.add('hidden'); return; }
+  renderConquest(m);
+}
+/* ---- Conquest mission thread (Conquest P4) ---- */
+function conquestMission(){
+  if(!WEP_KEYS.some(k=>S.weapons[k])) return {kind:'arm'};
+  for(const pl of CONQUEST_CHAIN) if(planetCtl(pl)!=='yours') return {kind:'claim',pl};
+  return {kind:'done'};
+}
+const CONQ_EPILOGUE='The faction\'s command nodes are silent across the system… but something out there is still listening.';
+function conqDismissed(){ try{ return !!localStorage.getItem('astravox_conq_dismissed'); }catch(e){ return false; } }
+function conquestHint(m){
+  if(m.kind==='arm') return 'Reach Tier 2, build an Armory and craft a weapon — the faction won\'t yield to a mining tool';
+  const pl=m.pl;
+  if(S.mode!=='surface'||S.planet!==pl) return 'Fly to '+PLANETS[pl].name+' (follow the ◆ marker) and land — expect resistance';
+  if(fnodeAlive(pl)) return 'Fight to the faction control node (⬢ on compass / map) and destroy it';
+  return 'Now BUILD the conquest: Build menu → CLAIM BEACON, planted near the downed node';
+}
+function renderConquest(m){
+  const card=$('missionCard');
+  card.classList.remove('hidden');
+  $('missionTitle').textContent='FACTION CONQUEST';
+  $('missionSkip').style.display=m.kind==='done'?'':'none';
+  let html='';
+  html+=m.kind==='arm'
+    ?'<div class="mStep cur">▸ Arm yourself<div class="mHint">'+conquestHint(m)+'</div></div>'
+    :'<div class="mStep done">✓ Arm yourself</div>';
+  for(const pl of CONQUEST_CHAIN){
+    const yours=planetCtl(pl)==='yours';
+    const cur=m.kind==='claim'&&m.pl===pl;
+    const label=(pl===CONQUEST_CHAIN[CONQUEST_CHAIN.length-1]?'Take the stronghold — ':'Claim ')+PLANETS[pl].name;
+    html+='<div class="mStep'+(yours?' done':(cur?' cur':''))+'">'+(yours?'✓ ':'▸ ')+label+
+      (cur?'<div class="mHint">'+conquestHint(m)+'</div>':'')+'</div>';
+  }
+  if(m.kind==='done')
+    html+='<div class="mStep done" style="color:#9affe2;margin-top:6px">★ CONQUEST COMPLETE<div class="mHint">'+CONQ_EPILOGUE+'</div></div>';
+  $('missionSteps').innerHTML=html;
+}
+/* space-mode target chevron: projects the current conquest target onto the
+   screen (clamped to the edge when off-axis/behind) — the pull across the void */
+function updateSpaceTarget(){
+  const el=$('spaceTarget');
+  if(!S.running||S.mode!=='space'||cs.active||transitioning||arr.active){ el.classList.add('hidden'); return; }
+  const m=conquestMission();
+  if(m.kind!=='claim'){ el.classList.add('hidden'); return; }
+  const p=PLANETS[m.pl];
+  _pv.set(p.pos[0],p.pos[1],p.pos[2]).project(camera);
+  let x=_pv.x, y=_pv.y;
+  const behind=_pv.z>1;
+  if(behind){ x=-x; y=-y; const l=Math.hypot(x,y)||1e-4; x=x/l*0.92; y=y/l*0.85; }
+  else {
+    if(Math.abs(x)>0.92){ y*=0.92/Math.abs(x); x=Math.sign(x)*0.92; }
+    if(Math.abs(y)>0.85){ x*=0.85/Math.abs(y); y=Math.sign(y)*0.85; }
+  }
+  const d=ship.position.distanceTo(_pv.set(p.pos[0],p.pos[1],p.pos[2]));
+  el.textContent='◆ '+p.name+' · '+(d|0)+'m';
+  el.style.left=((x*0.5+0.5)*window.innerWidth)+'px';
+  el.style.top=((-y*0.5+0.5)*window.innerHeight)+'px';
+  el.classList.remove('hidden');
+}
+function missionBegin(){
+  if(S.intro&&!S.intro.done&&introDoneDevice()) S.intro.done=true;   // device already finished it (e.g. MP guest)
+  if(!missionOn()){ renderMission(); return; }
+  if(!S.intro.granted){
+    S.intro.granted=true;
+    if(!NET.active){ S.res.fe+=40; S.res.cy+=15; updateHUDRes(); }   // MP: the server's fresh-guest kit covers it
+    setTimeout(()=>{ if(missionOn()) showToast('Starter supplies unpacked from the ship — build something!',5000); },800);
+    saveGame();
+  }
+  renderMission();
+}
+function missionAdvance(){
+  S.intro.step++;
+  SND.craft();
+  if(S.intro.step>=MISSION_STEPS.length){
+    S.intro.done=true;
+    try{ localStorage.setItem(INTRO_DONE_KEY,'1'); }catch(e){}
+    showToast('✦ OUTPOST ESTABLISHED — the frontier is yours. Mine, build, reach further.',7000);
+    SND.tierUp();
+    spawnBurst(player.x,player.y+1.5,player.z,0x8affb0,30,4,5,1.2,2);
+    /* hand straight off to the conquest thread — there is ALWAYS a next goal */
+    setTimeout(()=>{ if(S.running&&!missionOn())
+      showToast('⚑ NEW OBJECTIVE — the faction holds '+PLANETS[CONQUEST_CHAIN[0]].name+'. Take it from them.',6500); },7400);
+  }
+  renderMission();
+  saveGame();
+}
+function missionSkip(){
+  if(!S.intro.done){
+    S.intro.done=true;
+    try{ localStorage.setItem(INTRO_DONE_KEY,'1'); }catch(e){}
+    saveGame();
+  }
+  renderMission();
+}
+/* beat triggers — called from gameplay code */
+function missionEvent(kind,st){
+  if(!missionOn()) return;
+  const step=S.intro.step;
+  if(step===0&&kind==='place'){ missionAdvance(); return; }
+  if(step===1&&kind==='mine'){ missionAdvance(); return; }
+  if(step===2&&kind==='place'&&st&&(st.t==='navbeacon'||st.t==='lightpole')){
+    /* power-on moment: the beacon flares to life */
+    spawnBurst(st.x,st.y+7.5,st.z,0xff8a5a,26,3,4,1.1,1);
+    if(SND.navPing) SND.navPing();
+    missionAdvance(); return;
+  }
+}
+/* explore beat: reaching the spire (checked ~1/s from updateSurface) */
+let missionChkT=0;
+function missionTick(dt){
+  if(!missionOn()) return;
+  missionChkT-=dt;
+  if(missionChkT>0) return;
+  missionChkT=1;
+  if(S.intro.step===3&&surf.spire){
+    const dx=player.x-surf.spire.x, dz=player.z-surf.spire.z;
+    if(dx*dx+dz*dz<256) missionAdvance();
+  }
+}
+$('missionSkip').addEventListener('click',()=>{ SND.blip();
+  if(missionOn()) missionSkip();
+  else { try{ localStorage.setItem('astravox_conq_dismissed','1'); }catch(e){} renderMission(); }
+});
 
 /* ============================================================
    SIGNAL-SHIELD CUTSCENE (Verdant tier 3, Pelagos tier 5)
@@ -3850,7 +4801,10 @@ function updateSpace(dt){
       setMAct('✕');
       if(justE){ SND.denied(); showToast('A hostile signal shield blocks descent. Reach Tier '+SHIELDED[landKey].tier+'.'); }
     } else {
-      setPrompt('<span class="key">E</span>LAND ON '+p.name+' — '+p.desc);
+      const c=planetCtl(landKey);
+      const tag=c==='faction'?' — <span style="color:#ff9a8a">⚠ FACTION TERRITORY · defenses active</span>'
+        :(c==='yours'?' — <span style="color:#8fefb0">YOUR COLONY ✓</span>':' — '+p.desc);
+      setPrompt('<span class="key">E</span>LAND ON '+p.name+tag);
       setMAct('LAND');
       if(justE) doLand(landKey);
     }
@@ -3951,6 +4905,7 @@ function updateSurface(dt){
   $('o2bar').style.width=(o2f*100)+'%';
   $('o2bar').classList.toggle('low',o2f<0.25&&lowAir);
   if(o2f<0.25&&lowAir){ o2BeepT-=dt; if(o2BeepT<=0){ SND.o2warn(); o2BeepT=1.6; } }
+  missionTick(dt);
   /* nav beacon proximity ping (throttled) */
   navPingT-=dt;
   if(navPingT<=0){
@@ -4067,6 +5022,7 @@ function updateSurface(dt){
   updateTurrets(dt);
   updateRoverMeshes(dt);
   updateCritters(dt);
+  updateDrones(dt); updateFnode(dt);
   updateHeavyWeapons(dt);
   updateWater();
   updateAmbient(dt);
@@ -4086,7 +5042,9 @@ function renderSurfaceCam(){
 function resetState(){
   S.tier=1; S.res={fe:0,cy:0,bio:0,ch:0,pe:0}; S.structures=[];
   S.o2=100; S.fuel=100; S.beacon=false; S.victoryShown=false;
+  S.ctl=defaultCtl(); S.fnHp=R.readFnodeHp(null); updateCtlRings();
   S.respawnPt=null;
+  S.intro={done:false,step:0,cineSeen:false,granted:false};   // a NEW game runs the intro (device markers still gate replays)
   S.station=[]; S.stationOnline=false;
   S.mode='space'; S.planet='rust';
   S.ppos=[0,0,0]; S.pyaw=0;
@@ -4138,6 +5096,7 @@ function openMpSetup(mode){
       +rec.map(w=>'<button class="menuBtn" data-code="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
     :'';
   try{ $('mpName').value=localStorage.getItem('astravox_name')||''; }catch(e){}
+  loadAcctWorlds();
   mpStatus('');
   openPanel('mpSetup');
 }
@@ -4201,6 +5160,7 @@ function installWorld(world){
     return st;
   });
   S.beacon=!!world.beacon;
+  S.ctl=readCtl(world.ctl); S.fnHp=R.readFnodeHp(world.fnodeHp); updateCtlRings();
   NET.deadNodes={};
   for(const pl in (world.deadNodes||{})) NET.deadNodes[pl]=new Set(world.deadNodes[pl]);
   NET.meteor={};
@@ -4320,6 +5280,108 @@ $('btnNew').addEventListener('click',()=>{
 });
 $('btnTitleImport').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); $('importWrap').classList.remove('hidden'); });
 
+/* ---------- accounts: login / signup / guest-upgrade (Phase 3) ----------
+   Login is OPTIONAL. A logged-in session (httpOnly cookie) is the durable
+   identity; the WS handshake carries the same cookie, so once logged in the
+   server keys all worlds/progress to the account automatically. A guest who
+   already has progress can "Create Account" to claim it into the new account. */
+let ACCOUNT=null;
+function authStatus(s){ const el=$('authStatus'); if(el) el.textContent=s||''; }
+function authBusy(b){ ['btnLogin','btnSignup'].forEach(id=>{ const el=$(id); if(el) el.disabled=b; }); }
+async function authPost(url,body){
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(body||{})});
+    let j={}; try{ j=await r.json(); }catch(e){}
+    return {ok:r.ok,status:r.status,j};
+  }catch(e){ return {ok:false,status:0,j:{error:'Network error — try again'}}; }
+}
+async function refreshAccount(){
+  try{
+    const r=await fetch('/api/me',{credentials:'same-origin'});
+    const j=await r.json(); ACCOUNT=(j&&j.user)||null;
+  }catch(e){ ACCOUNT=null; }
+  updateAcctUI();
+}
+function updateAcctUI(){
+  const btn=$('btnAccount'), info=$('acctInfo');
+  if(btn&&info){
+    if(ACCOUNT){
+      btn.classList.add('hidden');
+      info.classList.remove('hidden');
+      info.innerHTML='<span style="color:#9affc8">●</span> '+escHtml(ACCOUNT.email)
+        +' &nbsp;<button id="btnLogoutTitle" style="background:none;border:1px solid #3fa9d4;color:#9fd6ef;padding:3px 12px;cursor:pointer;font-size:12px;letter-spacing:0.06em">Log Out</button>';
+      const lo=$('btnLogoutTitle'); if(lo) lo.addEventListener('click',()=>{ SND.blip(); doLogout(); });
+    } else {
+      btn.classList.remove('hidden'); info.classList.add('hidden'); info.innerHTML='';
+    }
+  }
+  const sl=$('btnLogoutSettings'); if(sl) sl.classList.toggle('hidden',!ACCOUNT);
+  const asl=$('acctSettingsLine'); if(asl) asl.textContent=ACCOUNT?('Logged in as '+ACCOUNT.email):'Playing as guest (not logged in)';
+}
+function openAuth(){
+  $('authEmail').value=''; $('authPass').value=''; authStatus(''); authBusy(false);
+  const g=guestAuth(), note=$('authUpgradeNote');
+  if(g&&(recentWorlds().length>0)){
+    note.classList.remove('hidden');
+    note.textContent='You have guest progress on this device. Creating an account will save your current worlds and progress to it.';
+  } else if(g){
+    note.classList.remove('hidden');
+    note.textContent='Creating an account will link your current guest progress to it.';
+  } else note.classList.add('hidden');
+  openPanel('authPanel');
+  setTimeout(()=>{ try{ $('authEmail').focus(); }catch(e){} },60);
+}
+async function doLogin(){
+  const email=$('authEmail').value.trim(), pass=$('authPass').value;
+  if(!email||!pass){ authStatus('Enter your email and password'); return; }
+  authBusy(true); authStatus('Logging in…');
+  const {ok,j}=await authPost('/api/login',{email,password:pass});
+  if(ok){ authStatus(''); SND.blip(); location.reload(); }
+  else { authBusy(false); authStatus((j&&j.error)||'Could not log in'); }
+}
+async function doSignup(){
+  const email=$('authEmail').value.trim(), pass=$('authPass').value;
+  if(!email||!pass){ authStatus('Enter your email and password'); return; }
+  authBusy(true); authStatus('Creating account…');
+  const {ok,j}=await authPost('/api/signup',{email,password:pass});
+  if(!ok){ authBusy(false); authStatus((j&&j.error)||'Could not create account'); return; }
+  const g=guestAuth();
+  if(g){ await authPost('/api/claim-guest',{auth:g}); }   // migrate guest worlds/progress into the new account
+  authStatus(''); SND.tierUp(); location.reload();
+}
+async function doLogout(){
+  await authPost('/api/logout',{});
+  location.reload();
+}
+$('btnAccount').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openAuth(); });
+$('btnLogin').addEventListener('click',doLogin);
+$('btnSignup').addEventListener('click',doSignup);
+$('btnLogoutSettings').addEventListener('click',()=>{ SND.blip(); doLogout(); });
+$('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+/* logged-in player's worlds, joinable from any device (rendered in mpSetup) */
+async function loadAcctWorlds(){
+  const el=$('mpAcctWorlds'); if(!el) return;
+  if(!ACCOUNT){ el.innerHTML=''; return; }
+  el.innerHTML='<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">YOUR WORLDS</div><div style="color:#6fa8c4;font-size:12px">loading…</div>';
+  let worlds=[];
+  try{ const r=await fetch('/api/worlds',{credentials:'same-origin'}); worlds=((await r.json())||{}).worlds||[]; }catch(e){}
+  el.innerHTML=worlds.length
+    ?'<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">YOUR WORLDS</div>'
+      +worlds.map(w=>'<button class="menuBtn" data-join="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
+    :'';
+}
+$('mpAcctWorlds').addEventListener('click',e=>{
+  const b=e.target&&e.target.closest('[data-join]'); if(!b) return;
+  let name=$('mpName').value.trim().slice(0,16);
+  if(!name&&ACCOUNT) name=ACCOUNT.email.split('@')[0].slice(0,16);
+  if(!name){ mpStatus('Enter a name first'); return; }
+  $('mpName').value=name;
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
+  NET.name=name; NET.isHost=false; SND.ensure();
+  NET.connect({t:'join',code:b.dataset.join,name,auth:guestAuth()});
+});
+refreshAccount();   // resolve any existing session and reflect it on the title screen
+
 /* ---------- secret "Commander" host: maxed resources (granted server-side) ---------- */
 let secretTaps=0, secretT=0;
 function secretHost(){
@@ -4349,7 +5411,11 @@ function secretTap(){
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
 if(typeof S.amb!=='boolean') S.amb=false;   // planet ambience is opt-in
+if(['low','med','high'].indexOf(S.neon)<0) S.neon='med';
+if(!S.intro) S.intro={done:true,step:99,cineSeen:true};   // pre-start safety; resetState/applySave set the real value
+if(typeof S.cine!=='boolean') S.cine=false;
 applyFx();
+applyNeon();
 
 /* autosave */
 setInterval(saveGame,30000);
@@ -4359,13 +5425,14 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 /* ============================================================
    MAIN LOOP
    ============================================================ */
-let last=performance.now(), titleT=0;
+let last=performance.now(), titleT=0, missionUiT=0;
 function loop(now){
   requestAnimationFrame(loop);
   let dt=(now-last)/1000; last=now;
   if(!(dt>0)||dt>0.05) dt=Math.min(Math.max(dt,0.001),0.05);
   if(S.running){
     if(cs.active){ updateCutscene(dt); }
+    else if(arr.active){ updateArrival(dt); }   // particles/fx update later in the loop as usual
     else if(S.mode==='space') updateSpace(dt);
     else if(S.mode==='eva') updateEva(dt);
     else updateSurface(dt);
@@ -4374,6 +5441,10 @@ function loop(now){
       if(nw-NET.lastPU>100&&!transitioning){ NET.lastPU=nw; sendPU(); }
       updateRemotes(dt);
     }
+    /* mission card is derived state — refresh it ~1/s; chevron every frame */
+    missionUiT-=dt;
+    if(missionUiT<=0){ missionUiT=1; renderMission(); }
+    updateSpaceTarget();
   } else {
     /* title backdrop: slow orbit through space */
     titleT+=dt*0.04;
@@ -4382,6 +5453,10 @@ function loop(now){
     activeScene=spaceScene;
   }
   for(const key in shieldGroups){ const g=shieldGroups[key]; if(g.parent){ g.rotation.y+=dt*0.3; g.rotation.x+=dt*0.11; } }
+  for(const key in ctlRings){ const r=ctlRings[key]; if(!r.visible) continue;
+    r.rotation.z+=dt*0.15;
+    r.material.opacity=planetCtl(key)==='faction'?0.32+0.16*Math.sin(now*0.0035):0.38; }
+  if(nebula){ nebula.rotation.y+=dt*0.0015; nebula.rotation.z+=dt*0.0004; }   // imperceptibly drifting cosmos
   if(stationCore.visible){ stationCore.rotation.y+=dt*0.08;
     const cb=stationCore.getObjectByName('coreBeacon'); if(cb) cb.scale.setScalar(2.4+Math.sin(now*0.004)*0.4);
     if(stationGlow.visible) stationGlow.scale.setScalar(150+Math.sin(now*0.002)*30); }
@@ -4394,14 +5469,16 @@ function loop(now){
   if(NET.active) updateChatFade();
   if(S.fx&&composer){
     renderPassFx.scene=activeScene;
-    renderer.toneMappingExposure=FX_EXPOSURE[(S.running&&S.mode==='surface')?S.planet:'space']||1;
+    const mood=FX_MOOD[(S.running&&S.mode==='surface')?S.planet:'space']||FX_MOOD.space;
+    renderer.toneMappingExposure=mood.exposure;
+    gradePass.uniforms.tint.value.fromArray(mood.tint);
     composer.render();
   } else renderer.render(activeScene,camera);
 }
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,drones,DRONES,
   WEAPONS,SLOT_KEYS,throwables,shieldWalls,SHIELDED,shieldGroups,
   STATION,STATION_KEYS,STATION_POS,stationCore,stationGroup,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
@@ -4424,7 +5501,13 @@ Object.assign(window,{
   findSnap,finishBpSelect,fireWeapon,groundYAt,importBlueprint,inSafeZone,loadBlueprints,nearRover,
   o2Max,occupiedAt,parseSave,payCost,placeStamp,placeStationPiece,placeStructure,rebuildAux,
   nearTelepad,telepadDest,doTeleport,nearCryopod,setRespawnPoint,respawnPointHere,checkJumpPad,updateLifts,
-  applyFx,openSettings,buildAmbient,updateAmbient,SND,
+  applyFx,openSettings,buildAmbient,updateAmbient,SND,startArrival,finishArrival,arr,
+  missionBegin,missionEvent,missionAdvance,missionSkip,renderMission,missionOn,applyNeon,
+  planetCtl,applyCtl,updateCtlRings,defaultCtl,readCtl,
+  drones,DRONES,FACTION_TIERS,facTier,spawnDroneEntity,removeDroneEntity,clearDrones,updateDrones,
+  damageDrone,hitDrone,hitFnode,fnodeAlive,applyFnodeState,fnodeDownFx,onFnodeHp,onFnodeDown,
+  claimSequence,claimStoryLine,claimError:R.claimError,
+  conquestMission,conquestHint,updateSpaceTarget,CONQUEST_CHAIN,
   refreshMobileUI,refreshStructures,renderBuildGrid,renderCompass,renderCraftGrid,renderHotbar,
   renderStationGrid,renderTierList,respawnPlayer,saveBlueprints,saveGame,selectBuild,selectStation,
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,

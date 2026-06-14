@@ -20,6 +20,8 @@ const SCAT = {
   bed: 50, chair: 30, console: 50, shelf: 30, rug: 20, ceilinglight: 30, locker: 50, railing: 30,
   /* Outpost update functional pieces */
   telepad: 90, lift: 120, jumppad: 60, airlock: 120, spotlight: 60, cryopod: 100, silo: 240, navbeacon: 70,
+  /* Conquest update */
+  claimpost: 500,
 };
 const SCRIT = {
   skitterer: { hp: 8, speed: 5.0, flee: 9, ch: [1, 2] },
@@ -33,10 +35,13 @@ const PLANET_CRIT = {
   glacius: ['skitterer', 'floater'],
   verdant: ['grazer', 'floater', 'hopper'],
   pelagos: ['skimmer', 'floater'],
+  cinder: ['skitterer', 'hopper'],
+  umbra: ['floater', 'hopper'],
+  noctis: ['skitterer', 'floater'],
 };
 const STATION_TYPES = ['corridor', 'habitat', 'solar', 'dome', 'dock', 'comms'];
-const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo'],
-  SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos'],
+const SRV = { OWNED: ['turret'], DYNAMIC: ['rover'], NOKILL: ['crate', 'beacon', 'silo', 'claimpost'],
+  SHIELD_R: 18, METEOR_DMG: 35, PLANETS: ['rust','glacius','verdant','pelagos','cinder','umbra','noctis'],
   SAFE_CR: 32, CRIT_CAP: 12, STATION_MAX: 60, STATION_MIN: 10, DAY_CYCLE: 600, MAX_STRUCT: 400 };
 
 /* --- 1. SCAT ≡ CAT hp --- */
@@ -95,8 +100,9 @@ ok(R.canAfford({fe:10,cy:5}, {fe:10}) === true && R.canAfford({fe:9}, {fe:10}) =
 const res = {fe:10,cy:5}; R.payCost(res, {fe:4}); ok(res.fe === 6, 'payCost');
 ok(JSON.stringify(R.refundFor({fe:6,cy:2})) === '{"fe":3,"cy":1}', 'refundFor');
 ok(R.o2Max(1) === 100 && R.o2Max(2) === 160 && R.o2Max(5) === 240, 'o2Max');
-ok(R.carryCap([]) === 300 && R.carryCap([{t:'crate',hp:50},{t:'crate',hp:0}]) === 450, 'carryCap (dead crate excluded)');
-ok(R.carryCap([{t:'crate',hp:50},{t:'silo',hp:100}]) === 850 && R.carryCap([{t:'silo',hp:0}]) === 300, 'carryCap silo +400 (dead silo excluded)');
+const BASE = C.CARRY_BASE;
+ok(R.carryCap([]) === BASE && R.carryCap([{t:'crate',hp:50},{t:'crate',hp:0}]) === BASE+150, 'carryCap (dead crate excluded)');
+ok(R.carryCap([{t:'crate',hp:50},{t:'silo',hp:100}]) === BASE+550 && R.carryCap([{t:'silo',hp:0}]) === BASE, 'carryCap silo +400 (dead silo excluded)');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 10, 10) === true, 'inSafeZone inside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'rust', 40, 0) === false, 'inSafeZone outside');
 ok(R.inSafeZone([{t:'beacon',pl:'rust',x:0,z:0}], 'glacius', 1, 1) === false, 'inSafeZone wrong planet');
@@ -112,7 +118,9 @@ ok(T.SLOT_KEYS.length === 8 && T.WEP_KEYS.length === 7 && T.AMMO_KEYS.length ===
 
 /* --- 11. Phase 2 shared geometry + validators --- */
 const L1 = W.surfaceLayout(W.PLANETS.rust), L2 = W.surfaceLayout(W.PLANETS.rust);
-ok(L1.nodes.length === W.NODE_COUNT && L1.rocks.length === 140 && L1.flora.length === 110, 'surfaceLayout counts');
+ok(L1.nodes.length === W.NODE_COUNT + 4 && L1.rocks.length === 140 && L1.flora.length === 110, 'surfaceLayout counts (starter world +4 spawn cluster)');
+ok(W.surfaceLayout(W.PLANETS.glacius).nodes.length === W.NODE_COUNT, 'non-starter worlds keep base node count');
+ok(L1.nodes.slice(W.NODE_COUNT).every(n => Math.hypot(n.x - 19, n.z + 13) < 6), 'spawn cluster sits by the landing zone');
 ok(JSON.stringify(L1) === JSON.stringify(L2), 'surfaceLayout deterministic');
 ok(W.surfaceLayout(W.PLANETS.pelagos).nodes.every(n => isFinite(n.x) && isFinite(n.y)), 'pelagos node layout finite');
 const floorAt = [{t:'floor',pl:'rust',x:0,y:5,z:0,r:0,hp:100}];

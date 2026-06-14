@@ -115,6 +115,17 @@
   #settings .menuBtn { width:100%; font-size:14px; padding:11px 0; }
   #importBox { width:100%; height:80px; background:#06141f; color:#9fdcf5; border:1px solid #2e8fb8; margin:8px 0; font-size:11px; padding:6px; }
 
+  /* ---------- Conquest: planet claimed ---------- */
+  #claimBanner { position:fixed; left:50%; top:26%; transform:translateX(-50%); z-index:57; pointer-events:none;
+    text-align:center; animation:claimIn .7s cubic-bezier(0.16,1.3,0.4,1); }
+  #claimTitle { font-size:clamp(26px,5.5vw,52px); letter-spacing:0.32em; font-weight:200; color:#ffd0ec;
+    text-shadow:0 0 28px #ff4ac0, 0 0 90px #aa1080; }
+  #claimName { font-size:clamp(15px,2.6vw,24px); letter-spacing:0.28em; color:#9affe2; margin-top:8px;
+    text-shadow:0 0 18px #10cc9a; }
+  #claimStory { font-size:13.5px; color:#bfe2f2; margin-top:14px; max-width:520px; line-height:1.6; opacity:0.9;
+    text-shadow:0 0 8px #000; padding:0 14px; }
+  @keyframes claimIn { from { opacity:0; transform:translateX(-50%) scale(0.7); } to { opacity:1; transform:translateX(-50%) scale(1); } }
+
   /* ---------- Victory ---------- */
   #victory { position:fixed; inset:0; z-index:58; display:flex; flex-direction:column; align-items:center; justify-content:center;
     background:rgba(2,10,18,0.78); text-align:center; }
@@ -183,6 +194,24 @@
   #chatInput { position:fixed; left:18px; bottom:90px; width:min(420px,70vw); padding:9px 12px; z-index:66;
     background:#06141f; color:#cfeefe; border:1px solid #2e8fb8; font-size:15px; font-family:inherit; }
   body.touch #chatLog { bottom:auto; top:130px; left:12px; font-size:11.5px; }
+  /* ---------- opening mission card ---------- */
+  #missionCard { position:fixed; top:150px; left:28px; width:min(270px,44vw); z-index:21; pointer-events:auto;
+    background:rgba(6,20,32,0.82); border:1px solid #2e8fb8; border-left:3px solid #4adf8a; padding:10px 12px; }
+  #missionTitle { font-size:11px; letter-spacing:0.24em; color:#8fefb0; margin-bottom:7px; }
+  #missionCard .mStep { font-size:12.5px; color:#7fa8c4; margin:4px 0; line-height:1.35; }
+  #missionCard .mStep.cur { color:#d4f4ff; }
+  #missionCard .mStep.done { color:#5fae7f; opacity:0.75; }
+  #missionCard .mHint { font-size:10.5px; color:#9fc8de; opacity:0.85; margin:2px 0 0 14px; }
+  #missionSkip { position:absolute; top:6px; right:8px; background:none; border:none; color:#5fa8c8; cursor:pointer; font-size:11px; }
+  #missionSkip:hover { color:#cfeefe; }
+  /* conquest target chevron in space — points at the current mission planet */
+  #spaceTarget { position:fixed; z-index:21; pointer-events:none; color:#ff9ad0; font-size:14px; letter-spacing:0.14em;
+    text-shadow:0 0 12px #aa1080, 0 0 4px #000; transform:translate(-50%,-50%); white-space:nowrap;
+    animation:tgtPulse 1.4s infinite alternate; }
+  @keyframes tgtPulse { from { opacity:0.65; } to { opacity:1; } }
+  body.touch #missionCard { top:auto; bottom:208px; left:12px; width:min(230px,52vw); }
+  body.touch #missionCard .mHint { display:none; }
+
   #mMed { right:176px; bottom:30px; width:54px; height:54px; background:rgba(10,60,40,0.55); border-color:rgba(120,255,190,0.6); }
   #mChat { left:96px; bottom:30px; width:50px; height:50px; }
   #mMap { left:26px; bottom:96px; width:50px; height:50px; font-size:10px; }
@@ -232,11 +261,11 @@
     </div>
   </div>
   <div id="resBar">
-    <div class="resItem"><span class="resDot" style="background:#ff8a4a"></span>FERRITE <b id="rFe">0</b></div>
-    <div class="resItem"><span class="resDot" style="background:#6fe0ff"></span>CRYO <b id="rCy">0</b></div>
-    <div class="resItem"><span class="resDot" style="background:#7fff9a"></span>BIOLUME <b id="rBio">0</b></div>
+    <div class="resItem"><span class="resDot" style="background:#ff8a2a"></span>FERRITE <b id="rFe">0</b></div>
+    <div class="resItem"><span class="resDot" style="background:#44eaff"></span>CRYO <b id="rCy">0</b></div>
+    <div class="resItem"><span class="resDot" style="background:#52ff7a"></span>BIOLUME <b id="rBio">0</b></div>
     <div class="resItem"><span class="resDot" style="background:#d8b878"></span>CHITIN <b id="rCh">0</b></div>
-    <div class="resItem" id="resPearl"><span class="resDot" style="background:#5fe9d6"></span>PEARL <b id="rPe">0</b></div>
+    <div class="resItem" id="resPearl"><span class="resDot" style="background:#5affe4"></span>PEARL <b id="rPe">0</b></div>
   </div>
   <div id="capNote"></div>
   <button id="tierBadge">TIER 1 ▸</button>
@@ -251,6 +280,12 @@
   <div id="protRing" class="hidden"></div>
   <div id="compass" class="hidden"><div id="compassStrip"></div><div id="compassCtr">▲</div></div>
   <div id="chatLog"></div>
+  <div id="missionCard" class="hidden">
+    <div id="missionTitle">ESTABLISH YOUR OUTPOST</div>
+    <button id="missionSkip">skip ✕</button>
+    <div id="missionSteps"></div>
+  </div>
+  <div id="spaceTarget" class="hidden">◆</div>
 </div>
 
 <div id="vignette" class="hidden"></div>
@@ -259,6 +294,11 @@
 
 <div id="toast"></div>
 <div id="banner" class="hidden">⚠ METEOR SHOWER INBOUND ⚠</div>
+<div id="claimBanner" class="hidden">
+  <div id="claimTitle">★ PLANET CLAIMED ★</div>
+  <div id="claimName"></div>
+  <div id="claimStory"></div>
+</div>
 <div id="flash"></div>
 <div class="cutbar" id="cutTop"></div><div class="cutbar" id="cutBot"></div>
 <div id="fade"><div id="fadeText"></div></div>
@@ -278,6 +318,8 @@
 <div id="settings" class="panel hidden">
   <button class="closeX" data-close="settings">✕</button>
   <h2>Settings</h2>
+  <div id="acctSettingsLine" style="font-size:13px;color:#7fc0da;margin-bottom:8px;letter-spacing:0.04em"></div>
+  <button class="menuBtn hidden" id="btnLogoutSettings">Log Out</button>
   <button class="menuBtn" id="btnExport">Export Save (copy code)</button>
   <button class="menuBtn" id="btnImportTog">Import Save (paste code)</button>
   <div id="importWrap" class="hidden">
@@ -288,7 +330,24 @@
   <button class="menuBtn" id="btnBob">Head Bob: ON</button>
   <button class="menuBtn" id="btnFx">Effects (Bloom): ON</button>
   <button class="menuBtn" id="btnAmb">Planet Ambience: OFF</button>
+  <button class="menuBtn" id="btnCine">Landing Cinematic: FIRST ONLY</button>
+  <button class="menuBtn" id="btnNeon">Neon Intensity: MED</button>
+  <button class="menuBtn" id="btnReplayIntro">Replay Intro Mission</button>
   <button class="menuBtn" id="btnQuit">Save & Quit to Title</button>
+</div>
+
+<div id="authPanel" class="panel hidden">
+  <button class="closeX" data-close="authPanel">✕</button>
+  <h2>Account</h2>
+  <div id="authIntro" style="font-size:13px;color:#8fc0d8;line-height:1.55;margin-bottom:14px">
+    Log in to find your worlds, inventory and progress on any device. Playing as a guest still works — an account just keeps your stuff safe.</div>
+  <input id="authEmail" class="mpInput" type="email" inputmode="email" autocomplete="email" maxlength="254"
+    placeholder="EMAIL" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <input id="authPass" class="mpInput" type="password" autocomplete="current-password" maxlength="72" placeholder="PASSWORD (8+ characters)">
+  <button class="menuBtn" id="btnLogin" style="width:100%">Log In</button>
+  <button class="menuBtn" id="btnSignup" style="width:100%">Create Account</button>
+  <div id="authUpgradeNote" class="hidden" style="font-size:12.5px;color:#9affc8;margin-top:10px;line-height:1.5"></div>
+  <div id="authStatus" style="min-height:20px;color:#ff9a8a;font-size:13px;margin-top:10px;letter-spacing:0.04em"></div>
 </div>
 
 <div id="craftMenu" class="panel hidden">
@@ -337,6 +396,7 @@
   <button class="menuBtn" id="mpGo">Create New World</button>
   <button class="menuBtn hidden" id="mpHostPrev">Host Previous World (pre-update)</button>
   <button class="menuBtn hidden" id="mpImportSolo">Import Solo Save → New World</button>
+  <div id="mpAcctWorlds"></div>
   <div id="mpRecent"></div>
   <div id="mpStatus"></div>
 </div>
@@ -362,6 +422,10 @@
   <button class="menuBtn" id="btnHost">Create / Host World</button>
   <button class="menuBtn" id="btnJoin">Join World by Code</button>
   <button class="menuBtn" id="btnTitleImport">Import Save</button>
+  <div id="acctBox" style="margin-top:14px;min-height:24px;text-align:center">
+    <button class="menuBtn" id="btnAccount">Log In / Save Progress</button>
+    <div id="acctInfo" class="hidden" style="font-size:13px;color:#9fd6ef;letter-spacing:0.06em"></div>
+  </div>
   <div id="ctrlHelp">
     <span class="desktopOnly"><b>WASD</b> move · <b>Mouse</b> look · <b>E</b> interact/mine · <b>Space</b> jump (hold = jetpack T3) · <b>Shift</b> sprint<br>
     <b>B</b> build menu · <b>T</b> upgrades · <b>Click</b> place · <b>X / Right-click</b> remove · Ship: <b>W/S</b> thrust, mouse steer</span>

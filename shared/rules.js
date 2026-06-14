@@ -9,7 +9,7 @@
    ============================================================ */
 import { SAFE_R, CARRY_BASE, CYCLE_S, STATION_MIN_PIECES,
   MAX_STRUCT, WORLD_R, CORE_R, STATION_MAX } from './constants.js';
-import { CAT, STATION, STATION_KEYS, STATION_POS, CORE_DIRS } from './catalog.js';
+import { CAT, STATION, STATION_KEYS, STATION_POS, CORE_DIRS, facTier } from './catalog.js';
 import { TIERS, WEAPONS, SLOT_KEYS, CRAFT } from './tiers.js';
 import { PLANETS, terrainH } from './world.js';
 
@@ -39,6 +39,19 @@ export function inSafeZone(structures, planet, x, z){
 
 /* ---- time ---- */
 export function todOf(clockSeconds){ return (((clockSeconds%CYCLE_S)+CYCLE_S)%CYCLE_S)/CYCLE_S; }
+
+/* ---- faction Command Node HP (Conquest) ----
+   One entry per faction planet; missing/invalid values default to full
+   nodeHp. Shared by the solo save, the MP store and the wire protocol. */
+export function readFnodeHp(d){
+  const o={};
+  for(const k in PLANETS){
+    const t=facTier(PLANETS[k]); if(!t) continue;
+    const v=(d&&isFinite(+d[k]))?+d[k]:t.nodeHp;
+    o[k]=Math.max(0,Math.min(t.nodeHp,Math.round(v)));
+  }
+  return o;
+}
 
 /* ---- orbital station ---- */
 export function stationComplete(pieces){
@@ -122,6 +135,21 @@ export function shotBlocked(walls, o, e){
     const u=(hx-w.x)*tx+(hz-w.z)*tz, v=hy-w.y;
     if(Math.abs(u)<=w.hw&&v>=-0.2&&v<=w.h) return [hx,hy,hz];
   }
+  return null;
+}
+
+/* ---- claiming a faction planet (Conquest) ----
+   The Claim Beacon may only rise in faction territory, after the Command
+   Node falls, inside the contested zone around its wreck. Returns an
+   error string, or null if claiming is legal. */
+export const CLAIM_R=45;
+export function claimError(p, ctl, fnHp, x, z){
+  if(!p||!p.fac) return 'No faction presence here to displace';
+  if(ctl==='yours') return 'This planet is already yours';
+  if(ctl!=='faction') return 'No faction presence here to displace';
+  if(fnHp>0) return 'Faction control node active — destroy it to claim';
+  const dx=x-p.fnode.x, dz=z-p.fnode.z;
+  if(dx*dx+dz*dz>CLAIM_R*CLAIM_R) return 'Too far from the downed control node — claim the contested zone';
   return null;
 }
 

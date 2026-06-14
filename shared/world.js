@@ -21,29 +21,66 @@ export function fbm(x,y,s){return vnoise(x,y,s)*0.6+vnoise(x*2.3,y*2.3,s+7)*0.3+
    light tint at dawn/dusk; glowNight: how hard lamp glows push at night */
 export const PLANETS={
   rust:   {name:'RUST',    seed:11, r:26, pos:[260,6,60],    surfCol:0x91502c, surfCol2:0x6b3318, rockCol:0x5a2e1c,
-           fog:0x4a2012, sky:0x2a1208, sun:0xffd9b0, amp:9,  res:'fe', nodeCol:0xff7a30, nodeEmis:0xb34400,
-           nightSky:0x0a0504, nightFog:0x150906, dusk:0xff8a50, glowNight:1.0,
+           fog:0x4a2012, sky:0x2a1208, sun:0xffd9b0, amp:9,  res:'fe', nodeCol:0xff8a2a, nodeEmis:0xe04400,
+           nightSky:0x120618, nightFog:0x1c0a20, nightAmb:0x3a1c58, dusk:0xff8a50, glowNight:1.0,
            ambient:{col:0xc97a4a, count:300, fall:-0.35, drift:2.4, size:0.2, op:0.4},   // wind-blown dust
+           starter:true,   // gets the first-session treatment: POIs, spawn node cluster, nearby wildlife
            floraCol:0x7a4a30, desc:'Iron-rich starter world'},
   glacius:{name:'GLACIUS', seed:23, r:30, pos:[-180,42,470], surfCol:0xaccde4, surfCol2:0x7fa8cc, rockCol:0x6688aa,
-           fog:0x9cc2dd, sky:0x16344e, sun:0xeaf4ff, amp:12, res:'cy', nodeCol:0x4fdfff, nodeEmis:0x0aa0cc,
-           nightSky:0x070d18, nightFog:0x0d1826, dusk:0xcfe0ff, glowNight:1.15,
+           fog:0x9cc2dd, sky:0x16344e, sun:0xeaf4ff, amp:12, res:'cy', nodeCol:0x44eaff, nodeEmis:0x00aadd,
+           nightSky:0x0a1226, nightFog:0x122036, dusk:0xcfe0ff, nightAmb:0x1e2c66, glowNight:1.15,
            ambient:{col:0xeaf4ff, count:380, fall:-2.0, drift:0.7, size:0.26, op:0.7},   // falling snow
            floraCol:0xcfe8ff, desc:'Frozen cryo-crystal fields'},
   verdant:{name:'VERDANT', seed:37, r:28, pos:[40,-26,-540], surfCol:0x4a8a48, surfCol2:0x2e6034, rockCol:0x3a5a3a,
-           fog:0x1d4a2a, sky:0x0a2010, sun:0xd0ffd8, amp:10, res:'bio', nodeCol:0x7fff9a, nodeEmis:0x22cc55,
-           nightSky:0x030a06, nightFog:0x08160d, dusk:0xa8ffc0, glowNight:1.35,
+           fog:0x1d4a2a, sky:0x0a2010, sun:0xd0ffd8, amp:10, res:'bio', nodeCol:0x52ff7a, nodeEmis:0x10dd44,
+           nightSky:0x06140e, nightFog:0x0c2018, dusk:0xa8ffc0, nightAmb:0x14402e, glowNight:1.35,
            ambient:{col:0x9aff9a, count:240, fall:0.3, drift:0.4, size:0.24, op:0.5, nightGlow:true},  // rising spores, glow after dark
            floraCol:0x8a4aaa, desc:'Bio-luminous alien jungle'},
   pelagos:{name:'PELAGOS', seed:53, r:27, pos:[-470,30,-200], surfCol:0x2f9a92, surfCol2:0x123f3c, rockCol:0x355f5b,
-           fog:0x1c6a74, sky:0x06283a, sun:0xd6fff6, amp:8, res:'pe', nodeCol:0x7fffe0, nodeEmis:0x10ccaa,
-           nightSky:0x03080e, nightFog:0x08141d, dusk:0x9fe8e0, glowNight:1.15,
+           fog:0x1c6a74, sky:0x06283a, sun:0xd6fff6, amp:8, res:'pe', nodeCol:0x5affe4, nodeEmis:0x00ccaa,
+           nightSky:0x070c1e, nightFog:0x0e1830, dusk:0x9fe8e0, nightAmb:0x1c2458, glowNight:1.15,
            ambient:{col:0xbfeee8, count:220, fall:-0.08, drift:1.3, size:0.3, op:0.3},   // drifting sea-mist motes
            floraCol:0x49c8bd, desc:'Teal archipelago — cross the water', water:true},
+  /* ---- Conquest update: faction-held territory (fac.diff scales the
+     defense; fnode = the Command Node site, the objective to break) ---- */
+  cinder: {name:'CINDER',  seed:67, r:27, pos:[540,-30,330],  surfCol:0x6e4438, surfCol2:0x3c241e, rockCol:0x32221e,
+           fog:0x3a1410, sky:0x1c0a06, sun:0xffb070, amp:11, res:'fe', nodeCol:0xff6a2a, nodeEmis:0xdd2a00,
+           nightSky:0x140406, nightFog:0x1e0a08, nightAmb:0x4a1a0e, dusk:0xff6a40, glowNight:1.1,
+           ambient:{col:0xff8a4a, count:260, fall:0.5, drift:1.6, size:0.2, op:0.45, nightGlow:true},   // rising embers
+           floraCol:0x8a4a2a, desc:'Ember wastes — faction territory',
+           fac:{diff:1}, fnode:{x:85,z:-55}},
+  umbra:  {name:'UMBRA',   seed:79, r:29, pos:[-660,60,-440], surfCol:0x5a4878, surfCol2:0x322650, rockCol:0x403258,
+           fog:0x241a3e, sky:0x100822, sun:0xcfb8ff, amp:10, res:'cy', nodeCol:0xb47aff, nodeEmis:0x6a20dd,
+           nightSky:0x0a0618, nightFog:0x120c26, nightAmb:0x2c1a5a, dusk:0xb88aff, glowNight:1.25,
+           ambient:{col:0xc8a8ff, count:240, fall:-0.15, drift:0.9, size:0.26, op:0.5, nightGlow:true},  // drifting violet motes
+           floraCol:0x7a5acc, desc:'Violet twilight world — faction territory',
+           fac:{diff:2}, fnode:{x:-70,z:75}},
+  noctis: {name:'NOCTIS',  seed:97, r:30, pos:[60,90,860],    surfCol:0x342e3e, surfCol2:0x181420, rockCol:0x232028,
+           fog:0x1a0c10, sky:0x070308, sun:0xff9a8a, amp:13, res:'bio', nodeCol:0xff4a3a, nodeEmis:0xcc1000,
+           nightSky:0x080306, nightFog:0x100608, nightAmb:0x401018, dusk:0xff5a4a, glowNight:1.3,
+           ambient:{col:0xff5a4a, count:200, fall:-0.6, drift:1.1, size:0.22, op:0.35},   // black ash with red glints
+           floraCol:0x6a2030, desc:'Obsidian stronghold — the faction\'s seat',
+           fac:{diff:3}, fnode:{x:95,z:80}},
 };
 export const PLANET_KEYS=Object.keys(PLANETS);
+
+/* ---------- faction control state (Conquest update) ----------
+   Per-planet, per-world: 'neutral' (freely landable), 'faction' (AI-held,
+   defended), 'yours' (claimed by players). Shared by save files, the MP
+   store and the wire protocol — readCtl sanitizes any of them. */
+export const CTL_STATES=['neutral','faction','yours'];
+/* the conquest mission thread walks outward, easy to brutal, ending at the stronghold */
+export const CONQUEST_CHAIN=['cinder','umbra','noctis'];
+export function defaultCtl(){
+  const o={}; for(const k of PLANET_KEYS) o[k]=PLANETS[k].fac?'faction':'neutral'; return o;
+}
+export function readCtl(d){
+  const o=defaultCtl();
+  if(d&&typeof d==='object') for(const k of PLANET_KEYS){ if(CTL_STATES.indexOf(d[k])>=0) o[k]=d[k]; }
+  return o;
+}
 export const RES_NAMES={fe:'Ferrite',cy:'Cryo-crystal',bio:'Biolume',ch:'Chitin',pe:'Abyssal Pearl'};
-export const RES_DOTS={fe:'#ff8a4a',cy:'#6fe0ff',bio:'#7fff9a',ch:'#d8b878',pe:'#5fe9d6'};
+export const RES_DOTS={fe:'#ff8a2a',cy:'#44eaff',bio:'#52ff7a',ch:'#d8b878',pe:'#5affe4'};
 
 /* ---------- terrain heightfields (fully deterministic) ---------- */
 export function terrainH(x,z,p){
@@ -111,6 +148,15 @@ export function surfaceLayout(p){
     const rot=rng()*6;
     const tx=rng()*0.6, ty=rng()*6, tz=rng()*0.6;   // initial visual tilt
     nodes.push({x,y,z,s,rot,tx,ty,tz});
+  }
+  /* starter world (First Light): a rich crystal cluster right by the landing
+     zone so the first mining is close and rewarding. APPENDED so existing
+     node indices (used by the mine protocol) stay stable. */
+  if(p.starter){
+    for(let i=0;i<4;i++){
+      const th=i*1.57+0.6, x=19+Math.cos(th)*4.2, z=-13+Math.sin(th)*4.2;
+      nodes.push({x,y:terrainH(x,z,p),z,s:1.3+(i%2)*0.35,rot:i*1.3,tx:rng()*0.6,ty:rng()*6,tz:rng()*0.6});
+    }
   }
   return {rocks,flora,nodes};
 }

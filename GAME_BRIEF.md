@@ -76,6 +76,20 @@ Live versions:
 > particles (`PLANETS.ambient`); new SND one-shots + opt-in looping planet ambience.
 > Tests: in-repo suites cover the new shared rules + cryopod-spawn persistence;
 > /tmp/pwtest gained p1_outpost/p1_mp/p3_light/p4_fx/p5_amb/p6_regress.
+>
+> **"First Light" onboarding update (2026-06-12, commits First Light P1-P4):** collapses
+> time-to-fun for brand-new players. P1 cinematic arrival (skippable ~7.4s descent, once
+> per device, Settings toggle for every landing; new players land in morning light).
+> P2 living starter world: Rust (`PLANETS.starter`) gets a Crystal Spire / Derelict /
+> Ruins near spawn (scene POIs + colliders + map markers, spawn yaw frames ship+spire),
+> a 4-node crystal cluster APPENDED in shared surfaceLayout, and guaranteed nearby
+> wildlife (solo seed + server seeds 3 when an occupied planet has none). P3 "Establish
+> Your Outpost" mission: 4 beats (build/mine/nav-beacon/spire), starter kit (solo grant +
+> server freshProg 40fe/15cy for new guests), objective card UI, persists in S.intro
+> (SAVE_VER **8**; pre-v8 saves = intro complete), device markers so it NEVER repeats.
+> P4 replay-intro Settings button + full regression. ⚠ VALIDATION: this update can only
+> truly be judged by watching 3-5 fresh humans play the opening — the checklist proves
+> mechanics, not retention.
 
 
 - **Language:** Plain JavaScript (ES2020), no TypeScript, **no build step**, no framework.

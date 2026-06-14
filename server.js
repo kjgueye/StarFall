@@ -58,20 +58,22 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /* shared rules/data — the SAME modules the client imports; no more hand-rolled mirrors */
-import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, STATION_MAX,
+import { MAX_STRUCT, SAFE_R, METEOR_DMG, HITS_PER_SHOWER, CRIT_CAP, DRONE_CAP, STATION_MAX,
   MINE_RANGE, SPAWN_PROT, HP_MAX, GREN_R, GREN_DMG, GREN_FUSE, SHIELD_CD, SHIELD_LIFE,
   TURRET_R, TURRET_DMG, TURRET_CD, WORLD_R, SEA_Y,
   O2_DRAIN, O2_DRAIN_SPRINT, O2_JET_MULT, O2_DRAIN_SUBMERGED, O2_REFILL,
   EVA_O2_DRAIN, EVA_O2_REFILL } from './shared/constants.js';
-import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC } from './shared/catalog.js';
-import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout } from './shared/world.js';
+import { CAT, STATION, STATION_KEYS, CRITTERS, CRIT_BY_PLANET, OWNED, NOKILL, DYNAMIC,
+  DRONES, facTier, DRONE_LEASH, DRONE_PATROL } from './shared/catalog.js';
+import { PLANETS as PDATA, PLANET_KEYS as PLANETS, surfaceLayout, readCtl } from './shared/world.js';
 import { stationComplete, todOf, canAfford, payCost, refundFor, carryCap, o2Max,
   placeError, craftCheck, tierUpCheck, fireCheck, stationPlaceValid,
-  inSafeZone, groundYAt, shotBlocked } from './shared/rules.js';
+  inSafeZone, groundYAt, shotBlocked, readFnodeHp, claimError } from './shared/rules.js';
 import { TIERS, WEP_KEYS, AMMO_KEYS } from './shared/tiers.js';
 import { openStore } from './store.js';
 
@@ -108,6 +110,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
   if (url === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok'); return; }
+  if (url.startsWith('/api/')) { handleApi(req, res, url).catch(() => { try { sendJson(res, 500, { error: 'Server error' }); } catch (e) {} }); return; }
   const rel = url === '/' ? 'index.html' : url.slice(1);
   const file = path.normalize(path.join(DIST, rel));
   if (!file.startsWith(DIST)) { res.writeHead(403); res.end('forbidden'); return; }   // traversal guard
@@ -154,11 +157,14 @@ function makeRoom(world, code) {
     seats: new Map(),                   // roverId -> pid (current driver)
     meteor: newMeteorState(),
     crit: {}, critT: {}, nextCrit: 1, critBcast: 0,   // critters per planet
+    ctl: readCtl(world && world.ctl),                 // faction control per planet (Conquest)
+    drones: {}, droneT: {}, nextDrone: 1,             // faction drones per planet (server-simulated)
+    fnodeHp: readFnodeHp(world && world.fnodeHp),     // Command Node HP per faction planet
     walls: [],                          // live deployable shield walls (server blocks shots)
     station: [], nextStation: 1, stationOnline: false,  // orbital station pieces
     emptySince: 0,
   };
-  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; }
+  for (const pl of PLANETS) { room.crit[pl] = []; room.critT[pl] = 2 + Math.random() * 4; room.drones[pl] = []; room.droneT[pl] = 0; }
   if (world && Array.isArray(world.structures)) {
     for (const s of world.structures) {
       if (room.structures.length >= MAX_STRUCT) break;
@@ -192,6 +198,7 @@ function serializeRoom(room) {
   return {
     v: 1, worldId: room.worldId, clock: room.clock,
     beacon: room.beacon, stationOnline: room.stationOnline,
+    ctl: { ...room.ctl }, fnodeHp: { ...room.fnodeHp },
     structures: room.structures.map(s => {
       const o = { t: s.t, pl: s.pl, x: +s.x.toFixed(2), y: +s.y.toFixed(2), z: +s.z.toFixed(2), r: s.r, hp: s.hp | 0 };
       if (s.owner !== undefined && s.owner !== null) o.owner = s.owner;
@@ -224,7 +231,10 @@ function saveWorld(room) {
    Phase 3 replaces that bridge with Postgres keyed by guest id. */
 const ci = (v, lo, hi) => Math.max(lo, Math.min(hi, v | 0));
 function freshProg() {
-  return { res: { fe: 0, cy: 0, bio: 0, ch: 0, pe: 0 }, tier: 1,
+  /* First Light: genuinely-new players start with a small kit so the opening
+     mission has zero grind. Returning players load their stored progress;
+     legacy imports overwrite via progRestore. */
+  return { res: { fe: 40, cy: 15, bio: 0, ch: 0, pe: 0 }, tier: 1,
     weapons: {}, ammo: { light: 0, heavy: 0, fuel: 0, nade: 0 }, medkits: 0 };
 }
 function sanitizeProg(d) {
@@ -293,6 +303,21 @@ function damageCritter(room, plKey, c, dmg, byPid, fromX, fromZ) {
     if (by) sendProg(room, byPid, { type: 'gain', k: 'ch', amt: got });
   }
 }
+/* drone damage + ferrite salvage — used by droneHit intents and grenade AoE */
+function damageDrone(room, plKey, d, dmg, byPid) {
+  const arr = room.drones[plKey]; if (!arr || arr.indexOf(d) < 0) return;
+  d.hp -= dmg;
+  d.st = 1;                                            // taking fire = engaged
+  if (d.hp <= 0) {
+    arr.splice(arr.indexOf(d), 1);
+    const r = DRONES[d.type].fe;
+    const fe = r[0] + Math.floor(Math.random() * (r[1] - r[0] + 1));
+    const by = room.players.get(byPid);
+    const got = by ? grantRes(room, by, 'fe', fe) : 0;
+    bcast(room, { t: 'droneDead', id: d.id, x: +d.x.toFixed(1), z: +d.z.toFixed(1), by: byPid, fe });
+    if (by) sendProg(room, byPid, { type: 'gain', k: 'fe', amt: got });
+  }
+}
 /* ballistic sim on the shared heightfield+structures — grenade rest point / shield landing */
 function simThrowable(room, pl, o, v, kind) {
   let x = +o[0], y = +o[1], z = +o[2], vx = +v[0], vy = +v[1], vz = +v[2];
@@ -356,6 +381,7 @@ function welcomeMsg(room, pid) {
       tod: todOf(room.clock),
       station: room.station,
       stationOnline: room.stationOnline,
+      ctl: room.ctl, fnodeHp: room.fnodeHp,
     },
   };
 }
@@ -363,9 +389,15 @@ function welcomeMsg(room, pid) {
 /* ---------- websocket ---------- */
 const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.room = null; ws.pid = null;
+  /* Phase 2: resolve any logged-in session from the upgrade request's cookie.
+     resolveIdentity() prefers ws.userId over the guest token, so a logged-in
+     player's worlds/progress key to their account. `userReady` lets host/join
+     await this lookup before deciding identity (no guest-vs-user race). */
+  ws.userId = null;
+  ws.userReady = sessionUser(req).then(u => { ws.userId = u ? u.id : null; }).catch(() => { ws.userId = null; });
   ws.q = Promise.resolve();             // per-socket queue: messages handled strictly in order
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => {});
@@ -401,6 +433,188 @@ async function resolveGuest(m, name) {
   const tok = crypto.randomBytes(16).toString('hex');
   await store.createPlayer({ id, tokenHash: hashTok(tok), name });
   return { id, tok };                               // fresh guest; token goes back in welcome
+}
+
+/* ---------- persistence identity (Phase 2) ----------
+   The one place that decides WHO a connection's worlds/progress belong to:
+   - logged in (session cookie resolved into ws.userId) -> the user id, backed
+     by an account `players` row. The user's data follows them to any device.
+   - otherwise -> the existing per-browser guest token, entirely unchanged.
+   Returns the same {id, tok} shape resolveGuest does; tok is null for accounts
+   (they authenticate by cookie, so nothing is sent back to the client). */
+async function resolveIdentity(ws, m, name) {
+  try { await ws.userReady; } catch (e) {}
+  if (ws.userId) {
+    await store.ensureUserPlayer(ws.userId, name).catch(() => {});
+    return { id: ws.userId, tok: null, user: true };
+  }
+  return resolveGuest(m, name);
+}
+
+/* ---------- accounts / auth (Phase 1) ----------
+   Real email+password identity layered on the Phase-3 persistence.
+   - Passwords are hashed with bcrypt (bcryptjs, a pure-JS implementation) —
+     never stored or logged in plaintext.
+   - Session tokens are cryptographically random; only their sha256 hash is
+     stored (table `sessions`), and the raw token rides in an httpOnly cookie.
+   - Login returns ONE generic error for unknown-email and wrong-password
+     alike, and is rate-limited per email+IP.
+   Phase 2 links worlds/progress to a logged-in user id: resolveIdentity()
+   keys persistence to ws.userId when a session is present, falling back to the
+   guest token otherwise (see resolveIdentity / GET /api/worlds).
+   DEFERRED (not built, clean seams only): password reset, email verification,
+   account recovery, OAuth, 2FA. */
+const SESSION_COOKIE = 'sf_session';
+const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;        // 30 days
+const BCRYPT_COST = 10;                              // bcryptjs default cost
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PW_MIN = 8, PW_MAX = 72;                       // bcrypt truncates beyond 72 bytes
+/* equalises login timing whether or not the email exists (anti-enumeration) */
+const DUMMY_HASH = bcrypt.hashSync('x'.repeat(24), BCRYPT_COST);
+
+const normEmail = e => String(e || '').trim().toLowerCase();
+const validEmail = e => e.length >= 3 && e.length <= 254 && EMAIL_RE.test(e);
+
+/* brute-force guard: per email+IP failed-attempt counter with cooldown.
+   In-memory is fine at this scale — a redeploy reset only forgives, never
+   punishes, so it can't lock anyone out. */
+const RL_MAX = 8, RL_WINDOW_MS = 15 * 60 * 1000, RL_COOLDOWN_MS = 15 * 60 * 1000;
+const loginAttempts = new Map();                     // key -> {n, reset, until}
+function rlBlocked(key) { const e = loginAttempts.get(key); return !!(e && e.until && Date.now() < e.until); }
+function rlHit(key) {
+  const now = Date.now();
+  let e = loginAttempts.get(key);
+  if (!e || now > e.reset) e = { n: 0, reset: now + RL_WINDOW_MS, until: 0 };
+  e.n++; if (e.n >= RL_MAX) e.until = now + RL_COOLDOWN_MS;
+  loginAttempts.set(key, e);
+}
+function rlReset(key) { loginAttempts.delete(key); }
+
+function clientIp(req) {
+  return (String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+}
+function parseCookies(req) {
+  const out = {}; const h = req.headers.cookie; if (!h) return out;
+  for (const part of h.split(';')) {
+    const i = part.indexOf('='); if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function readBody(req, cap = 8192) {
+  return new Promise(resolve => {
+    let data = '', tooBig = false;
+    req.on('data', c => { data += c; if (data.length > cap) { tooBig = true; req.destroy(); } });
+    req.on('end', () => resolve(tooBig ? null : data));
+    req.on('error', () => resolve(null));
+  });
+}
+function sendJson(res, status, obj, headers) {
+  res.writeHead(status, Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, headers || {}));
+  res.end(JSON.stringify(obj));
+}
+function cookieStr(token, req, maxAgeSec) {
+  const secure = req.headers['x-forwarded-proto'] === 'https';   // Railway TLS sets this; absent locally over http
+  let c = `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSec}`;
+  if (secure) c += '; Secure';
+  return c;
+}
+async function startSession(req, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await store.createSession({ tokenHash: hashTok(token), userId, expiresAt: Date.now() + SESSION_TTL_MS });
+  return cookieStr(token, req, Math.floor(SESSION_TTL_MS / 1000));
+}
+/* resolve a request's session cookie to its user row, or null (the Phase-2 seam) */
+async function sessionUser(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token) return null;
+  const sess = await store.getSession(hashTok(token)).catch(() => null);
+  if (!sess) return null;
+  return await store.getUserById(sess.userId).catch(() => null);
+}
+async function jsonBody(req) {
+  const raw = await readBody(req);
+  try { const b = JSON.parse(raw || ''); return (b && typeof b === 'object') ? b : null; } catch (e) { return null; }
+}
+
+async function handleApi(req, res, url) {
+  if (req.method === 'POST' && url === '/api/signup') return apiSignup(req, res);
+  if (req.method === 'POST' && url === '/api/login')  return apiLogin(req, res);
+  if (req.method === 'POST' && url === '/api/logout') return apiLogout(req, res);
+  if (req.method === 'POST' && url === '/api/claim-guest') return apiClaimGuest(req, res);
+  if (req.method === 'GET'  && url === '/api/me')     return apiMe(req, res);
+  if (req.method === 'GET'  && url === '/api/worlds') return apiWorlds(req, res);
+  return sendJson(res, 404, { error: 'Not found' });
+}
+async function apiSignup(req, res) {
+  const b = await jsonBody(req);
+  if (!b) return sendJson(res, 400, { error: 'Invalid request' });
+  const email = normEmail(b.email);
+  const password = typeof b.password === 'string' ? b.password : '';
+  if (!validEmail(email)) return sendJson(res, 400, { error: 'Enter a valid email address' });
+  if (password.length < PW_MIN || password.length > PW_MAX)
+    return sendJson(res, 400, { error: `Password must be ${PW_MIN}–${PW_MAX} characters` });
+  const hash = await bcrypt.hash(password, BCRYPT_COST);
+  const id = 'u' + crypto.randomBytes(8).toString('hex');
+  try {
+    await store.createUser({ id, email, passwordHash: hash });
+  } catch (e) {
+    if (e && e.code === '23505') return sendJson(res, 409, { error: 'That email is already registered' });
+    console.error('signup: store error');            // never log credentials or the hash
+    return sendJson(res, 500, { error: 'Could not create account' });
+  }
+  const cookie = await startSession(req, id);
+  return sendJson(res, 200, { ok: true, email }, { 'set-cookie': cookie });
+}
+async function apiLogin(req, res) {
+  const b = await jsonBody(req);
+  const email = normEmail(b && b.email);
+  const password = (b && typeof b.password === 'string') ? b.password : '';
+  const key = email + '|' + clientIp(req);
+  if (rlBlocked(key)) return sendJson(res, 429, { error: 'Too many attempts. Try again in a few minutes.' });
+  const user = (validEmail(email) && password) ? await store.getUserByEmail(email).catch(() => null) : null;
+  let ok = false;
+  if (user) ok = await bcrypt.compare(password, user.passwordHash).catch(() => false);
+  else await bcrypt.compare(password || 'x', DUMMY_HASH).catch(() => {});   // burn ~equal time when email is unknown
+  if (!ok) { rlHit(key); return sendJson(res, 401, { error: 'Invalid email or password' }); }
+  rlReset(key);
+  const cookie = await startSession(req, user.id);
+  return sendJson(res, 200, { ok: true, email: user.email }, { 'set-cookie': cookie });
+}
+async function apiLogout(req, res) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (token) await store.deleteSession(hashTok(token)).catch(() => {});
+  const secure = req.headers['x-forwarded-proto'] === 'https';
+  let clear = `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  if (secure) clear += '; Secure';
+  return sendJson(res, 200, { ok: true }, { 'set-cookie': clear });
+}
+/* Phase 3: guest upgrade. A logged-in user claims a guest identity's worlds +
+   progress into their account. Requires BOTH a valid session (the account) and
+   proof of the guest token (so you can only claim a guest you actually own). */
+async function apiClaimGuest(req, res) {
+  const u = await sessionUser(req);
+  if (!u) return sendJson(res, 401, { error: 'Not logged in' });
+  const b = await jsonBody(req);
+  const a = b && b.auth;
+  if (!a || typeof a.id !== 'string' || a.id.length > 32 || typeof a.tok !== 'string' || a.tok.length > 64)
+    return sendJson(res, 400, { error: 'Invalid request' });
+  const guest = await store.authPlayer(a.id, hashTok(a.tok)).catch(() => null);
+  if (!guest || guest.id === u.id) return sendJson(res, 200, { ok: true, claimed: 0 });
+  const claimed = await store.claimGuest(guest.id, u.id, guest.name).catch(() => 0);
+  return sendJson(res, 200, { ok: true, claimed });
+}
+async function apiMe(req, res) {
+  const u = await sessionUser(req);
+  return sendJson(res, 200, { user: u ? { id: u.id, email: u.email } : null });
+}
+/* Phase 2: the logged-in user's own worlds, so they can rejoin from any device.
+   Account-scoped — guests (no session) get an empty list, never another user's. */
+async function apiWorlds(req, res) {
+  const u = await sessionUser(req);
+  if (!u) return sendJson(res, 200, { worlds: [] });
+  const worlds = await store.listWorldsByOwner(u.id).catch(() => []);
+  return sendJson(res, 200, { worlds });
 }
 
 async function joinRoom(ws, room, name, opts) {
@@ -484,7 +698,7 @@ async function handle(ws, m) {
     case 'host': {
       if (ws.room) return;
       if (rooms.size >= MAX_ROOMS) { sendTo(ws, { t: 'err', msg: 'Server is at capacity, try later', fatal: true }); return; }
-      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      const guest = await resolveIdentity(ws, m, String(m.name || '').trim().slice(0, 16));
       /* a legacy snapshot whose worldId we already persist = that world, not a copy */
       if (m.world && typeof m.world.worldId === 'string') {
         let existing = null;
@@ -511,7 +725,7 @@ async function handle(ws, m) {
     case 'join': {
       if (ws.room) return;
       const code = String(m.code || '').trim().toUpperCase();
-      const guest = await resolveGuest(m, String(m.name || '').trim().slice(0, 16));
+      const guest = await resolveIdentity(ws, m, String(m.name || '').trim().slice(0, 16));
       let room = rooms.get(code);
       if (!room) {
         const w = await store.getWorldByCode(code).catch(() => null);
@@ -562,6 +776,10 @@ async function handle(ws, m) {
       if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       if (me.mode !== 'surface' || me.pl !== s.pl) { sendTo(ws, { t: 'err', msg: 'You must be on that surface to build' }); return; }
       if (s.t === 'beacon' && room.beacon) { sendTo(ws, { t: 'err', msg: 'The Beacon is already placed' }); return; }
+      if (s.t === 'claimpost') {
+        const cerr = claimError(PDATA[s.pl], room.ctl[s.pl], room.fnodeHp[s.pl] || 0, x, z);
+        if (cerr) { sendTo(ws, { t: 'err', msg: cerr }); return; }
+      }
       if (s.t === 'turret') {
         let mine = 0; for (const o of room.structures) if (o.t === 'turret' && o.owner === ws.pid) mine++;
         if (mine >= 8) { sendTo(ws, { t: 'err', msg: 'Turret limit reached (8 per player)' }); return; }
@@ -577,6 +795,18 @@ async function handle(ws, m) {
       room.structures.push(st);
       if (st.t === 'beacon') room.beacon = true;
       bcast(room, { t: 'placed', by: ws.pid, st });
+      if (st.t === 'claimpost') {
+        /* BUILD = conquest: the planet flips to the players' colors */
+        room.ctl[st.pl] = 'yours';
+        room.drones[st.pl] = [];                 // defense powers down (clients play the sequence)
+        bcast(room, { t: 'ctl', pl: st.pl, ctl: 'yours', by: ws.pid });
+        const tier = facTier(PDATA[st.pl]);
+        if (tier && tier.reward) {
+          for (const k in tier.reward) grantRes(room, me, k, tier.reward[k]);
+          sendProg(room, ws.pid, { type: 'claim', pl: st.pl });
+        }
+        saveWorld(room);
+      }
       sendProg(room, ws.pid);
       return;
     }
@@ -723,6 +953,10 @@ async function handle(ws, m) {
           const cd = Math.hypot(c.x - at.x, c.z - at.z);
           if (cd < GREN_R) damageCritter(room, pl, c, Math.round(GREN_DMG * (1 - cd / GREN_R)), byPid, at.x, at.z);
         }
+        for (const d of (room.drones[pl] || []).slice()) {
+          const dd = Math.hypot(d.x - at.x, d.z - at.z);
+          if (dd < GREN_R) damageDrone(room, pl, d, Math.round(GREN_DMG * (1 - dd / GREN_R)), byPid);
+        }
       }, GREN_FUSE * 1000);
       return;
     }
@@ -807,6 +1041,45 @@ async function handle(ws, m) {
       const dx = c.x - me.pos[0], dz = c.z - me.pos[2];
       if (dx * dx + dz * dz > range * range) return;
       damageCritter(room, me.pl, c, dmg, ws.pid, me.pos[0], me.pos[2]);
+      return;
+    }
+    case 'droneHit': {
+      /* damage computed server-side from the claimed weapon — never trusted */
+      if (me.mode !== 'surface') return;
+      const arr = room.drones[me.pl]; if (!arr) return;
+      const d = arr.find(k => k.id === m.id); if (!d) return;
+      const wp = m.wp | 0;
+      let dmg = 0, range = 0;
+      if (wp === 6) {                                   // grenade AoE
+        if (!me.weapons.grenade) return;
+        dmg = GREN_DMG; range = 46;
+      } else {
+        const chk = fireCheck(me.weapons, { light: 1e9, heavy: 1e9, fuel: 1e9, nade: 1e9 }, wp);  // ammo charged on 'fire'
+        if (chk.err || !chk.w.dmg) return;
+        dmg = chk.w.dmg; range = (chk.w.range || 4) + 10;
+      }
+      const dx = d.x - me.pos[0], dz = d.z - me.pos[2];
+      if (dx * dx + dz * dz > range * range) return;
+      damageDrone(room, me.pl, d, dmg, ws.pid);
+      return;
+    }
+    case 'fnodeHit': {
+      /* shots at the faction Command Node — server owns its HP */
+      if (me.mode !== 'surface') return;
+      const p = PDATA[me.pl];
+      if (!p || !p.fac || room.ctl[me.pl] !== 'faction') return;
+      if (!(room.fnodeHp[me.pl] > 0)) return;
+      const chk = fireCheck(me.weapons, { light: 1e9, heavy: 1e9, fuel: 1e9, nade: 1e9 }, m.wp | 0);
+      if (chk.err || !chk.w.dmg) return;
+      const range = (chk.w.range || 4) + 10;
+      const dx = p.fnode.x - me.pos[0], dz = p.fnode.z - me.pos[2];
+      if (dx * dx + dz * dz > range * range) return;
+      room.fnodeHp[me.pl] = Math.max(0, room.fnodeHp[me.pl] - chk.w.dmg);
+      bcast(room, { t: 'fnodeHp', pl: me.pl, hp: room.fnodeHp[me.pl] });
+      if (room.fnodeHp[me.pl] <= 0) {
+        bcast(room, { t: 'fnodeDown', pl: me.pl, by: ws.pid });
+        saveWorld(room);
+      }
       return;
     }
     /* 'died' intent removed in P2.3 — the server decides deaths in damagePlayer() */
@@ -967,6 +1240,19 @@ function simCritters(room, pl, dt) {
   const ps = [];
   for (const p of room.players.values()) if (p.mode === 'surface' && p.pl === pl) ps.push(p);
   const beacon = beaconOnPlanetS(room, pl);
+  /* a freshly-occupied (or hunted-out) surface seeds a few critters near the
+     landing zone immediately — the world reads as inhabited within seconds */
+  if (arr.length === 0) {
+    const types = CRIT_BY_PLANET[pl];
+    for (let i = 0; i < 3; i++) {
+      const ang = Math.random() * Math.PI * 2, rad = 25 + Math.random() * 35;
+      const x = Math.cos(ang) * rad, z = Math.sin(ang) * rad;
+      if (beacon) { const dx = x - beacon.x, dz = z - beacon.z; if (dx * dx + dz * dz < (SAFE_R + 4) * (SAFE_R + 4)) continue; }
+      const type = types[Math.floor(Math.random() * types.length)];
+      arr.push({ id: 'c' + (room.nextCrit++), type, x, z, hp: CRITTERS[type].hp,
+        hd: Math.random() * 6.283, wt: 1 + Math.random() * 3, idle: 0, st: 0 });
+    }
+  }
   /* respawn up to cap */
   room.critT[pl] -= dt;
   if (arr.length < CRIT_CAP && room.critT[pl] <= 0) {
@@ -997,6 +1283,80 @@ function simCritters(room, pl, dt) {
     const r = Math.hypot(c.x, c.z);
     if (r > 360) { c.x *= 360 / r; c.z *= 360 / r; c.hd += Math.PI; }
     if (beacon) { const dx = c.x - beacon.x, dz = c.z - beacon.z, d = Math.hypot(dx, dz); if (d < SAFE_R + 2) { const f = (SAFE_R + 2) / (d || 1); c.x = beacon.x + dx * f; c.z = beacon.z + dz * f; c.hd = Math.atan2(dz, dx); } }
+  }
+}
+
+/* faction drones (Conquest): server-side sim while the surface is occupied
+   and faction-held. Deliberately dumb: detect, close to ~9m, orbit, fire on
+   a cooldown. Sentries ring the Command Node and never move. */
+function simDrones(room, pl, dt) {
+  const p = PDATA[pl];
+  if (!p || !p.fac || room.ctl[pl] !== 'faction') return;
+  const arr = room.drones[pl];
+  const tier = facTier(p);
+  const fn = p.fnode;
+  /* population upkeep — instant seed on first contact, slow respawns after,
+     no new spawns once the Command Node is down */
+  const mkSentry = i => { const a = i * (Math.PI * 2 / tier.sentries) + 0.7;
+    return { id: 'd' + (room.nextDrone++), type: 'sentry', x: fn.x + Math.cos(a) * 9, z: fn.z + Math.sin(a) * 9,
+      hp: Math.round(DRONES.sentry.hp * tier.hpMul), hd: a, wt: 0, st: 0, fireT: 1 + Math.random() }; };
+  const mkRoamer = type => { const a = Math.random() * 6.283, r = 12 + Math.random() * DRONE_PATROL;
+    return { id: 'd' + (room.nextDrone++), type, x: fn.x + Math.cos(a) * r, z: fn.z + Math.sin(a) * r,
+      hp: Math.round(DRONES[type].hp * tier.hpMul), hd: Math.random() * 6.283, wt: 1 + Math.random() * 2, st: 0, fireT: 1 + Math.random() }; };
+  if (room.fnodeHp[pl] > 0 && arr.length < DRONE_CAP) {
+    if (arr.length === 0) {
+      for (let i = 0; i < tier.sentries; i++) arr.push(mkSentry(i));
+      for (let i = 0; i < tier.count && arr.length < DRONE_CAP; i++) arr.push(mkRoamer(tier.roam[i % tier.roam.length]));
+      room.droneT[pl] = 4;
+    } else {
+      let sentries = 0; for (const d of arr) if (DRONES[d.type].turret) sentries++;
+      if (sentries < tier.sentries || arr.length - sentries < tier.count) {
+        room.droneT[pl] -= dt;
+        if (room.droneT[pl] <= 0) {
+          room.droneT[pl] = 3 + Math.random() * 4;
+          if (sentries < tier.sentries) arr.push(mkSentry(sentries));
+          else arr.push(mkRoamer(tier.roam[Math.floor(Math.random() * tier.roam.length)]));
+        }
+      }
+    }
+  }
+  /* targets: surface players here, not protected, not safe-zoned */
+  const now = Date.now();
+  const ps = [];
+  for (const [pid, pp] of room.players) {
+    if (pp.mode !== 'surface' || pp.pl !== pl) continue;
+    if (now < pp.invulnUntil) continue;
+    if (inSafeZone(room.structures, pl, pp.pos[0], pp.pos[2])) continue;
+    ps.push({ pid, p: pp });
+  }
+  for (const d of arr) {
+    const def = DRONES[d.type];
+    let tgt = null, td = 1e18;
+    for (const t of ps) { const dx = d.x - t.p.pos[0], dz = d.z - t.p.pos[2], q = dx * dx + dz * dz; if (q < td) { td = q; tgt = t; } }
+    const dist = Math.sqrt(td);
+    const engaged = !!tgt && dist < def.detectR;
+    if (engaged) d.st = 1; else if (d.st && (!tgt || dist > def.detectR * 1.4)) d.st = 0;
+    if (!def.turret) {
+      if (engaged) {
+        const dirx = (tgt.p.pos[0] - d.x) / (dist || 1), dirz = (tgt.p.pos[2] - d.z) / (dist || 1);
+        if (dist > 9) { d.x += dirx * def.speed * dt; d.z += dirz * def.speed * dt; }
+        else { d.x += -dirz * def.speed * 0.6 * dt; d.z += dirx * def.speed * 0.6 * dt; }   // strafe-orbit
+      } else {
+        d.wt -= dt;
+        if (d.wt <= 0) { d.wt = 1.5 + Math.random() * 2.5; d.hd = Math.random() * 6.283; }
+        d.x += Math.cos(d.hd) * def.speed * 0.4 * dt; d.z += Math.sin(d.hd) * def.speed * 0.4 * dt;
+        const hx = d.x - fn.x, hz = d.z - fn.z, hd2 = Math.hypot(hx, hz);
+        if (hd2 > DRONE_PATROL) { d.x = fn.x + hx / hd2 * DRONE_PATROL; d.z = fn.z + hz / hd2 * DRONE_PATROL; d.hd += Math.PI; }
+      }
+      const lx = d.x - fn.x, lz = d.z - fn.z, ld = Math.hypot(lx, lz);
+      if (ld > DRONE_LEASH) { d.x = fn.x + lx / ld * DRONE_LEASH; d.z = fn.z + lz / ld * DRONE_LEASH; }
+    }
+    d.fireT -= dt;
+    if (engaged && dist < def.range && d.fireT <= 0) {
+      d.fireT = def.fireCd;
+      bcast(room, { t: 'dfire', id: d.id, tp: tgt.pid, p: [tgt.p.pos[0], tgt.p.pos[1] + 1, tgt.p.pos[2]] });
+      damagePlayer(room, tgt.pid, Math.round(def.dmg * tier.dmgMul), 0);
+    }
   }
 }
 
@@ -1036,6 +1396,7 @@ setInterval(() => {
       for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occupied = true; break; } }
       if (!occupied) continue;
       simCritters(room, pl, dt);
+      simDrones(room, pl, dt);
       simTurrets(room, pl, dt);
       const ms = room.meteor[pl];
       ms.t -= dt;
@@ -1062,11 +1423,13 @@ setInterval(() => {
     if (room.critBcast >= 0.2) {
       room.critBcast = 0;
       for (const pl of PLANETS) {
-        if (!room.crit[pl].length) continue;
+        if (!room.crit[pl].length && !room.drones[pl].length) continue;
         let occ = false;
         for (const p of room.players.values()) { if (p.mode === 'surface' && p.pl === pl) { occ = true; break; } }
         if (!occ) continue;
-        bcast(room, { t: 'critSnap', pl, crit: room.crit[pl].map(c => ({ id: c.id, ty: c.type, x: +c.x.toFixed(1), z: +c.z.toFixed(1), st: c.st })) });
+        if (room.crit[pl].length)
+          bcast(room, { t: 'critSnap', pl, crit: room.crit[pl].map(c => ({ id: c.id, ty: c.type, x: +c.x.toFixed(1), z: +c.z.toFixed(1), st: c.st })) });
+        bcast(room, { t: 'droneSnap', pl, drones: room.drones[pl].map(d => ({ id: d.id, ty: d.type, x: +d.x.toFixed(1), z: +d.z.toFixed(1), st: d.st })) });
       }
     }
   }
@@ -1089,6 +1452,14 @@ setInterval(() => {
     for (const p of room.players.values()) saveProgressOf(room, p);
   }
 }, AUTOSAVE_MS);
+
+/* hourly hygiene: drop expired sessions from the store and stale rate-limit
+   entries from memory */
+setInterval(() => {
+  store.sweepSessions().catch(() => {});
+  const now = Date.now();
+  for (const [k, e] of loginAttempts) if (now > e.reset && (!e.until || now > e.until)) loginAttempts.delete(k);
+}, 3600 * 1000);
 
 /* flush everything on shutdown so a deploy/restart never eats progress */
 let shuttingDown = false;
