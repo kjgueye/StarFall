@@ -162,6 +162,28 @@ class PgStore {
       'SELECT code, created_at, last_active FROM worlds WHERE owner_id=$1 ORDER BY last_active DESC', [ownerId]);
     return r.rows.map(x => ({ code: x.code, createdAt: x.created_at, lastActive: x.last_active }));
   }
+  /* Phase 3 guest upgrade: reassign a guest player's worlds + progress to an
+     account user id, atomically. Returns the number of worlds moved. */
+  async claimGuest(guestId, userId, name) {
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('INSERT INTO players (id, token_hash, name) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING',
+        [userId, ACCOUNT_PLAYER_TOKEN, name || 'PLAYER']);
+      /* move progress rows that don't collide with progress the account already
+         has for the same world, then drop any leftover guest rows */
+      await c.query(`UPDATE player_progress SET player_id=$2
+        WHERE player_id=$1 AND world_id NOT IN (SELECT world_id FROM player_progress WHERE player_id=$2)`,
+        [guestId, userId]);
+      await c.query('DELETE FROM player_progress WHERE player_id=$1', [guestId]);
+      const r = await c.query('UPDATE worlds SET owner_id=$2 WHERE owner_id=$1', [guestId, userId]);
+      await c.query('COMMIT');
+      return r.rowCount || 0;
+    } catch (e) {
+      try { await c.query('ROLLBACK'); } catch (e2) {}
+      throw e;
+    } finally { c.release(); }
+  }
   async getProgress(playerId, worldId) {
     const r = await this.pool.query('SELECT prog FROM player_progress WHERE player_id=$1 AND world_id=$2', [playerId, worldId]);
     return r.rows[0] ? r.rows[0].prog : null;
@@ -248,6 +270,21 @@ class FileStore {
     }
     out.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
     return out;
+  }
+  async claimGuest(guestId, userId, name) {
+    if (!this.d.players[userId])
+      this.d.players[userId] = { tokenHash: ACCOUNT_PLAYER_TOKEN, name: name || 'PLAYER', account: true, createdAt: Date.now(), lastSeen: Date.now() };
+    let n = 0;
+    for (const id in this.d.worlds) if (this.d.worlds[id].ownerId === guestId) { this.d.worlds[id].ownerId = userId; n++; }
+    for (const k in this.d.progress) {
+      const i = k.indexOf('|'); if (i < 0) continue;
+      if (k.slice(0, i) !== guestId) continue;
+      const nk = userId + '|' + k.slice(i + 1);
+      if (!this.d.progress[nk]) this.d.progress[nk] = this.d.progress[k];   // don't clobber existing account progress
+      delete this.d.progress[k];
+    }
+    this._save();
+    return n;
   }
   async getProgress(playerId, worldId) {
     return this.d.progress[playerId + '|' + worldId] || null;

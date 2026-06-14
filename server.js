@@ -541,6 +541,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url === '/api/signup') return apiSignup(req, res);
   if (req.method === 'POST' && url === '/api/login')  return apiLogin(req, res);
   if (req.method === 'POST' && url === '/api/logout') return apiLogout(req, res);
+  if (req.method === 'POST' && url === '/api/claim-guest') return apiClaimGuest(req, res);
   if (req.method === 'GET'  && url === '/api/me')     return apiMe(req, res);
   if (req.method === 'GET'  && url === '/api/worlds') return apiWorlds(req, res);
   return sendJson(res, 404, { error: 'Not found' });
@@ -587,6 +588,21 @@ async function apiLogout(req, res) {
   let clear = `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
   if (secure) clear += '; Secure';
   return sendJson(res, 200, { ok: true }, { 'set-cookie': clear });
+}
+/* Phase 3: guest upgrade. A logged-in user claims a guest identity's worlds +
+   progress into their account. Requires BOTH a valid session (the account) and
+   proof of the guest token (so you can only claim a guest you actually own). */
+async function apiClaimGuest(req, res) {
+  const u = await sessionUser(req);
+  if (!u) return sendJson(res, 401, { error: 'Not logged in' });
+  const b = await jsonBody(req);
+  const a = b && b.auth;
+  if (!a || typeof a.id !== 'string' || a.id.length > 32 || typeof a.tok !== 'string' || a.tok.length > 64)
+    return sendJson(res, 400, { error: 'Invalid request' });
+  const guest = await store.authPlayer(a.id, hashTok(a.tok)).catch(() => null);
+  if (!guest || guest.id === u.id) return sendJson(res, 200, { ok: true, claimed: 0 });
+  const claimed = await store.claimGuest(guest.id, u.id, guest.name).catch(() => 0);
+  return sendJson(res, 200, { ok: true, claimed });
 }
 async function apiMe(req, res) {
   const u = await sessionUser(req);

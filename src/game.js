@@ -3809,7 +3809,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu','authPanel'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -4102,6 +4102,7 @@ function openSettings(){
   $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY');
   $('btnNeon').textContent='Neon Intensity: '+(S.neon||'med').toUpperCase();
   $('importWrap').classList.add('hidden');
+  updateAcctUI();
   openPanel('settings');
 }
 $('btnExport').addEventListener('click',()=>{ saveGame(); exportSave(); });
@@ -5095,6 +5096,7 @@ function openMpSetup(mode){
       +rec.map(w=>'<button class="menuBtn" data-code="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
     :'';
   try{ $('mpName').value=localStorage.getItem('astravox_name')||''; }catch(e){}
+  loadAcctWorlds();
   mpStatus('');
   openPanel('mpSetup');
 }
@@ -5277,6 +5279,108 @@ $('btnNew').addEventListener('click',()=>{
   startGame(false);
 });
 $('btnTitleImport').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); $('importWrap').classList.remove('hidden'); });
+
+/* ---------- accounts: login / signup / guest-upgrade (Phase 3) ----------
+   Login is OPTIONAL. A logged-in session (httpOnly cookie) is the durable
+   identity; the WS handshake carries the same cookie, so once logged in the
+   server keys all worlds/progress to the account automatically. A guest who
+   already has progress can "Create Account" to claim it into the new account. */
+let ACCOUNT=null;
+function authStatus(s){ const el=$('authStatus'); if(el) el.textContent=s||''; }
+function authBusy(b){ ['btnLogin','btnSignup'].forEach(id=>{ const el=$(id); if(el) el.disabled=b; }); }
+async function authPost(url,body){
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(body||{})});
+    let j={}; try{ j=await r.json(); }catch(e){}
+    return {ok:r.ok,status:r.status,j};
+  }catch(e){ return {ok:false,status:0,j:{error:'Network error — try again'}}; }
+}
+async function refreshAccount(){
+  try{
+    const r=await fetch('/api/me',{credentials:'same-origin'});
+    const j=await r.json(); ACCOUNT=(j&&j.user)||null;
+  }catch(e){ ACCOUNT=null; }
+  updateAcctUI();
+}
+function updateAcctUI(){
+  const btn=$('btnAccount'), info=$('acctInfo');
+  if(btn&&info){
+    if(ACCOUNT){
+      btn.classList.add('hidden');
+      info.classList.remove('hidden');
+      info.innerHTML='<span style="color:#9affc8">●</span> '+escHtml(ACCOUNT.email)
+        +' &nbsp;<button id="btnLogoutTitle" style="background:none;border:1px solid #3fa9d4;color:#9fd6ef;padding:3px 12px;cursor:pointer;font-size:12px;letter-spacing:0.06em">Log Out</button>';
+      const lo=$('btnLogoutTitle'); if(lo) lo.addEventListener('click',()=>{ SND.blip(); doLogout(); });
+    } else {
+      btn.classList.remove('hidden'); info.classList.add('hidden'); info.innerHTML='';
+    }
+  }
+  const sl=$('btnLogoutSettings'); if(sl) sl.classList.toggle('hidden',!ACCOUNT);
+  const asl=$('acctSettingsLine'); if(asl) asl.textContent=ACCOUNT?('Logged in as '+ACCOUNT.email):'Playing as guest (not logged in)';
+}
+function openAuth(){
+  $('authEmail').value=''; $('authPass').value=''; authStatus(''); authBusy(false);
+  const g=guestAuth(), note=$('authUpgradeNote');
+  if(g&&(recentWorlds().length>0)){
+    note.classList.remove('hidden');
+    note.textContent='You have guest progress on this device. Creating an account will save your current worlds and progress to it.';
+  } else if(g){
+    note.classList.remove('hidden');
+    note.textContent='Creating an account will link your current guest progress to it.';
+  } else note.classList.add('hidden');
+  openPanel('authPanel');
+  setTimeout(()=>{ try{ $('authEmail').focus(); }catch(e){} },60);
+}
+async function doLogin(){
+  const email=$('authEmail').value.trim(), pass=$('authPass').value;
+  if(!email||!pass){ authStatus('Enter your email and password'); return; }
+  authBusy(true); authStatus('Logging in…');
+  const {ok,j}=await authPost('/api/login',{email,password:pass});
+  if(ok){ authStatus(''); SND.blip(); location.reload(); }
+  else { authBusy(false); authStatus((j&&j.error)||'Could not log in'); }
+}
+async function doSignup(){
+  const email=$('authEmail').value.trim(), pass=$('authPass').value;
+  if(!email||!pass){ authStatus('Enter your email and password'); return; }
+  authBusy(true); authStatus('Creating account…');
+  const {ok,j}=await authPost('/api/signup',{email,password:pass});
+  if(!ok){ authBusy(false); authStatus((j&&j.error)||'Could not create account'); return; }
+  const g=guestAuth();
+  if(g){ await authPost('/api/claim-guest',{auth:g}); }   // migrate guest worlds/progress into the new account
+  authStatus(''); SND.tierUp(); location.reload();
+}
+async function doLogout(){
+  await authPost('/api/logout',{});
+  location.reload();
+}
+$('btnAccount').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openAuth(); });
+$('btnLogin').addEventListener('click',doLogin);
+$('btnSignup').addEventListener('click',doSignup);
+$('btnLogoutSettings').addEventListener('click',()=>{ SND.blip(); doLogout(); });
+$('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+/* logged-in player's worlds, joinable from any device (rendered in mpSetup) */
+async function loadAcctWorlds(){
+  const el=$('mpAcctWorlds'); if(!el) return;
+  if(!ACCOUNT){ el.innerHTML=''; return; }
+  el.innerHTML='<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">YOUR WORLDS</div><div style="color:#6fa8c4;font-size:12px">loading…</div>';
+  let worlds=[];
+  try{ const r=await fetch('/api/worlds',{credentials:'same-origin'}); worlds=((await r.json())||{}).worlds||[]; }catch(e){}
+  el.innerHTML=worlds.length
+    ?'<div style="margin:10px 0 2px;color:#5fa8c8;font-size:11px;letter-spacing:0.2em">YOUR WORLDS</div>'
+      +worlds.map(w=>'<button class="menuBtn" data-join="'+escHtml(w.code)+'" style="font-size:13px;padding:9px 0;margin:4px auto">'+escHtml(w.code)+'</button>').join('')
+    :'';
+}
+$('mpAcctWorlds').addEventListener('click',e=>{
+  const b=e.target&&e.target.closest('[data-join]'); if(!b) return;
+  let name=$('mpName').value.trim().slice(0,16);
+  if(!name&&ACCOUNT) name=ACCOUNT.email.split('@')[0].slice(0,16);
+  if(!name){ mpStatus('Enter a name first'); return; }
+  $('mpName').value=name;
+  try{ localStorage.setItem('astravox_name',name); }catch(e){}
+  NET.name=name; NET.isHost=false; SND.ensure();
+  NET.connect({t:'join',code:b.dataset.join,name,auth:guestAuth()});
+});
+refreshAccount();   // resolve any existing session and reflect it on the title screen
 
 /* ---------- secret "Commander" host: maxed resources (granted server-side) ---------- */
 let secretTaps=0, secretT=0;
