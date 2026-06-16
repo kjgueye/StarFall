@@ -5667,6 +5667,13 @@ function skinPreviewInit(){
   const dir=new THREE.DirectionalLight(0xffffff,1.4); dir.position.set(2,4,3); scene.add(dir);
   scene.add(new THREE.AmbientLight(0x44506a,0.6));
   const cam=new THREE.PerspectiveCamera(38,1,0.1,100); cam.position.set(0,1.05,3.25); cam.lookAt(0,0.92,0);
+  /* grounding pad so the astronaut reads as standing, not floating */
+  const pad=new THREE.Mesh(new THREE.CylinderGeometry(0.62,0.7,0.06,32),
+    new THREE.MeshStandardMaterial({color:0x12303f,emissive:0x0a2230,emissiveIntensity:0.4,roughness:0.6}));
+  pad.position.y=0; scene.add(pad);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(0.66,0.74,40),
+    new THREE.MeshBasicMaterial({color:0x3fbfff,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.035; scene.add(ring);
   skinPrev={renderer,scene,cam,avatar:null,raf:0,yaw:0,spin:true};
   /* drag to spin (mouse + touch) */
   let down=false,lx=0;
@@ -5690,6 +5697,7 @@ function skinPreviewRebuild(){
   const p=skinPreviewInit();
   if(p.avatar){ p.scene.remove(p.avatar); }
   const av=buildAvatar(0,'',sanitizeAppr(skinDraft,0)); av.visible=true; av.rotation.y=p.yaw;
+  av.traverse(o=>{ if(o.isSprite) o.visible=false; });   // no name tag in the preview
   p.scene.add(av); p.avatar=av;
 }
 function skinPreviewLoop(){
