@@ -1051,6 +1051,11 @@ function buildHeldWeapon(kind){
    land in Phase 3. This touches LOOKS only — never inventory/progress.
    ============================================================ */
 const APPR_VER=1;
+/* number of valid values for each shape/accessory option id (values 0..n-1);
+   the Phase 3 builder reads these to lay out its selectors. 0 is always the
+   "plain/stock" choice (helmet:dome, pack:box, antenna/trim:off) EXCEPT pack
+   whose stock value is 1 (the default backpack). */
+const APPR_OPTS={helmetStyle:3, antenna:2, pack:3, trim:2};
 function defaultAppr(slot){
   return {v:APPR_VER,
     col:{ body:0xd8dde4, limbs:0xd8dde4, visor:0x9fd8ff, accent:SLOT_COLORS[(slot|0)%4] },
@@ -1060,9 +1065,11 @@ function sanitizeAppr(a,slot){
   const d=defaultAppr(slot);
   if(!a||typeof a!=='object') return d;
   const c=a.col||{}, hx=(v,dv)=>{ v=+v; return (isFinite(v)&&v>=0&&v<=0xffffff)?(v|0):dv; };
+  const opt=(v,n,dv)=>{ v=(v==null?dv:v|0); return (v>=0&&v<n)?v:dv; };
   return {v:APPR_VER,
     col:{ body:hx(c.body,d.col.body), limbs:hx(c.limbs,d.col.limbs), visor:hx(c.visor,d.col.visor), accent:hx(c.accent,d.col.accent) },
-    helmetStyle:a.helmetStyle|0, antenna:a.antenna|0, pack:(a.pack==null?1:a.pack|0), trim:a.trim|0 };
+    helmetStyle:opt(a.helmetStyle,APPR_OPTS.helmetStyle,0), antenna:opt(a.antenna,APPR_OPTS.antenna,0),
+    pack:opt(a.pack,APPR_OPTS.pack,1), trim:opt(a.trim,APPR_OPTS.trim,0) };
 }
 /* local player's active look — null until they customize (Phase 3 builder),
    so today's players are byte-for-byte unchanged. Persisted per-device now;
@@ -1093,8 +1100,33 @@ function buildAvatar(slot,name,appr){
   const body=new THREE.Mesh(GEO.cyl,bodyMat); body.scale.set(0.55,0.75,0.4); body.position.y=0.85; g.add(body);
   const helmet=new THREE.Mesh(GEO.sphere,visorMat);
   helmet.scale.set(0.44,0.44,0.44); helmet.position.y=1.45; g.add(helmet);
-  const pack=new THREE.Mesh(GEO.box,MAT.dark); pack.scale.set(0.42,0.55,0.22); pack.position.set(0,0.95,0.28); g.add(pack);
   const stripe=new THREE.Mesh(GEO.box,accentMat); stripe.scale.set(0.58,0.1,0.44); stripe.position.y=1.16; g.add(stripe);
+  /* ---- shape & accessory options (Phase 2) — all primitives, all optional;
+     shells/crest reuse body/accent materials so recolor still reaches them ---- */
+  if(appr.helmetStyle>=1){   // opaque shell hugging the dome (body-colored)
+    const shell=new THREE.Mesh(GEO.sphere,bodyMat); shell.scale.set(0.47,0.43,0.47); shell.position.set(0,1.45,-0.05); g.add(shell);
+  }
+  if(appr.helmetStyle>=2){   // crest fin (accent glow)
+    const crest=new THREE.Mesh(GEO.box,accentMat); crest.scale.set(0.05,0.2,0.34); crest.position.set(0,1.72,-0.04); g.add(crest);
+  }
+  if(appr.antenna){          // side antenna with a glowing tip
+    const rod=new THREE.Mesh(GEO.cyl,MAT.metal); rod.scale.set(0.016,0.32,0.016); rod.position.set(0.2,1.78,-0.06); g.add(rod);
+    const tip=new THREE.Mesh(GEO.sphere,accentMat); tip.scale.set(0.05,0.05,0.05); tip.position.set(0.2,1.96,-0.06); g.add(tip);
+  }
+  if(appr.pack===1){         // stock backpack (default)
+    const pack=new THREE.Mesh(GEO.box,MAT.dark); pack.scale.set(0.42,0.55,0.22); pack.position.set(0,0.95,0.28); g.add(pack);
+  } else if(appr.pack===2){  // jetpack: twin thrusters with accent nozzles
+    const base=new THREE.Mesh(GEO.box,MAT.dark); base.scale.set(0.4,0.5,0.2); base.position.set(0,0.98,0.28); g.add(base);
+    for(const sx of [-0.16,0.16]){
+      const thr=new THREE.Mesh(GEO.cyl,MAT.metal); thr.scale.set(0.08,0.5,0.08); thr.position.set(sx,0.92,0.33); g.add(thr);
+      const noz=new THREE.Mesh(GEO.sphere,accentMat); noz.scale.set(0.07,0.05,0.07); noz.position.set(sx,0.66,0.33); g.add(noz);
+    }
+  }                          // pack===0: bare back
+  if(appr.trim){             // accent shoulder pads
+    for(const sx of [-0.34,0.34]){
+      const pad=new THREE.Mesh(GEO.sphere,accentMat); pad.scale.set(0.14,0.09,0.14); pad.position.set(sx,1.2,0); g.add(pad);
+    }
+  }
   /* limbs as hip/shoulder-pivoted groups */
   const mkLimb=(nm,hx,hy,sc)=>{ const grp=new THREE.Group(); grp.name=nm; grp.position.set(hx,hy,0);
     const seg=new THREE.Mesh(GEO.cyl,limbMat); seg.scale.set(sc,0.5,sc); seg.position.y=-0.25; grp.add(seg); g.add(grp); return grp; };
@@ -5717,7 +5749,7 @@ Object.assign(window,{
   updateHeavyWeapons,updateStationGhost,updateStationVisibility,updateTierBadge,updateViewmodel,
   updateWater,useMed,
   /* Identity update — character appearance (cosmetic) */
-  buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS});
+  buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS,APPR_OPTS});
 for(const [name,get,set] of [
   ['buildSel',()=>buildSel,v=>{buildSel=v;}],
   ['weaponCd',()=>weaponCd,v=>{weaponCd=v;}],
