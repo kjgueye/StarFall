@@ -366,12 +366,26 @@ function meteorSnapshot(room) {
   }
   return out;
 }
+/* cosmetic appearance is an opaque little blob the server only relays; this
+   bounds it (known keys, color range, small option ids) so a malicious client
+   can't inflate or poison it. null = no custom look (stock slot color). */
+function sanitizeAppr(a) {
+  if (!a || typeof a !== 'object') return null;
+  const c = (a.col && typeof a.col === 'object') ? a.col : {};
+  const hx = v => { v = +v; return (isFinite(v) && v >= 0 && v <= 0xffffff) ? (v | 0) : 0; };
+  const id = v => { v = v | 0; return (v >= 0 && v <= 15) ? v : 0; };
+  return {
+    v: 1,
+    col: { body: hx(c.body), limbs: hx(c.limbs), visor: hx(c.visor), accent: hx(c.accent) },
+    helmetStyle: id(a.helmetStyle), antenna: id(a.antenna), pack: id(a.pack == null ? 1 : a.pack), trim: id(a.trim),
+  };
+}
 function welcomeMsg(room, pid) {
   const self = room.players.get(pid);
   return {
     t: 'welcome', pid, code: room.code, worldId: room.worldId,
     prog: self ? Object.assign(progOf(self), { o2: Math.round(self.o2), fuel: Math.round(self.fuel) }) : undefined,
-    players: [...room.players.entries()].map(([id, p]) => ({ pid: id, name: p.name, slot: p.slot })),
+    players: [...room.players.entries()].map(([id, p]) => ({ pid: id, name: p.name, slot: p.slot, appr: p.appearance || undefined })),
     world: {
       structures: room.structures,
       beacon: room.beacon,
@@ -669,6 +683,7 @@ async function joinRoom(ws, room, name, opts) {
   }
   /* secret "Commander" host: maxed resources in your own fresh world */
   if (opts && opts.commander && player.fresh) for (const k in player.res) player.res[k] = 99999;
+  player.appearance = (opts && opts.appr) ? sanitizeAppr(opts.appr) : null;   // cosmetic look (relayed only)
   room.players.set(pid, player);
   room.emptySince = 0;
   ws.room = room; ws.pid = pid;
@@ -678,7 +693,7 @@ async function joinRoom(ws, room, name, opts) {
   if (player.spawn) w.spawn = player.spawn;
   if (guest && guest.tok) w.guest = { id: guest.id, tok: guest.tok };
   sendTo(ws, w);
-  bcast(room, { t: 'pjoin', pid, name, slot }, pid);
+  bcast(room, { t: 'pjoin', pid, name, slot, appr: player.appearance || undefined }, pid);
 }
 
 /* bring a stored world back to life (or join its already-live room) */
@@ -704,9 +719,9 @@ async function handle(ws, m) {
       if (m.world && typeof m.world.worldId === 'string') {
         let existing = null;
         for (const r of rooms.values()) if (r.worldId === m.world.worldId) { existing = r; break; }
-        if (existing) { await joinRoom(ws, existing, m.name, { guest }); return; }
+        if (existing) { await joinRoom(ws, existing, m.name, { guest, appr: m.appr }); return; }
         const w = await store.getWorldById(m.world.worldId).catch(() => null);
-        if (w) { await joinPersisted(ws, w, m.name, { guest }); return; }
+        if (w) { await joinPersisted(ws, w, m.name, { guest, appr: m.appr }); return; }
       }
       if (await store.countWorldsByOwner(guest.id).catch(() => 0) >= MAX_WORLDS_PER_GUEST) {
         sendTo(ws, { t: 'err', msg: 'World limit reached (' + MAX_WORLDS_PER_GUEST + ' per player)', fatal: true }); return;
@@ -719,7 +734,7 @@ async function handle(ws, m) {
         await store.createWorld({ id: room.worldId, code, ownerId: guest.id, state: serializeRoom(room) });
       } catch (e) { sendTo(ws, { t: 'err', msg: 'Could not create world', fatal: true }); return; }
       rooms.set(code, room);
-      await joinRoom(ws, room, m.name, { commander: !!m.cmd, guest });
+      await joinRoom(ws, room, m.name, { commander: !!m.cmd, guest, appr: m.appr });
       if (room.players.size === 0) rooms.delete(room.code); // join failed somehow
       return;
     }
@@ -731,10 +746,10 @@ async function handle(ws, m) {
       if (!room) {
         const w = await store.getWorldByCode(code).catch(() => null);
         if (!w) { sendTo(ws, { t: 'err', msg: 'No world with that code', fatal: true }); return; }
-        await joinPersisted(ws, w, m.name, { guest });
+        await joinPersisted(ws, w, m.name, { guest, appr: m.appr });
         return;
       }
-      await joinRoom(ws, room, m.name, { guest });
+      await joinRoom(ws, room, m.name, { guest, appr: m.appr });
       return;
     }
   }
@@ -754,6 +769,12 @@ async function handle(ws, m) {
       me.sp = !!m.sp; me.jt = !!m.jt; me.ev = !!m.ev;   // activity flags for the vitals ledger
       bcast(room, { t: 'pu', pid: ws.pid, pos: me.pos, yaw: me.yaw, pitch: me.pitch, mode: me.mode, pl: me.pl,
         wp: m.wp | 0, iv: m.iv ? 1 : 0, dr: m.dr | 0, sw: m.sw ? 1 : 0 }, ws.pid);
+      return;
+    }
+    case 'appr': {
+      /* live cosmetic change: store + relay to the room (null reverts to stock) */
+      me.appearance = m.appr ? sanitizeAppr(m.appr) : null;
+      bcast(room, { t: 'appr', pid: ws.pid, appr: me.appearance || undefined }, ws.pid);
       return;
     }
     case 'progRestore': {

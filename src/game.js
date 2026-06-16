@@ -89,6 +89,7 @@ const S={
   pendingCutscene:null,
   weapons:{blade:false,pistol:false,rifle:false,lance:false,inferno:false,grenade:false,shield:false},  // owned
   ammo:{light:0,heavy:0,fuel:0,nade:0}, medkits:0, slot:0, headbob:true,
+  appr:null,                // active character appearance (cosmetic); null = stock slot look
 };
 /* WEP_KEYS / AMMO_KEYS imported from shared/tiers.js */
 function readWeapons(w){ w=w||{}; const o={}; for(const k of WEP_KEYS) o[k]=!!w[k]; return o; }
@@ -142,7 +143,11 @@ const NET={
     catch(e){ mpStatus('Could not reach the co-op server'); return; }
     this.ws=ws;
     mpStatus('Connecting…');
-    ws.onopen=()=>{ mpStatus('Joining…'); this.send(action); };
+    ws.onopen=()=>{ mpStatus('Joining…');
+      /* carry my active look into the room handshake (omitted when uncustomized
+         so peers fall back to the stock slot color) */
+      if((action.t==='host'||action.t==='join')&&S.appr) action=Object.assign({},action,{appr:S.appr});
+      this.send(action); };
     ws.onmessage=ev=>{ let m; try{ m=JSON.parse(ev.data); }catch(e){ return; } try{ netHandle(m); }catch(e){} };
     ws.onerror=()=>{};
     ws.onclose=()=>{
@@ -172,8 +177,9 @@ function netHandle(m){
       break;
     case 'pjoin':
       NET.players.set(m.pid,{name:m.name,slot:m.slot});
-      addRemote(m.pid,m.name,m.slot);
+      addRemote(m.pid,m.name,m.slot,m.appr);
       addChat(null,m.name+' joined the expedition',true); updateRoomBadge(); break;
+    case 'appr': setRemoteAppr(m.pid,m.appr); break;
     case 'pleave': {
       const p=NET.players.get(m.pid);
       if(p) addChat(null,p.name+' left',true);
@@ -1034,18 +1040,64 @@ function buildHeldWeapon(kind){
   g.rotation.x=Math.PI/2; g.visible=false;
   return g;
 }
-function buildAvatar(slot,name){
+/* ============================================================
+   CHARACTER APPEARANCE (Identity update) — COSMETIC ONLY
+   A small object: per-part colors + a neon (emissive) accent + shape/
+   option ids. defaultAppr(slot) reproduces the stock astronaut for a
+   given slot, so a player who never customizes looks exactly as before
+   and uncustomized players broadcast no appr at all (slot-color default).
+   Option ids (helmetStyle/antenna/pack/trim) are reserved here and wired
+   to geometry in Phase 2; the builder UI + 4 saved slots + account save
+   land in Phase 3. This touches LOOKS only — never inventory/progress.
+   ============================================================ */
+const APPR_VER=1;
+function defaultAppr(slot){
+  return {v:APPR_VER,
+    col:{ body:0xd8dde4, limbs:0xd8dde4, visor:0x9fd8ff, accent:SLOT_COLORS[(slot|0)%4] },
+    helmetStyle:0, antenna:0, pack:1, trim:0 };
+}
+function sanitizeAppr(a,slot){
+  const d=defaultAppr(slot);
+  if(!a||typeof a!=='object') return d;
+  const c=a.col||{}, hx=(v,dv)=>{ v=+v; return (isFinite(v)&&v>=0&&v<=0xffffff)?(v|0):dv; };
+  return {v:APPR_VER,
+    col:{ body:hx(c.body,d.col.body), limbs:hx(c.limbs,d.col.limbs), visor:hx(c.visor,d.col.visor), accent:hx(c.accent,d.col.accent) },
+    helmetStyle:a.helmetStyle|0, antenna:a.antenna|0, pack:(a.pack==null?1:a.pack|0), trim:a.trim|0 };
+}
+/* local player's active look — null until they customize (Phase 3 builder),
+   so today's players are byte-for-byte unchanged. Persisted per-device now;
+   account/cross-device save arrives with the 4 slots in Phase 3. */
+const APPR_KEY='astravox_appearance_v1';
+function loadMyAppr(){ try{ const a=JSON.parse(localStorage.getItem(APPR_KEY)); return a?sanitizeAppr(a,0):null; }catch(e){ return null; } }
+function saveMyAppr(){ try{ if(S.appr) localStorage.setItem(APPR_KEY,JSON.stringify(S.appr)); else localStorage.removeItem(APPR_KEY); }catch(e){} }
+S.appr=loadMyAppr();
+
+/* recolor an already-built avatar's materials in place (color-only changes;
+   shape/option changes rebuild — Phase 2). Materials are stashed on g.userData. */
+function applyApprColors(g,appr){
+  const m=g.userData.apprMats; if(!m) return;
+  m.body.color.setHex(appr.col.body);
+  m.limbs.color.setHex(appr.col.limbs);
+  m.visor.color.setHex(appr.col.visor);
+  m.accent.color.setHex(appr.col.accent); m.accent.emissive.setHex(appr.col.accent);
+}
+function buildAvatar(slot,name,appr){
+  appr=appr||defaultAppr(slot);
   const g=new THREE.Group();
-  const tint=new THREE.MeshStandardMaterial({color:SLOT_COLORS[slot%4],emissive:SLOT_COLORS[slot%4],emissiveIntensity:0.6,roughness:0.5});
-  const suit=stdMat(0xd8dde4,{roughness:0.7});
-  const body=new THREE.Mesh(GEO.cyl,suit); body.scale.set(0.55,0.75,0.4); body.position.y=0.85; g.add(body);
-  const helmet=new THREE.Mesh(GEO.sphere,new THREE.MeshStandardMaterial({color:0x9fd8ff,roughness:0.15,metalness:0.3,emissive:0x16384a,emissiveIntensity:0.6}));
+  /* per-instance materials so each avatar carries its own look */
+  const bodyMat=stdMat(appr.col.body,{roughness:0.7});
+  const limbMat=stdMat(appr.col.limbs,{roughness:0.7});
+  const visorMat=new THREE.MeshStandardMaterial({color:appr.col.visor,roughness:0.15,metalness:0.3,emissive:0x16384a,emissiveIntensity:0.6});
+  const accentMat=new THREE.MeshStandardMaterial({color:appr.col.accent,emissive:appr.col.accent,emissiveIntensity:0.6,roughness:0.5});
+  g.userData.apprMats={body:bodyMat,limbs:limbMat,visor:visorMat,accent:accentMat};
+  const body=new THREE.Mesh(GEO.cyl,bodyMat); body.scale.set(0.55,0.75,0.4); body.position.y=0.85; g.add(body);
+  const helmet=new THREE.Mesh(GEO.sphere,visorMat);
   helmet.scale.set(0.44,0.44,0.44); helmet.position.y=1.45; g.add(helmet);
   const pack=new THREE.Mesh(GEO.box,MAT.dark); pack.scale.set(0.42,0.55,0.22); pack.position.set(0,0.95,0.28); g.add(pack);
-  const stripe=new THREE.Mesh(GEO.box,tint); stripe.scale.set(0.58,0.1,0.44); stripe.position.y=1.16; g.add(stripe);
+  const stripe=new THREE.Mesh(GEO.box,accentMat); stripe.scale.set(0.58,0.1,0.44); stripe.position.y=1.16; g.add(stripe);
   /* limbs as hip/shoulder-pivoted groups */
   const mkLimb=(nm,hx,hy,sc)=>{ const grp=new THREE.Group(); grp.name=nm; grp.position.set(hx,hy,0);
-    const seg=new THREE.Mesh(GEO.cyl,suit); seg.scale.set(sc,0.5,sc); seg.position.y=-0.25; grp.add(seg); g.add(grp); return grp; };
+    const seg=new THREE.Mesh(GEO.cyl,limbMat); seg.scale.set(sc,0.5,sc); seg.position.y=-0.25; grp.add(seg); g.add(grp); return grp; };
   mkLimb('legL',-0.15,0.52,0.16); mkLimb('legR',0.15,0.52,0.16);
   mkLimb('armL',-0.38,1.12,0.13);
   const armR=mkLimb('armR',0.38,1.12,0.13);
@@ -1060,20 +1112,45 @@ function buildAvatar(slot,name){
   g.visible=false;
   return g;
 }
-function addRemote(pid,name,slot){
+/* (re-)grab the per-avatar node refs the animator drives — shared by
+   addRemote and the appearance rebuild path */
+function wireAvatarRefs(r){
+  const av=r.avatar, hand=av.getObjectByName('hand');
+  r.legL=av.getObjectByName('legL'); r.legR=av.getObjectByName('legR');
+  r.armL=av.getObjectByName('armL'); r.armR=av.getObjectByName('armR');
+  r.shimmer=av.getObjectByName('shimmer');
+  r.weps={tool:hand.getObjectByName('w_tool'),blade:hand.getObjectByName('w_blade'),pistol:hand.getObjectByName('w_pistol'),rifle:hand.getObjectByName('w_rifle')};
+}
+function addRemote(pid,name,slot,appr){
   if(remotes.has(pid)) removeRemote(pid);
-  const av=buildAvatar(slot,name);
+  appr=appr?sanitizeAppr(appr,slot):null;
+  const av=buildAvatar(slot,name,appr||defaultAppr(slot));
   surfScene.add(av);
   const shp=buildShip();
   const legs=shp.getObjectByName('legs'); if(legs) legs.visible=false;
   const tag=makeNameTag(name); tag.position.y=4.4; shp.add(tag);
   shp.visible=false;
   spaceScene.add(shp);
-  const hand=av.getObjectByName('hand');
-  remotes.set(pid,{name,slot,snaps:[],mode:'space',pl:'rust',avatar:av,ship:shp,wp:0,iv:false,dr:0,swingT:0,animPhase:0,_spd:0,
-    legL:av.getObjectByName('legL'),legR:av.getObjectByName('legR'),armL:av.getObjectByName('armL'),armR:av.getObjectByName('armR'),
-    shimmer:av.getObjectByName('shimmer'),
-    weps:{tool:hand.getObjectByName('w_tool'),blade:hand.getObjectByName('w_blade'),pistol:hand.getObjectByName('w_pistol'),rifle:hand.getObjectByName('w_rifle')}});
+  const r={name,slot,appr,snaps:[],mode:'space',pl:'rust',avatar:av,ship:shp,wp:0,iv:false,dr:0,swingT:0,animPhase:0,_spd:0};
+  wireAvatarRefs(r);
+  remotes.set(pid,r);
+}
+/* a remote changed their look: recolor in place (color-only) or rebuild the
+   avatar group for shape/option changes (Phase 2), preserving transform/snaps */
+function setRemoteAppr(pid,appr){
+  const r=remotes.get(pid); if(!r) return;
+  const next=sanitizeAppr(appr,r.slot);
+  const shapeChanged=!r.appr||r.appr.helmetStyle!==next.helmetStyle||r.appr.antenna!==next.antenna||r.appr.pack!==next.pack||r.appr.trim!==next.trim;
+  r.appr=next;
+  if(shapeChanged){
+    const old=r.avatar;
+    const av=buildAvatar(r.slot,r.name,next);
+    av.position.copy(old.position); av.rotation.copy(old.rotation); av.visible=old.visible;
+    surfScene.remove(old); surfScene.add(av);
+    r.avatar=av; wireAvatarRefs(r);
+  } else {
+    applyApprColors(r.avatar,next);
+  }
 }
 function removeRemote(pid){
   const r=remotes.get(pid); if(!r) return;
@@ -1709,15 +1786,40 @@ function groundYAt(x,z,curY){ return R.groundYAt(S.structures,S.planet,x,z,curY)
    ============================================================ */
 const player={x:0,y:0,z:0,vy:0,yaw:0,pitch:0,grounded:true,h:1.7,hp:HP_MAX,invuln:0};
 const tool=new THREE.Group();
+/* own materials for the first-person glove + tool emitter so the local
+   player's chosen look shows on the bits they can actually see (the emitter
+   material is a clone, not shared MAT.emisC, so tinting stays local) */
+const fpMats={glove:stdMat(0xc8a888,{roughness:0.8}), emitter:MAT.emisC.clone()};
 {
   const grip=new THREE.Mesh(GEO.box,MAT.dark); grip.scale.set(0.07,0.2,0.1); grip.position.set(0,-0.07,0.05); tool.add(grip);
   const barrel=new THREE.Mesh(GEO.cyl,MAT.metal); barrel.scale.set(0.05,0.3,0.05);
   barrel.rotation.x=Math.PI/2; barrel.position.set(0,0.03,-0.1); tool.add(barrel);
-  const emitter=new THREE.Mesh(GEO.sphere,MAT.emisC); emitter.scale.set(0.05,0.05,0.05); emitter.position.set(0,0.03,-0.26); tool.add(emitter);
-  const hand=new THREE.Mesh(GEO.sphere,stdMat(0xc8a888,{roughness:0.8})); hand.scale.set(0.09,0.07,0.12); hand.position.set(0,-0.13,0.1); tool.add(hand);
+  const emitter=new THREE.Mesh(GEO.sphere,fpMats.emitter); emitter.scale.set(0.05,0.05,0.05); emitter.position.set(0,0.03,-0.26); tool.add(emitter);
+  const hand=new THREE.Mesh(GEO.sphere,fpMats.glove); hand.scale.set(0.09,0.07,0.12); hand.position.set(0,-0.13,0.1); tool.add(hand);
   tool.position.set(0.34,-0.3,-0.55);
   camera.add(tool);
 }
+/* push the local player's appearance onto the FP bits — only when customized,
+   so the stock look is untouched */
+function applyApprToFP(){
+  if(S.appr){
+    fpMats.glove.color.setHex(S.appr.col.limbs);
+    fpMats.emitter.color.setHex(S.appr.col.accent); fpMats.emitter.emissive.setHex(S.appr.col.accent);
+  } else {
+    fpMats.glove.color.setHex(0xc8a888);
+    fpMats.emitter.color.copy(MAT.emisC.color); fpMats.emitter.emissive.copy(MAT.emisC.emissive);
+  }
+}
+/* set + persist + broadcast the local player's active look (Phase 3 builder
+   calls this; exposed on window for testing before the UI exists) */
+function setMyAppearance(appr){
+  S.appr=appr?sanitizeAppr(appr,0):null;
+  saveMyAppr();
+  applyApprToFP();
+  if(NET.active) NET.send({t:'appr',appr:S.appr});
+}
+if(typeof window!=='undefined') window.__setAppr=setMyAppearance;
+applyApprToFP();
 surfScene.add(camera);
 
 function o2Max(){ return R.o2Max(S.tier); }
@@ -5325,7 +5427,7 @@ function startMultiplayer(w){
   }
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
-  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
+  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot,p.appr);
   closeAllPanels();
   startGame(fromSave);
   updateRoomBadge();
@@ -5342,7 +5444,7 @@ function resyncFromWelcome(w){
   if(w.spawn&&PLANETS[w.spawn.pl]) S.respawnPt={pl:w.spawn.pl,x:+w.spawn.x,y:+w.spawn.y,z:+w.spawn.z};
   clearRemotes();
   NET.players=new Map(w.players.map(p=>[p.pid,{name:p.name,slot:p.slot}]));
-  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot);
+  for(const p of w.players) if(p.pid!==NET.pid) addRemote(p.pid,p.name,p.slot,p.appr);
   if(S.mode==='surface'&&surf.built){
     refreshStructures();
     const dead=NET.deadNodes[S.planet]||new Set();
@@ -5613,7 +5715,9 @@ Object.assign(window,{
   setSlot,shotBlocked,showToast,startShieldCutscene,startStamp,terrainH,terrainHWater,throwGadget,
   toggleFreePlace,toggleMap,triggerVictory,unlockTier,updateCritters,updateDoors,updateHUDRes,
   updateHeavyWeapons,updateStationGhost,updateStationVisibility,updateTierBadge,updateViewmodel,
-  updateWater,useMed});
+  updateWater,useMed,
+  /* Identity update — character appearance (cosmetic) */
+  buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS});
 for(const [name,get,set] of [
   ['buildSel',()=>buildSel,v=>{buildSel=v;}],
   ['weaponCd',()=>weaponCd,v=>{weaponCd=v;}],
