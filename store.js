@@ -85,6 +85,7 @@ class PgStore {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         expires_at TIMESTAMPTZ NOT NULL
       );
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS appearance JSONB;   -- Identity update: cosmetic skin slots, follow the account cross-device
     `);
   }
   /* ---- accounts (Phase 1 auth) ---- */
@@ -96,8 +97,15 @@ class PgStore {
     return r.rows[0] ? { id: r.rows[0].id, email: r.rows[0].email, passwordHash: r.rows[0].password_hash } : null;
   }
   async getUserById(id) {
-    const r = await this.pool.query('SELECT id, email FROM users WHERE id=$1', [id]);
+    const r = await this.pool.query('SELECT id, email, appearance FROM users WHERE id=$1', [id]);
     return r.rows[0] || null;
+  }
+  async getUserAppearance(id) {
+    const r = await this.pool.query('SELECT appearance FROM users WHERE id=$1', [id]);
+    return r.rows[0] ? r.rows[0].appearance : null;
+  }
+  async saveUserAppearance(id, appearance) {
+    await this.pool.query('UPDATE users SET appearance=$2 WHERE id=$1', [id, appearance]);
   }
   async createSession({ tokenHash, userId, expiresAt }) {
     await this.pool.query('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1,$2,$3)', [tokenHash, userId, new Date(expiresAt)]);
@@ -307,7 +315,15 @@ class FileStore {
   }
   async getUserById(id) {
     const u = this.d.users[id];
-    return u ? { id, email: u.email } : null;
+    return u ? { id, email: u.email, appearance: u.appearance || null } : null;
+  }
+  async getUserAppearance(id) {
+    const u = this.d.users[id];
+    return u ? (u.appearance || null) : null;
+  }
+  async saveUserAppearance(id, appearance) {
+    const u = this.d.users[id]; if (!u) return;
+    u.appearance = appearance; this._save();
   }
   async createSession({ tokenHash, userId, expiresAt }) {
     this.d.sessions[tokenHash] = { userId, expiresAt };

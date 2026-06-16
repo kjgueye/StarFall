@@ -380,6 +380,15 @@ function sanitizeAppr(a) {
     helmetStyle: id(a.helmetStyle), antenna: id(a.antenna), pack: id(a.pack == null ? 1 : a.pack), trim: id(a.trim),
   };
 }
+/* the account-saved cosmetic blob: up to 4 saved looks + which is active.
+   Each slot is a sanitized appr or null (empty slot). */
+function sanitizeApprSlots(d) {
+  if (!d || typeof d !== 'object') return null;
+  const arr = Array.isArray(d.slots) ? d.slots : [];
+  const slots = [0, 1, 2, 3].map(i => (arr[i] ? sanitizeAppr(arr[i]) : null));
+  let active = d.active | 0; if (active < 0 || active > 3) active = 0;
+  return { v: 1, slots, active };
+}
 function welcomeMsg(room, pid) {
   const self = room.players.get(pid);
   return {
@@ -558,6 +567,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url === '/api/logout') return apiLogout(req, res);
   if (req.method === 'POST' && url === '/api/claim-guest') return apiClaimGuest(req, res);
   if (req.method === 'GET'  && url === '/api/me')     return apiMe(req, res);
+  if (req.method === 'POST' && url === '/api/appearance') return apiAppearance(req, res);
   if (req.method === 'GET'  && url === '/api/worlds') return apiWorlds(req, res);
   return sendJson(res, 404, { error: 'Not found' });
 }
@@ -621,7 +631,18 @@ async function apiClaimGuest(req, res) {
 }
 async function apiMe(req, res) {
   const u = await sessionUser(req);
-  return sendJson(res, 200, { user: u ? { id: u.id, email: u.email } : null });
+  return sendJson(res, 200, { user: u ? { id: u.id, email: u.email, appearance: u.appearance || null } : null });
+}
+/* Identity update: the logged-in user's saved cosmetic looks, so they follow
+   the account to any device. Session-gated; guests persist locally instead. */
+async function apiAppearance(req, res) {
+  const u = await sessionUser(req);
+  if (!u) return sendJson(res, 401, { error: 'Log in to save looks to your account' });
+  const body = await jsonBody(req);
+  const clean = sanitizeApprSlots(body && body.appearance);
+  if (!clean) return sendJson(res, 400, { error: 'Bad appearance' });
+  await store.saveUserAppearance(u.id, clean).catch(() => {});
+  return sendJson(res, 200, { ok: true, appearance: clean });
 }
 /* Phase 2: the logged-in user's own worlds, so they can rejoin from any device.
    Account-scoped — guests (no session) get an empty list, never another user's. */

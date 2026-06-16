@@ -1071,13 +1071,53 @@ function sanitizeAppr(a,slot){
     helmetStyle:opt(a.helmetStyle,APPR_OPTS.helmetStyle,0), antenna:opt(a.antenna,APPR_OPTS.antenna,0),
     pack:opt(a.pack,APPR_OPTS.pack,1), trim:opt(a.trim,APPR_OPTS.trim,0) };
 }
-/* local player's active look — null until they customize (Phase 3 builder),
-   so today's players are byte-for-byte unchanged. Persisted per-device now;
-   account/cross-device save arrives with the 4 slots in Phase 3. */
+/* local player's saved looks — up to 4 slots + which is active. The ACTIVE
+   slot resolves to S.appr (null = stock, so uncustomized players are
+   byte-for-byte unchanged). Persisted per-device in localStorage and, when
+   logged in, to the account (cross-device) via /api/appearance. */
 const APPR_KEY='astravox_appearance_v1';
-function loadMyAppr(){ try{ const a=JSON.parse(localStorage.getItem(APPR_KEY)); return a?sanitizeAppr(a,0):null; }catch(e){ return null; } }
-function saveMyAppr(){ try{ if(S.appr) localStorage.setItem(APPR_KEY,JSON.stringify(S.appr)); else localStorage.removeItem(APPR_KEY); }catch(e){} }
-S.appr=loadMyAppr();
+function emptyApprStore(){ return {v:2, slots:[null,null,null,null], active:0}; }
+function sanitizeApprStore(d){
+  if(!d||typeof d!=='object') return emptyApprStore();
+  if(d.col&&!d.slots) return {v:2, slots:[sanitizeAppr(d,0),null,null,null], active:0};  // migrate old single-appr
+  const arr=Array.isArray(d.slots)?d.slots:[];
+  const slots=[0,1,2,3].map(i=>arr[i]?sanitizeAppr(arr[i],0):null);
+  let active=d.active|0; if(active<0||active>3) active=0;
+  return {v:2, slots, active};
+}
+S.apprSlots=[null,null,null,null]; S.apprActive=0;
+function resolveAppr(){ S.appr=S.apprSlots[S.apprActive]||null; }
+function loadApprStore(){
+  let d=null; try{ d=JSON.parse(localStorage.getItem(APPR_KEY)); }catch(e){}
+  const s=sanitizeApprStore(d); S.apprSlots=s.slots; S.apprActive=s.active; resolveAppr();
+}
+function apprStoreBlob(){ return {v:2, slots:S.apprSlots, active:S.apprActive}; }
+function persistApprLocal(){ try{
+  const any=S.apprSlots.some(Boolean);
+  if(any) localStorage.setItem(APPR_KEY,JSON.stringify(apprStoreBlob())); else localStorage.removeItem(APPR_KEY);
+}catch(e){} }
+let _apprPushT=0;
+function pushApprToAccount(){            // debounced cross-device save (logged in only)
+  if(typeof ACCOUNT==='undefined'||!ACCOUNT) return;
+  clearTimeout(_apprPushT);
+  _apprPushT=setTimeout(()=>{ try{
+    fetch('/api/appearance',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',
+      body:JSON.stringify({appearance:apprStoreBlob()})}).catch(()=>{});
+  }catch(e){} },400);
+}
+/* adopt the account's saved looks after login/boot: server copy wins
+   cross-device; if the account has none yet but this device does, push it up */
+function adoptAccountAppearance(){
+  if(typeof ACCOUNT==='undefined'||!ACCOUNT) return;
+  if(ACCOUNT.appearance&&Array.isArray(ACCOUNT.appearance.slots)&&ACCOUNT.appearance.slots.some(Boolean)){
+    const s=sanitizeApprStore(ACCOUNT.appearance);
+    S.apprSlots=s.slots; S.apprActive=s.active; resolveAppr();
+    persistApprLocal(); applyApprToFP(); if(NET.active) NET.send({t:'appr',appr:S.appr});
+  } else if(S.apprSlots.some(Boolean)){
+    pushApprToAccount();
+  }
+}
+loadApprStore();
 
 /* recolor an already-built avatar's materials in place (color-only changes;
    shape/option changes rebuild — Phase 2). Materials are stashed on g.userData. */
@@ -1842,14 +1882,20 @@ function applyApprToFP(){
     fpMats.emitter.color.copy(MAT.emisC.color); fpMats.emitter.emissive.copy(MAT.emisC.emissive);
   }
 }
-/* set + persist + broadcast the local player's active look (Phase 3 builder
-   calls this; exposed on window for testing before the UI exists) */
-function setMyAppearance(appr){
-  S.appr=appr?sanitizeAppr(appr,0):null;
-  saveMyAppr();
+/* commit the resolved active look: refresh FP bits, persist (local +
+   account), and broadcast to the room. Call after any slot/active change. */
+function commitAppr(){
+  resolveAppr();
   applyApprToFP();
+  persistApprLocal(); pushApprToAccount();
   if(NET.active) NET.send({t:'appr',appr:S.appr});
 }
+/* swap the active saved look */
+function setActiveSlot(i){ i|=0; if(i<0||i>3) return; S.apprActive=i; commitAppr(); }
+/* write a look into a slot and make it active (builder Save; null clears) */
+function saveDraftToSlot(i,appr){ i|=0; if(i<0||i>3) return; S.apprSlots[i]=appr?sanitizeAppr(appr,0):null; S.apprActive=i; commitAppr(); }
+/* set the ACTIVE slot's look (test hook / quick set) */
+function setMyAppearance(appr){ saveDraftToSlot(S.apprActive,appr); }
 if(typeof window!=='undefined') window.__setAppr=setMyAppearance;
 applyApprToFP();
 surfScene.add(camera);
@@ -4027,7 +4073,7 @@ function setMAct(label){ $('mAct').textContent=label; }
 function flashFx(){ const f=$('flash'); f.style.transition='none'; f.style.opacity=0.85;
   requestAnimationFrame(()=>{ f.style.transition='opacity 1.2s'; f.style.opacity=0; }); }
 
-const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu','authPanel'];
+const PANELS=['buildMenu','tierMenu','settings','mpSetup','craftMenu','paintPanel','blueprintPanel','stationMenu','authPanel','skinBuilder'];
 function anyPanelOpen(){ return PANELS.some(p=>!$(p).classList.contains('hidden')); }
 function closePanel(id){ $(id).classList.add('hidden'); }
 function closeAllPanels(){ PANELS.forEach(closePanel); }
@@ -5531,6 +5577,7 @@ async function refreshAccount(){
     const j=await r.json(); ACCOUNT=(j&&j.user)||null;
   }catch(e){ ACCOUNT=null; }
   updateAcctUI();
+  adoptAccountAppearance();   // pull saved looks down from the account (or push this device's up)
 }
 function updateAcctUI(){
   const btn=$('btnAccount'), info=$('acctInfo');
@@ -5588,6 +5635,134 @@ $('btnLogin').addEventListener('click',doLogin);
 $('btnSignup').addEventListener('click',doSignup);
 $('btnLogoutSettings').addEventListener('click',()=>{ SND.blip(); doLogout(); });
 $('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+
+/* ============================================================
+   CHARACTER SKIN BUILDER (Identity update, Phase 3)
+   Live rotating preview + presets + per-part colors + gear options,
+   saved into one of 4 account looks. Cosmetic only.
+   ============================================================ */
+const PRESETS=[
+  {name:'Standard', a:{col:{body:0xd8dde4,limbs:0xd8dde4,visor:0x9fd8ff,accent:0x4fc3ff},helmetStyle:0,antenna:0,pack:1,trim:0}},
+  {name:'Crimson',  a:{col:{body:0x2a2f3a,limbs:0x33232a,visor:0xff7a6a,accent:0xff2a4a},helmetStyle:1,antenna:0,pack:1,trim:1}},
+  {name:'Verdant',  a:{col:{body:0x1e3a2a,limbs:0x274a36,visor:0x9aff9a,accent:0x00ff88,},helmetStyle:0,antenna:1,pack:2,trim:0}},
+  {name:'Voidwalker',a:{col:{body:0x14141f,limbs:0x1c1c2a,visor:0xc8a8ff,accent:0xb000ff},helmetStyle:2,antenna:1,pack:2,trim:1}},
+  {name:'Solar',    a:{col:{body:0xf0e6d0,limbs:0xe8dcc0,visor:0xffd060,accent:0xff8a00},helmetStyle:0,antenna:0,pack:1,trim:1}},
+  {name:'Tideborn', a:{col:{body:0xcfe0ff,limbs:0xbcd0f0,visor:0x00e5ff,accent:0x00bfff},helmetStyle:1,antenna:0,pack:0,trim:0}},
+];
+const OPT_LABELS={
+  helmetStyle:['Dome','Shell','Crest'], antenna:['None','Antenna'],
+  pack:['None','Backpack','Jetpack'], trim:['None','Pads'],
+};
+let skinDraft=null, skinPrev=null;   // draft appr being edited; preview {renderer,scene,cam,avatar,raf,drag}
+const hex2css=v=>'#'+('000000'+(v>>>0).toString(16)).slice(-6);
+const css2hex=s=>parseInt(s.slice(1),16)|0;
+function skinPreviewInit(){
+  if(skinPrev) return skinPrev;
+  const cv=$('skinPreview');
+  const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,alpha:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+  const scene=new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xbfe8ff,0x16242e,1.15));
+  const dir=new THREE.DirectionalLight(0xffffff,1.4); dir.position.set(2,4,3); scene.add(dir);
+  scene.add(new THREE.AmbientLight(0x44506a,0.6));
+  const cam=new THREE.PerspectiveCamera(38,1,0.1,100); cam.position.set(0,1.05,3.25); cam.lookAt(0,0.92,0);
+  skinPrev={renderer,scene,cam,avatar:null,raf:0,yaw:0,spin:true};
+  /* drag to spin (mouse + touch) */
+  let down=false,lx=0;
+  const start=x=>{ down=true; lx=x; skinPrev.spin=false; };
+  const move=x=>{ if(!down) return; skinPrev.yaw+=(x-lx)*0.01; lx=x; };
+  const end=()=>{ down=false; };
+  cv.addEventListener('mousedown',e=>start(e.clientX));
+  window.addEventListener('mousemove',e=>move(e.clientX));
+  window.addEventListener('mouseup',end);
+  cv.addEventListener('touchstart',e=>{ if(e.touches[0]) start(e.touches[0].clientX); },{passive:true});
+  cv.addEventListener('touchmove',e=>{ if(e.touches[0]) move(e.touches[0].clientX); },{passive:true});
+  cv.addEventListener('touchend',end);
+  return skinPrev;
+}
+function skinPreviewSize(){
+  const p=skinPrev,cv=$('skinPreview'); if(!p) return;
+  const w=cv.clientWidth||320,h=cv.clientHeight||230;
+  p.renderer.setSize(w,h,false); p.cam.aspect=w/h; p.cam.updateProjectionMatrix();
+}
+function skinPreviewRebuild(){
+  const p=skinPreviewInit();
+  if(p.avatar){ p.scene.remove(p.avatar); }
+  const av=buildAvatar(0,'',sanitizeAppr(skinDraft,0)); av.visible=true; av.rotation.y=p.yaw;
+  p.scene.add(av); p.avatar=av;
+}
+function skinPreviewLoop(){
+  const p=skinPrev; if(!p) return;
+  if($('skinBuilder').classList.contains('hidden')){ p.raf=0; return; }   // stop when closed
+  if(p.spin) p.yaw+=0.012;
+  if(p.avatar) p.avatar.rotation.y=p.yaw;
+  p.renderer.render(p.scene,p.cam);
+  p.raf=requestAnimationFrame(skinPreviewLoop);
+}
+function renderSkinSlots(){
+  const el=$('skinSlots'); el.innerHTML='';
+  for(let i=0;i<4;i++){
+    const b=document.createElement('div'); b.className='skinSlot'+(i===S.apprActive?' active':'');
+    const used=!!S.apprSlots[i];
+    b.innerHTML='LOOK '+(i+1)+'<small>'+(used?'saved':'empty')+'</small>';
+    b.addEventListener('click',()=>{
+      S.apprActive=i;                              // preview that slot (don't commit until Save)
+      skinDraft=S.apprSlots[i]?JSON.parse(JSON.stringify(S.apprSlots[i])):defaultAppr(0);
+      syncSkinControls(); skinPreviewRebuild(); renderSkinSlots(); SND.blip();
+    });
+    el.appendChild(b);
+  }
+}
+function renderSkinPresets(){
+  const el=$('skinPresets'); el.innerHTML='';
+  PRESETS.forEach(p=>{
+    const b=document.createElement('button'); b.className='skinPreset'; b.textContent=p.name;
+    b.addEventListener('click',()=>{ skinDraft=sanitizeAppr(p.a,0); syncSkinControls(); skinPreviewRebuild(); SND.blip(); $('skinSaveNote').textContent=''; });
+    el.appendChild(b);
+  });
+}
+const OPT_HOST={helmetStyle:'skHelmet', antenna:'skAntenna', pack:'skPack', trim:'skTrim'};
+function renderSkinOptions(){
+  for(const key of ['helmetStyle','antenna','pack','trim']){
+    const host=$(OPT_HOST[key]); host.innerHTML='';
+    OPT_LABELS[key].forEach((lab,idx)=>{
+      const b=document.createElement('button'); b.textContent=lab; b.dataset.v=idx;
+      b.className=(skinDraft[key]===idx?'on':'');
+      b.addEventListener('click',()=>{ skinDraft[key]=idx; renderSkinOptions(); skinPreviewRebuild(); SND.blip(); });
+      host.appendChild(b);
+    });
+  }
+}
+function syncSkinControls(){
+  $('skBody').value=hex2css(skinDraft.col.body);
+  $('skLimbs').value=hex2css(skinDraft.col.limbs);
+  $('skVisor').value=hex2css(skinDraft.col.visor);
+  $('skAccent').value=hex2css(skinDraft.col.accent);
+  renderSkinOptions();
+}
+function bindSkinColor(id,part){
+  $(id).addEventListener('input',()=>{ skinDraft.col[part]=css2hex($(id).value); skinPreviewRebuild(); });
+}
+bindSkinColor('skBody','body'); bindSkinColor('skLimbs','limbs'); bindSkinColor('skVisor','visor'); bindSkinColor('skAccent','accent');
+function openSkinBuilder(){
+  const cur=S.apprSlots[S.apprActive];
+  skinDraft=cur?JSON.parse(JSON.stringify(cur)):defaultAppr(0);
+  openPanel('skinBuilder');
+  renderSkinSlots(); renderSkinPresets(); syncSkinControls();
+  $('skinSaveNote').textContent='';
+  skinPreviewInit(); skinPreviewSize(); skinPreviewRebuild();
+  if(!skinPrev.raf) skinPreviewLoop();
+}
+$('skSave').addEventListener('click',()=>{
+  saveDraftToSlot(S.apprActive,skinDraft);     // persists (local+account) + broadcasts if in a room
+  renderSkinSlots(); SND.tierUp();
+  $('skinSaveNote').textContent=(typeof ACCOUNT!=='undefined'&&ACCOUNT)?'Saved to your account (LOOK '+(S.apprActive+1)+').':'Saved on this device (LOOK '+(S.apprActive+1)+'). Log in to sync across devices.';
+});
+$('btnCustomize').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSkinBuilder(); });
+$('btnCustomizeSettings').addEventListener('click',()=>{ SND.blip(); openSkinBuilder(); });
+window.addEventListener('resize',()=>{ if(skinPrev&&!$('skinBuilder').classList.contains('hidden')) skinPreviewSize(); });
+
 /* logged-in player's worlds, joinable from any device (rendered in mpSetup) */
 async function loadAcctWorlds(){
   const el=$('mpAcctWorlds'); if(!el) return;
@@ -5749,7 +5924,8 @@ Object.assign(window,{
   updateHeavyWeapons,updateStationGhost,updateStationVisibility,updateTierBadge,updateViewmodel,
   updateWater,useMed,
   /* Identity update — character appearance (cosmetic) */
-  buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS,APPR_OPTS});
+  buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS,APPR_OPTS,
+  setActiveSlot,saveDraftToSlot,openSkinBuilder,apprStoreBlob,sanitizeApprStore,adoptAccountAppearance,PRESETS});
 for(const [name,get,set] of [
   ['buildSel',()=>buildSel,v=>{buildSel=v;}],
   ['weaponCd',()=>weaponCd,v=>{weaponCd=v;}],

@@ -19,7 +19,8 @@
     "test:upgrade": "node test/upgrade.mjs 3988",
     "test:redeploy": "node test/redeploy.mjs 3986",
     "test:appr": "node test/with_server.mjs test/appr_relay.cjs 3995",
-    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist && npm run test:auth && npm run test:link && npm run test:upgrade && npm run test:redeploy && npm run test:appr"
+    "test:appr-account": "node test/appr_account.mjs 3993",
+    "test:all": "npm test && npm run test:mp && npm run test:authority && npm run test:persist && npm run test:auth && npm run test:link && npm run test:upgrade && npm run test:redeploy && npm run test:appr && npm run test:appr-account"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
