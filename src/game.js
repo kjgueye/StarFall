@@ -1050,26 +1050,31 @@ function buildHeldWeapon(kind){
    to geometry in Phase 2; the builder UI + 4 saved slots + account save
    land in Phase 3. This touches LOOKS only — never inventory/progress.
    ============================================================ */
-const APPR_VER=1;
+/* Vanguard update: avatars are now detailed mech-suits with glowing visor
+   faces. v2 adds an emissive eye color + an expression (eye-glow shape).
+   Old saved looks load unchanged — sanitizeAppr defaults any missing field. */
+const APPR_VER=2;
 /* number of valid values for each shape/accessory option id (values 0..n-1);
-   the Phase 3 builder reads these to lay out its selectors. 0 is always the
-   "plain/stock" choice (helmet:dome, pack:box, antenna/trim:off) EXCEPT pack
-   whose stock value is 1 (the default backpack). */
-const APPR_OPTS={helmetStyle:3, antenna:2, pack:3, trim:2};
+   the builder reads these to lay out its selectors. 0 is the "stock" choice
+   for each (EXCEPT pack, whose stock is 1). Vanguard P2 widens these. */
+const APPR_OPTS={helmetStyle:3, antenna:2, pack:3, trim:2, expression:3};
 function defaultAppr(slot){
   return {v:APPR_VER,
-    col:{ body:0xd8dde4, limbs:0xd8dde4, visor:0x9fd8ff, accent:SLOT_COLORS[(slot|0)%4] },
-    helmetStyle:0, antenna:0, pack:1, trim:0 };
+    col:{ body:0xd8dde4, limbs:0xc6ccd4, visor:0x9fd8ff, accent:SLOT_COLORS[(slot|0)%4], eye:0x6fe8ff },
+    helmetStyle:0, antenna:0, pack:1, trim:0, expression:0 };
 }
+/* shape-affecting fields — any change here rebuilds the avatar; everything
+   else is a live recolor. Vanguard P2 appends its new shape slots. */
+const SHAPE_KEYS=['helmetStyle','antenna','pack','trim','expression'];
 function sanitizeAppr(a,slot){
   const d=defaultAppr(slot);
   if(!a||typeof a!=='object') return d;
   const c=a.col||{}, hx=(v,dv)=>{ v=+v; return (isFinite(v)&&v>=0&&v<=0xffffff)?(v|0):dv; };
   const opt=(v,n,dv)=>{ v=(v==null?dv:v|0); return (v>=0&&v<n)?v:dv; };
   return {v:APPR_VER,
-    col:{ body:hx(c.body,d.col.body), limbs:hx(c.limbs,d.col.limbs), visor:hx(c.visor,d.col.visor), accent:hx(c.accent,d.col.accent) },
+    col:{ body:hx(c.body,d.col.body), limbs:hx(c.limbs,d.col.limbs), visor:hx(c.visor,d.col.visor), accent:hx(c.accent,d.col.accent), eye:hx(c.eye,d.col.eye) },
     helmetStyle:opt(a.helmetStyle,APPR_OPTS.helmetStyle,0), antenna:opt(a.antenna,APPR_OPTS.antenna,0),
-    pack:opt(a.pack,APPR_OPTS.pack,1), trim:opt(a.trim,APPR_OPTS.trim,0) };
+    pack:opt(a.pack,APPR_OPTS.pack,1), trim:opt(a.trim,APPR_OPTS.trim,0), expression:opt(a.expression,APPR_OPTS.expression,0) };
 }
 /* local player's saved looks — up to 4 slots + which is active. The ACTIVE
    slot resolves to S.appr (null = stock, so uncustomized players are
@@ -1127,60 +1132,98 @@ function applyApprColors(g,appr){
   m.limbs.color.setHex(appr.col.limbs);
   m.visor.color.setHex(appr.col.visor);
   m.accent.color.setHex(appr.col.accent); m.accent.emissive.setHex(appr.col.accent);
+  if(m.eye){ m.eye.color.setHex(appr.col.eye); m.eye.emissive.setHex(appr.col.eye); }
 }
+/* ---- detailed mech-suit avatar (Vanguard) ----
+   Same overall height for every config (hitbox fairness); variety lives in
+   shape/detail/color. Per-instance materials carry the look; neutral greebles
+   reuse shared MAT.dark/MAT.metal. Eyes are strongly emissive so they bloom. */
 function buildAvatar(slot,name,appr){
   appr=appr||defaultAppr(slot);
   const g=new THREE.Group();
-  /* per-instance materials so each avatar carries its own look */
-  const bodyMat=stdMat(appr.col.body,{roughness:0.7});
-  const limbMat=stdMat(appr.col.limbs,{roughness:0.7});
-  const visorMat=new THREE.MeshStandardMaterial({color:appr.col.visor,roughness:0.15,metalness:0.3,emissive:0x16384a,emissiveIntensity:0.6});
-  const accentMat=new THREE.MeshStandardMaterial({color:appr.col.accent,emissive:appr.col.accent,emissiveIntensity:0.6,roughness:0.5});
-  g.userData.apprMats={body:bodyMat,limbs:limbMat,visor:visorMat,accent:accentMat};
-  const body=new THREE.Mesh(GEO.cyl,bodyMat); body.scale.set(0.55,0.75,0.4); body.position.y=0.85; g.add(body);
-  const helmet=new THREE.Mesh(GEO.sphere,visorMat);
-  helmet.scale.set(0.44,0.44,0.44); helmet.position.y=1.45; g.add(helmet);
-  const stripe=new THREE.Mesh(GEO.box,accentMat); stripe.scale.set(0.58,0.1,0.44); stripe.position.y=1.16; g.add(stripe);
-  /* ---- shape & accessory options (Phase 2) — all primitives, all optional;
-     shells/crest reuse body/accent materials so recolor still reaches them ---- */
-  if(appr.helmetStyle>=1){   // opaque shell hugging the dome (body-colored)
-    const shell=new THREE.Mesh(GEO.sphere,bodyMat); shell.scale.set(0.47,0.43,0.47); shell.position.set(0,1.45,-0.05); g.add(shell);
+  const bodyMat=stdMat(appr.col.body,{roughness:0.5,metalness:0.5});
+  const limbMat=stdMat(appr.col.limbs,{roughness:0.5,metalness:0.5});
+  const visorMat=new THREE.MeshStandardMaterial({color:appr.col.visor,roughness:0.12,metalness:0.4,emissive:appr.col.visor,emissiveIntensity:0.2});
+  const accentMat=new THREE.MeshStandardMaterial({color:appr.col.accent,emissive:appr.col.accent,emissiveIntensity:0.7,roughness:0.45,metalness:0.3});
+  const eyeMat=new THREE.MeshStandardMaterial({color:appr.col.eye,emissive:appr.col.eye,emissiveIntensity:2.0,roughness:0.3});
+  g.userData.apprMats={body:bodyMat,limbs:limbMat,visor:visorMat,accent:accentMat,eye:eyeMat};
+  const dark=MAT.dark, metal=MAT.metal;
+  const mk=(geo,mat,sx,sy,sz,x,y,z)=>{ const m=new THREE.Mesh(geo,mat); m.scale.set(sx,sy,sz); m.position.set(x,y,z); return m; };
+  const add=(...a)=>{ const m=mk(...a); g.add(m); return m; };
+  const B=GEO.box,C=GEO.cyl,S=GEO.sphere;
+
+  /* ---- torso: paneled chest, ab, seam, belt, chest greebles ---- */
+  add(B,bodyMat,0.5,0.5,0.34, 0,0.96,0);          // chest core
+  add(B,bodyMat,0.42,0.26,0.3, 0,0.67,0);         // abdomen
+  add(B,dark,0.47,0.07,0.33, 0,0.79,0);           // mid seam
+  add(B,dark,0.5,0.09,0.36, 0,0.5,0);             // belt
+  add(B,accentMat,0.16,0.28,0.05, 0,1.0,-0.18);   // chest accent strip (front = -z)
+  add(B,dark,0.3,0.12,0.05, 0,1.16,-0.17);        // collar plate
+  add(B,metal,0.1,0.1,0.05, -0.16,0.9,-0.18);     // chest greeble L
+  add(B,metal,0.1,0.1,0.05, 0.16,0.9,-0.18);      // chest greeble R
+  add(B,bodyMat,0.42,0.18,0.3, 0,0.42,0);         // hips
+
+  /* ---- base shoulder pauldrons ---- */
+  add(S,bodyMat,0.18,0.16,0.18, -0.35,1.2,0);
+  add(S,bodyMat,0.18,0.16,0.18, 0.35,1.2,0);
+
+  /* ---- accessory / pack options ---- */
+  if(appr.pack===1){          // backpack
+    add(B,dark,0.4,0.5,0.2, 0,0.98,0.27);
+    add(B,accentMat,0.3,0.08,0.05, 0,1.12,0.38);
+  } else if(appr.pack===2){   // jetpack: twin thrusters + glowing nozzles
+    add(B,dark,0.38,0.46,0.18, 0,1.0,0.27);
+    for(const sx of [-0.17,0.17]){ add(C,metal,0.08,0.5,0.08, sx,0.94,0.32); add(S,eyeMat,0.07,0.06,0.07, sx,0.67,0.32); }
+  }                            // pack===0: bare
+
+  /* ---- head: neck, helmet shell, dark face recess, visor band, eyes ---- */
+  add(C,dark,0.1,0.09,0.1, 0,1.33,0);                 // neck
+  add(S,bodyMat,0.42,0.45,0.42, 0,1.56,0);            // helmet shell
+  add(B,dark,0.36,0.22,0.12, 0,1.52,-0.24);           // face recess (dark, front = -z)
+  add(B,visorMat,0.38,0.06,0.05, 0,1.62,-0.3);        // visor brow band
+  add(S,metal,0.08,0.11,0.1, -0.41,1.54,0);           // ear pod L
+  add(S,metal,0.08,0.11,0.1, 0.41,1.54,0);            // ear pod R
+  /* expression = emissive eye-glow shape (front = -z) */
+  const ex=appr.expression|0;
+  if(ex===1){                 // wide / alert
+    add(S,eyeMat,0.055,0.06,0.04, -0.1,1.54,-0.31); add(S,eyeMat,0.055,0.06,0.04, 0.1,1.54,-0.31);
+  } else if(ex===2){          // focused / narrow slits
+    const l=mk(B,eyeMat,0.13,0.028,0.03,-0.1,1.55,-0.31); l.rotation.z=0.34; g.add(l);
+    const r=mk(B,eyeMat,0.13,0.028,0.03,0.1,1.55,-0.31); r.rotation.z=-0.34; g.add(r);
+  } else {                    // calm (default)
+    add(B,eyeMat,0.11,0.05,0.03, -0.1,1.54,-0.31); add(B,eyeMat,0.11,0.05,0.03, 0.1,1.54,-0.31);
   }
-  if(appr.helmetStyle>=2){   // crest fin (accent glow)
-    const crest=new THREE.Mesh(GEO.box,accentMat); crest.scale.set(0.05,0.2,0.34); crest.position.set(0,1.72,-0.04); g.add(crest);
-  }
-  if(appr.antenna){          // side antenna with a glowing tip
-    const rod=new THREE.Mesh(GEO.cyl,MAT.metal); rod.scale.set(0.016,0.32,0.016); rod.position.set(0.2,1.78,-0.06); g.add(rod);
-    const tip=new THREE.Mesh(GEO.sphere,accentMat); tip.scale.set(0.05,0.05,0.05); tip.position.set(0.2,1.96,-0.06); g.add(tip);
-  }
-  if(appr.pack===1){         // stock backpack (default)
-    const pack=new THREE.Mesh(GEO.box,MAT.dark); pack.scale.set(0.42,0.55,0.22); pack.position.set(0,0.95,0.28); g.add(pack);
-  } else if(appr.pack===2){  // jetpack: twin thrusters with accent nozzles
-    const base=new THREE.Mesh(GEO.box,MAT.dark); base.scale.set(0.4,0.5,0.2); base.position.set(0,0.98,0.28); g.add(base);
-    for(const sx of [-0.16,0.16]){
-      const thr=new THREE.Mesh(GEO.cyl,MAT.metal); thr.scale.set(0.08,0.5,0.08); thr.position.set(sx,0.92,0.33); g.add(thr);
-      const noz=new THREE.Mesh(GEO.sphere,accentMat); noz.scale.set(0.07,0.05,0.07); noz.position.set(sx,0.66,0.33); g.add(noz);
-    }
-  }                          // pack===0: bare back
-  if(appr.trim){             // accent shoulder pads
-    for(const sx of [-0.34,0.34]){
-      const pad=new THREE.Mesh(GEO.sphere,accentMat); pad.scale.set(0.14,0.09,0.14); pad.position.set(sx,1.2,0); g.add(pad);
-    }
-  }
-  /* limbs as hip/shoulder-pivoted groups */
-  const mkLimb=(nm,hx,hy,sc)=>{ const grp=new THREE.Group(); grp.name=nm; grp.position.set(hx,hy,0);
-    const seg=new THREE.Mesh(GEO.cyl,limbMat); seg.scale.set(sc,0.5,sc); seg.position.y=-0.25; grp.add(seg); g.add(grp); return grp; };
-  mkLimb('legL',-0.15,0.52,0.16); mkLimb('legR',0.15,0.52,0.16);
-  mkLimb('armL',-0.38,1.12,0.13);
-  const armR=mkLimb('armR',0.38,1.12,0.13);
-  /* held weapon mount in right hand */
+
+  /* ---- helmet shape extras (Vanguard P2 widens these) ---- */
+  if(appr.helmetStyle>=1) add(B,accentMat,0.05,0.16,0.34, 0,1.82,-0.02);   // crest fin
+  if(appr.helmetStyle>=2){ add(B,bodyMat,0.08,0.3,0.08, -0.34,1.74,0); add(B,bodyMat,0.08,0.3,0.08, 0.34,1.74,0); } // horns
+  if(appr.antenna){ add(C,metal,0.016,0.34,0.016, 0.22,1.86,-0.04); add(S,eyeMat,0.05,0.05,0.05, 0.22,2.05,-0.04); }
+  if(appr.trim){ add(S,accentMat,0.1,0.07,0.1, -0.35,1.27,0); add(S,accentMat,0.1,0.07,0.1, 0.35,1.27,0); } // accent shoulder caps
+
+  /* ---- limbs as hip/shoulder-pivoted groups (detailed: segments + joints) ---- */
+  const mkArm=(nm,hx)=>{ const grp=new THREE.Group(); grp.name=nm; grp.position.set(hx,1.12,0);
+    grp.add(mk(C,limbMat,0.12,0.3,0.12, 0,-0.16,0));   // upper arm
+    grp.add(mk(S,dark,0.1,0.1,0.1, 0,-0.33,0));        // elbow
+    grp.add(mk(C,limbMat,0.105,0.28,0.105, 0,-0.5,0)); // forearm
+    grp.add(mk(B,accentMat,0.17,0.07,0.17, 0,-0.63,0));// glove cuff
+    g.add(grp); return grp; };
+  const mkLeg=(nm,hx)=>{ const grp=new THREE.Group(); grp.name=nm; grp.position.set(hx,0.52,0);
+    grp.add(mk(C,limbMat,0.15,0.24,0.15, 0,-0.12,0));  // thigh
+    grp.add(mk(S,dark,0.12,0.12,0.12, 0,-0.27,0));     // knee
+    grp.add(mk(C,limbMat,0.13,0.24,0.13, 0,-0.4,0));   // shin
+    grp.add(mk(B,bodyMat,0.2,0.12,0.32, 0,-0.5,-0.06)); // boot (forward toe = -z)
+    g.add(grp); return grp; };
+  mkLeg('legL',-0.16); mkLeg('legR',0.16);
+  mkArm('armL',-0.39);
+  const armR=mkArm('armR',0.39);
+  /* held weapon mount in the right hand (unchanged anchor for weapon VMs) */
   const hand=new THREE.Group(); hand.name='hand'; hand.position.set(0,-0.46,0.05);
   for(const k of ['tool','blade','pistol','rifle']) hand.add(buildHeldWeapon(k));
   armR.add(hand);
   /* spawn-protection shimmer */
-  const shimmer=new THREE.Mesh(GEO.sphere,new THREE.MeshBasicMaterial({color:0x9fe8ff,transparent:true,opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false}));
-  shimmer.scale.set(1.0,1.5,1.0); shimmer.position.y=0.9; shimmer.name='shimmer'; shimmer.visible=false; g.add(shimmer);
-  const tag=makeNameTag(name); tag.position.y=2.2; g.add(tag);
+  const shimmer=new THREE.Mesh(S,new THREE.MeshBasicMaterial({color:0x9fe8ff,transparent:true,opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false}));
+  shimmer.scale.set(1.0,1.5,1.0); shimmer.position.y=0.95; shimmer.name='shimmer'; shimmer.visible=false; g.add(shimmer);
+  const tag=makeNameTag(name); tag.position.y=2.25; g.add(tag);
   g.visible=false;
   return g;
 }
@@ -1212,7 +1255,7 @@ function addRemote(pid,name,slot,appr){
 function setRemoteAppr(pid,appr){
   const r=remotes.get(pid); if(!r) return;
   const next=sanitizeAppr(appr,r.slot);
-  const shapeChanged=!r.appr||r.appr.helmetStyle!==next.helmetStyle||r.appr.antenna!==next.antenna||r.appr.pack!==next.pack||r.appr.trim!==next.trim;
+  const shapeChanged=!r.appr||SHAPE_KEYS.some(k=>r.appr[k]!==next[k]);
   r.appr=next;
   if(shapeChanged){
     const old=r.avatar;
@@ -5666,7 +5709,7 @@ function skinPreviewInit(){
   scene.add(new THREE.HemisphereLight(0xbfe8ff,0x16242e,1.15));
   const dir=new THREE.DirectionalLight(0xffffff,1.4); dir.position.set(2,4,3); scene.add(dir);
   scene.add(new THREE.AmbientLight(0x44506a,0.6));
-  const cam=new THREE.PerspectiveCamera(38,1,0.1,100); cam.position.set(0,1.05,3.25); cam.lookAt(0,0.92,0);
+  const cam=new THREE.PerspectiveCamera(38,1,0.1,100); cam.position.set(0,1.05,-3.25); cam.lookAt(0,0.92,0);   // view the front (face is at -z)
   /* grounding pad so the astronaut reads as standing, not floating */
   const pad=new THREE.Mesh(new THREE.CylinderGeometry(0.62,0.7,0.06,32),
     new THREE.MeshStandardMaterial({color:0x12303f,emissive:0x0a2230,emissiveIntensity:0.4,roughness:0.6}));

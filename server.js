@@ -375,9 +375,10 @@ function sanitizeAppr(a) {
   const hx = v => { v = +v; return (isFinite(v) && v >= 0 && v <= 0xffffff) ? (v | 0) : 0; };
   const id = v => { v = v | 0; return (v >= 0 && v <= 15) ? v : 0; };
   return {
-    v: 1,
-    col: { body: hx(c.body), limbs: hx(c.limbs), visor: hx(c.visor), accent: hx(c.accent) },
+    v: 2,
+    col: { body: hx(c.body), limbs: hx(c.limbs), visor: hx(c.visor), accent: hx(c.accent), eye: hx(c.eye) },
     helmetStyle: id(a.helmetStyle), antenna: id(a.antenna), pack: id(a.pack == null ? 1 : a.pack), trim: id(a.trim),
+    expression: id(a.expression), visorType: id(a.visorType), bodyStyle: id(a.bodyStyle), shoulders: id(a.shoulders),
   };
 }
 /* the account-saved cosmetic blob: up to 4 saved looks + which is active.
