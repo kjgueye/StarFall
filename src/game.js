@@ -4714,7 +4714,7 @@ document.addEventListener('touchstart',e=>{
   const activeIds=new Set(); for(const t of e.touches) activeIds.add(t.identifier);
   healTouches(activeIds);                                  // self-heal a stale (lost) look/joy touch before claiming a new one
   for(const t of e.changedTouches){
-    if(t.target.closest&&(t.target.closest('.mBtn')||t.target.closest('#joyBase')||t.target.closest('.panel')||t.target.closest('#tierBadge')||t.target.closest('#gearBtn'))) continue;
+    if(t.target.closest&&(t.target.closest('.mBtn')||t.target.closest('#joyBase')||t.target.closest('.panel')||t.target.closest('#tierBadge')||t.target.closest('#gearBtn')||t.target.closest('#hotbar')||t.target.closest('#missionCard'))) continue;
     if(t.clientX>window.innerWidth*0.34&&lookTouch.id===-1){
       lookTouch.id=t.identifier; lookTouch.lx=t.clientX; lookTouch.ly=t.clientY;
     }
@@ -4796,8 +4796,14 @@ function refreshMobileUI(){
 $('tierBadge').addEventListener('click',()=>{ SND.ensure(); SND.blip();
   if($('tierMenu').classList.contains('hidden')){ renderTierList(); openPanel('tierMenu'); } else closePanel('tierMenu'); });
 $('gearBtn').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); });
-/* mobile: tap the mission/CONQUEST card title to collapse it (frees screen space on small landscape screens) */
-if(isTouch) $('missionTitle').addEventListener('click',()=>{ $('missionCard').classList.toggle('collapsed'); SND.blip(); });
+/* mobile: tap the mission/CONQUEST card title to collapse it (frees screen space on small landscape screens).
+   Defaults: expanded during the intro (so new players see the steps), collapsed for the ongoing
+   conquest thread (keeps the left column clear) — until the player taps to choose for themselves. */
+let missionUserToggled=false;
+if(isTouch){
+  $('missionCard').classList.add('collapsed');
+  $('missionTitle').addEventListener('click',()=>{ missionUserToggled=true; $('missionCard').classList.toggle('collapsed'); SND.blip(); });
+}
 
 /* settings */
 function applySfxVol(){ SND.setSfx({low:0.6,med:1.0,high:1.4}[S.sfxVol]||1.0); }
@@ -5074,6 +5080,7 @@ function renderMission(){
     /* First Light onboarding keeps priority (surface only, as before) */
     if(S.mode!=='surface'){ card.classList.add('hidden'); return; }
     card.classList.remove('hidden');
+    if(isTouch&&!missionUserToggled) card.classList.remove('collapsed');   // intro: keep steps visible by default
     $('missionTitle').textContent='ESTABLISH YOUR OUTPOST';
     $('missionSkip').style.display='';
     const list=$('missionSteps'); list.innerHTML='';
@@ -5110,6 +5117,7 @@ function conquestHint(m){
 function renderConquest(m){
   const card=$('missionCard');
   card.classList.remove('hidden');
+  if(isTouch&&!missionUserToggled) card.classList.add('collapsed');   // conquest: collapsed by default to keep the left column clear
   $('missionTitle').textContent='FACTION CONQUEST';
   $('missionSkip').style.display=m.kind==='done'?'':'none';
   let html='';

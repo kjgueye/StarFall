@@ -174,8 +174,10 @@
   #hpbar.low { animation:o2flash .5s infinite alternate; }
   #hotbar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:7px; z-index:22; pointer-events:auto;
     flex-wrap:wrap; justify-content:center; max-width:96vw; }
-  body.touch #hotbar { gap:5px; bottom:12px; }
-  body.touch .slot, body.touch #medSlot { width:42px; height:42px; font-size:18px; }
+  /* weapon hotbar: centered, constrained width so it wraps into compact rows that
+     fit the gap between the thumb clusters (never under a button) on short screens */
+  body.touch #hotbar { gap:4px; bottom:calc(14px + var(--sa-b)); max-width:226px; }
+  body.touch .slot, body.touch #medSlot { width:40px; height:40px; font-size:17px; }
   .slot { width:50px; height:50px; border:1px solid rgba(110,210,250,0.45); background:rgba(8,22,34,0.72); display:flex;
     align-items:center; justify-content:center; position:relative; cursor:pointer; color:#bfe6f6; font-size:21px; }
   .slot.sel { border-color:#7fefff; box-shadow:0 0 12px rgba(80,220,255,0.55); background:rgba(22,64,94,0.8); }
@@ -245,29 +247,43 @@
   body.touch #missionCard.collapsed { margin-bottom:0; }
   body.touch #missionCard.collapsed #missionSteps { display:none; }
 
-  #mMed { right:176px; bottom:30px; width:54px; height:54px; background:rgba(10,60,40,0.55); border-color:rgba(120,255,190,0.6); }
-  #mChat { left:96px; bottom:30px; width:50px; height:50px; }
-  #mMap { left:26px; bottom:96px; width:50px; height:50px; font-size:10px; }
-
-  /* ---------- Mobile ---------- */
+  /* ---------- Mobile controls (landscape-first; thumb-reachable, de-crowded) ----------
+     Left thumb  → move joystick (bottom-left) + a short vertical strip of menu
+                   buttons just to its right (build / map / chat), clear of the look zone.
+     Right thumb → primary action lowest-right, jump beside it, med/remove above,
+                   build helpers (place/free) stacked higher, EVA thrusters on the edge.
+     The open center + right is the look-drag zone (the look handler ignores .mBtn,
+     the joystick and the hotbar, so dragging near a button never misfires). */
   #mob { position:fixed; inset:0; z-index:25; pointer-events:none; display:none; }
   body.touch #mob { display:block; }
-  #joyBase { position:fixed; left:26px; bottom:84px; width:118px; height:118px; border-radius:50%;
+  #joyBase { position:fixed; left:calc(20px + var(--sa-l,0px)); bottom:calc(22px + var(--sa-b,0px));
+    width:122px; height:122px; border-radius:50%;
     border:2px solid rgba(120,220,255,0.35); background:rgba(20,50,70,0.25); pointer-events:auto; touch-action:none; }
   #joyKnob { position:absolute; left:50%; top:50%; width:48px; height:48px; margin:-24px 0 0 -24px; border-radius:50%;
     background:rgba(120,220,255,0.45); border:1px solid #7fd6f5; }
-  .mBtn { position:fixed; width:64px; height:64px; border-radius:50%; background:rgba(15,45,65,0.55); border:1.5px solid rgba(120,220,255,0.55);
+  .mBtn { position:fixed; width:62px; height:62px; border-radius:50%; background:rgba(15,45,65,0.55); border:1.5px solid rgba(120,220,255,0.55);
     color:#cfeefe; font-size:11px; letter-spacing:0.05em; pointer-events:auto; touch-action:none; z-index:26;
     display:flex; align-items:center; justify-content:center; text-align:center; user-select:none; -webkit-user-select:none; }
   .mBtn:active { background:rgba(60,160,220,0.65); }
-  #mJump { right:24px; bottom:84px; }
-  #mAct  { right:100px; bottom:26px; width:72px; height:72px; font-size:12px; background:rgba(20,70,50,0.55); border-color:rgba(120,255,190,0.6); }
-  #mPlace{ right:24px; bottom:170px; background:rgba(60,90,25,0.55); border-color:rgba(190,255,120,0.6); }
-  #mFree{ right:100px; bottom:200px; width:54px; height:54px; background:rgba(25,70,90,0.55); border-color:rgba(120,220,255,0.6); font-size:10px; }
-  #mRemove{ right:100px; bottom:140px; background:rgba(80,30,30,0.55); border-color:rgba(255,140,120,0.6); width:54px; height:54px; }
-  #mBuild{ left:26px; bottom:26px; width:58px; height:58px; }
-  #mThrust{ right:24px; bottom:160px; }
-  #mBrake{ right:24px; bottom:84px; }
+  /* left vertical strip — to the right of the joystick, kept low so it clears the mission card */
+  #mBuild { left:calc(152px + var(--sa-l,0px)); bottom:calc(22px + var(--sa-b,0px)); width:60px; height:60px; }
+  #mMap   { left:calc(152px + var(--sa-l,0px)); bottom:calc(90px + var(--sa-b,0px)); width:54px; height:54px; font-size:10px; }
+  #mChat  { left:calc(152px + var(--sa-l,0px)); bottom:calc(152px + var(--sa-b,0px)); width:54px; height:54px; }
+  /* right cluster */
+  #mAct   { right:calc(20px + var(--sa-r,0px)); bottom:calc(22px + var(--sa-b,0px)); width:76px; height:76px; font-size:12px;
+    background:rgba(20,70,50,0.55); border-color:rgba(120,255,190,0.6); }
+  #mJump  { right:calc(112px + var(--sa-r,0px)); bottom:calc(30px + var(--sa-b,0px)); width:66px; height:66px; }
+  #mMed   { right:calc(28px + var(--sa-r,0px)); bottom:calc(114px + var(--sa-b,0px)); width:56px; height:56px;
+    background:rgba(10,60,40,0.55); border-color:rgba(120,255,190,0.6); }
+  #mRemove{ right:calc(116px + var(--sa-r,0px)); bottom:calc(114px + var(--sa-b,0px)); width:54px; height:54px;
+    background:rgba(80,30,30,0.55); border-color:rgba(255,140,120,0.6); }
+  #mPlace { right:calc(28px + var(--sa-r,0px)); bottom:calc(186px + var(--sa-b,0px)); width:58px; height:58px;
+    background:rgba(60,90,25,0.55); border-color:rgba(190,255,120,0.6); }
+  #mFree  { right:calc(116px + var(--sa-r,0px)); bottom:calc(186px + var(--sa-b,0px)); width:54px; height:54px;
+    background:rgba(25,70,90,0.55); border-color:rgba(120,220,255,0.6); font-size:10px; }
+  /* EVA / space vertical thrusters — right edge (jump is hidden in these modes) */
+  #mThrust{ right:calc(28px + var(--sa-r,0px)); bottom:calc(114px + var(--sa-b,0px)); width:62px; height:62px; }
+  #mBrake { right:calc(116px + var(--sa-r,0px)); bottom:calc(30px + var(--sa-b,0px)); width:62px; height:62px; }
   /* ---- mobile/landscape HUD: safe-area aware, no overlaps ----
      top band reads left→right: [stat bars] [resource counts] [compass] [gear][tier]/[room] */
   body.touch { --sa-t:env(safe-area-inset-top,0px); --sa-r:env(safe-area-inset-right,0px);
