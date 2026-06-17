@@ -55,8 +55,14 @@ const SND={ctx:null,on:true,master:null,sfx:null,ambBus:null,reverb:null,revGain
     const ctx=this.ctx;
     try{
       if(/Mobi|Android|iPhone|iPad/i.test((navigator&&navigator.userAgent)||'')) this._max=14;
-      this.master=ctx.createGain(); this.master.gain.value=0.85; this.master.connect(ctx.destination);
-      this.sfx=ctx.createGain(); this.sfx.gain.value=1.0; this.sfx.connect(this.master);
+      /* master -> soft limiter -> out: glues the mix and prevents harsh
+         clipping when many voices fire at once (dense combat) */
+      this.master=ctx.createGain(); this.master.gain.value=0.9;
+      this.limiter=ctx.createDynamicsCompressor();
+      this.limiter.threshold.value=-8; this.limiter.knee.value=10; this.limiter.ratio.value=14;
+      this.limiter.attack.value=0.003; this.limiter.release.value=0.18;
+      this.master.connect(this.limiter); this.limiter.connect(ctx.destination);
+      this.sfx=ctx.createGain(); this.sfx.gain.value=(this._sfxVol!=null?this._sfxVol:1.0); this.sfx.connect(this.master);
       this.ambBus=ctx.createGain(); this.ambBus.gain.value=0.6; this.ambBus.connect(this.master);
       this.reverb=ctx.createConvolver(); this.reverb.buffer=this._impulse(0.55,2.4);
       this.revGain=ctx.createGain(); this.revGain.gain.value=0.16; this.reverb.connect(this.revGain); this.revGain.connect(this.master);
@@ -106,6 +112,8 @@ const SND={ctx:null,on:true,master:null,sfx:null,ambBus:null,reverb:null,revGain
       else for(const s of srcs){ try{ s.start(t); }catch(e){} try{ s.stop(end); }catch(e){} s.onended=done; }
     }catch(e){}
   },
+  /* category level: SFX bus gain (ambience has its own ON/OFF). Persisted via S.sfxVol. */
+  setSfx(v){ this._sfxVol=v; if(this.sfx&&this.ctx){ try{ this.sfx.gain.setTargetAtTime(v,this.ctx.currentTime,0.05); }catch(e){} } },
   /* back-compat: single-osc tone, now routed + auto-cleaned through the engine */
   tone(f,dur,type,vol,slide){ this._play(dur,({t,out,osc})=>{
     const o=osc(type||'sine',f); if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(slide,20),t+dur);
@@ -660,7 +668,7 @@ function buildSaveObj(){
     cine:S.cine===true,
     pc:S.pendingCutscene||null, sound:SND.on,
     weapons:saveWeapons(),
-    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true, neon:S.neon||'med'};
+    ammo:saveAmmo(), medkits:S.medkits|0, headbob:S.headbob!==false, fx:S.fx===true, amb:S.amb===true, sfxVol:S.sfxVol||'med', neon:S.neon||'med'};
 }
 function saveGame(){
   if(!S.running) return;
@@ -755,6 +763,7 @@ function applySave(d){
   S.weapons=d.weapons; S.ammo=d.ammo; S.medkits=d.medkits; S.headbob=d.headbob; S.slot=0;
   if(d.fx!==null){ S.fx=d.fx; applyFx(); }   // pre-P4 saves keep the device default
   S.amb=d.amb===true;
+  if(d.sfxVol){ S.sfxVol=d.sfxVol; } applySfxVol();
   if(d.neon){ S.neon=d.neon; applyNeon(); }
   S.intro=d.intro; S.cine=d.cine;
 }
@@ -4766,6 +4775,7 @@ $('tierBadge').addEventListener('click',()=>{ SND.ensure(); SND.blip();
 $('gearBtn').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); });
 
 /* settings */
+function applySfxVol(){ SND.setSfx({low:0.6,med:1.0,high:1.4}[S.sfxVol]||1.0); }
 function openSettings(){
   $('btnExport').classList.toggle('hidden',!S.running||NET.active);
   $('btnImportTog').classList.toggle('hidden',S.running&&NET.active);
@@ -4774,6 +4784,7 @@ function openSettings(){
   $('btnBob').textContent='Head Bob: '+(S.headbob!==false?'ON':'OFF');
   $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF');
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF');
+  $('btnSfx').textContent='SFX Volume: '+((S.sfxVol||'med').toUpperCase());
   $('btnCine').textContent='Landing Cinematic: '+(S.cine?'EVERY LANDING':'FIRST ONLY');
   $('btnNeon').textContent='Neon Intensity: '+(S.neon||'med').toUpperCase();
   $('importWrap').classList.add('hidden');
@@ -4786,7 +4797,17 @@ $('btnImportGo').addEventListener('click',()=>{
   const d=importSave($('importBox').value);
   if(d){ showToast('Save imported — reloading...'); setTimeout(()=>location.reload(),800); }
 });
-$('btnSound').addEventListener('click',()=>{ SND.on=!SND.on; $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip(); });
+$('btnSound').addEventListener('click',()=>{
+  SND.on=!SND.on;
+  if(!SND.on){ SND.humStop(); SND.ambStop(); }                                   // mute silences persistent drones too
+  else if(S.amb&&S.running) SND.ambStart(S.mode==='space'?'space':S.planet);      // unmute restarts the bed
+  $('btnSound').textContent='Sound: '+(SND.on?'ON':'OFF'); SND.blip();
+});
+/* SFX volume cycle (category level) — ambience has its own ON/OFF above */
+$('btnSfx').addEventListener('click',()=>{
+  const order=['low','med','high']; S.sfxVol=order[(order.indexOf(S.sfxVol||'med')+1)%3];
+  applySfxVol(); $('btnSfx').textContent='SFX Volume: '+S.sfxVol.toUpperCase(); SND.blip(); saveGame();
+});
 $('btnBob').addEventListener('click',()=>{ S.headbob=!S.headbob; $('btnBob').textContent='Head Bob: '+(S.headbob?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnFx').addEventListener('click',()=>{ S.fx=!S.fx; applyFx(); $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnAmb').addEventListener('click',()=>{
@@ -6287,6 +6308,8 @@ function secretTap(){
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
 if(typeof S.amb!=='boolean') S.amb=true;    // Resonance: subtle ambient bed defaults ON (quiet); existing saves keep their stored choice
+if(typeof S.sfxVol!=='string') S.sfxVol='med';
+applySfxVol();
 if(['low','med','high'].indexOf(S.neon)<0) S.neon='med';
 if(!S.intro) S.intro={done:true,step:99,cineSeen:true};   // pre-start safety; resetState/applySave set the real value
 if(typeof S.cine!=='boolean') S.cine=false;
