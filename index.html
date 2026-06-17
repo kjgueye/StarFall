@@ -110,6 +110,9 @@
   .skinOpt button.on { background:rgba(40,140,200,0.5); border-color:#7fdcff; color:#eaffff; }
   #skinSaveNote { font-size:12px; color:#7fc0da; min-height:16px; margin-top:8px; letter-spacing:0.04em; }
   .skinHd { color:#9fd6ef; font-size:12px; letter-spacing:0.08em; margin:12px 0 5px; text-transform:uppercase; }
+  #skinRecent { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px; }
+  #skinRecent .rsw { width:26px; height:26px; border:1px solid #2e6f92; border-radius:4px; cursor:pointer; }
+  #skinRecent .rsw:hover { border-color:#7fdcff; box-shadow:0 0 8px rgba(60,190,255,0.5); }
   #blueprintList .bpItem { display:flex; gap:8px; align-items:center; border:1px solid rgba(90,180,220,0.35); padding:8px 10px; margin-bottom:7px; background:rgba(12,30,46,0.55); }
   #blueprintList .bpItem b { flex:1; color:#cfeefe; font-size:13px; }
   #blueprintList .bpItem button, #bpTools button { background:rgba(20,60,90,0.5); border:1px solid #2e8fb8; color:#cfeefe; padding:6px 11px; cursor:pointer; font-size:12px; letter-spacing:0.06em; }
@@ -370,6 +373,7 @@
   <div id="skinOptions"></div>
   <div class="skinHd">Colors</div>
   <div id="skinColors"></div>
+  <div id="skinRecent" title="Recent colors — tap to apply to the last part you edited"></div>
   <button class="menuBtn" id="skSave" style="width:100%;margin-top:14px">Save &amp; Wear This Look</button>
   <div id="skinSaveNote"></div>
 </div>

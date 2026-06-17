@@ -5727,13 +5727,17 @@ $('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
    Live rotating preview + presets + per-part colors + gear options,
    saved into one of 4 account looks. Cosmetic only.
    ============================================================ */
+/* designed, characterful STARTING POINTS — a mix of vibes; pick one then
+   tweak freely (every field is editable, so a tweaked preset is unique). */
 const PRESETS=[
-  {name:'Standard', a:{col:{body:0xd8dde4,limbs:0xd8dde4,visor:0x9fd8ff,accent:0x4fc3ff},helmetStyle:0,antenna:0,pack:1,trim:0}},
-  {name:'Crimson',  a:{col:{body:0x2a2f3a,limbs:0x33232a,visor:0xff7a6a,accent:0xff2a4a},helmetStyle:1,antenna:0,pack:1,trim:1}},
-  {name:'Verdant',  a:{col:{body:0x1e3a2a,limbs:0x274a36,visor:0x9aff9a,accent:0x00ff88,},helmetStyle:0,antenna:1,pack:2,trim:0}},
-  {name:'Voidwalker',a:{col:{body:0x14141f,limbs:0x1c1c2a,visor:0xc8a8ff,accent:0xb000ff},helmetStyle:2,antenna:1,pack:2,trim:1}},
-  {name:'Solar',    a:{col:{body:0xf0e6d0,limbs:0xe8dcc0,visor:0xffd060,accent:0xff8a00},helmetStyle:0,antenna:0,pack:1,trim:1}},
-  {name:'Tideborn', a:{col:{body:0xcfe0ff,limbs:0xbcd0f0,visor:0x00e5ff,accent:0x00bfff},helmetStyle:1,antenna:0,pack:0,trim:0}},
+  {name:'Scout',     a:{col:{body:0xe6ecf2,limbs:0xb7c2cc,visor:0x9fe8ff,accent:0x2fd0ff,eye:0x8ffcff},helmetStyle:0,visorType:1,bodyStyle:0,shoulders:3,pack:3,expression:0,antenna:1,trim:0}},
+  {name:'Vanguard',  a:{col:{body:0x4a525c,limbs:0x2e343c,visor:0xffc24a,accent:0xff7a1a,eye:0xffcf5a},helmetStyle:3,visorType:2,bodyStyle:1,shoulders:2,pack:4,expression:2,antenna:0,trim:1}},
+  {name:'Neon Racer',a:{col:{body:0x16131f,limbs:0x241a33,visor:0xff5ad0,accent:0xff1a8a,eye:0x36f0ff},helmetStyle:2,visorType:4,bodyStyle:3,shoulders:1,pack:2,expression:1,antenna:0,trim:1}},
+  {name:'Knight',    a:{col:{body:0x6f7a86,limbs:0x39424c,visor:0xfff0c0,accent:0xffcf3a,eye:0xffe27a},helmetStyle:5,visorType:0,bodyStyle:2,shoulders:2,pack:1,expression:0,antenna:0,trim:0}},
+  {name:'Spectre',   a:{col:{body:0x12131a,limbs:0x1a1c26,visor:0xb088ff,accent:0x9a3aff,eye:0xc89bff},helmetStyle:1,visorType:3,bodyStyle:0,shoulders:0,pack:0,expression:2,antenna:0,trim:0}},
+  {name:'Verdant',   a:{col:{body:0x223a2a,limbs:0x2e4a36,visor:0xa8ffb0,accent:0x18ff7a,eye:0x9affc0},helmetStyle:4,visorType:1,bodyStyle:3,shoulders:0,pack:3,expression:0,antenna:0,trim:1}},
+  {name:'Solar',     a:{col:{body:0xf2e6cf,limbs:0xe2cfa6,visor:0xffd060,accent:0xff7a00,eye:0xffb13a},helmetStyle:2,visorType:2,bodyStyle:1,shoulders:1,pack:2,expression:1,antenna:0,trim:1}},
+  {name:'Tide',      a:{col:{body:0x163c4a,limbs:0x12303c,visor:0x6ff0ff,accent:0x00cfe0,eye:0x6ffcff},helmetStyle:0,visorType:4,bodyStyle:2,shoulders:3,pack:4,expression:0,antenna:1,trim:0}},
 ];
 /* data-driven builder: every shape slot + colorable part renders itself, so
    adding options is a one-line change. labels index = the option id value. */
@@ -5843,15 +5847,27 @@ function renderSkinOptions(){
     row.appendChild(opt); host.appendChild(row);
   }
 }
+let skinLastPart='accent', skinRecent=[];
+function pushRecent(hex){ skinRecent=[hex,...skinRecent.filter(h=>h!==hex)].slice(0,10); renderSkinRecent(); }
+function renderSkinRecent(){
+  const host=$('skinRecent'); if(!host) return; host.innerHTML='';
+  for(const hex of skinRecent){
+    const sw=document.createElement('div'); sw.className='rsw'; sw.style.background=hex2css(hex);
+    sw.addEventListener('click',()=>{ skinDraft.col[skinLastPart]=hex; const inp=$('skcol_'+skinLastPart); if(inp) inp.value=hex2css(hex); skinPreviewRebuild(); SND.blip(); });
+    host.appendChild(sw);
+  }
+}
 function renderSkinColors(){
   const host=$('skinColors'); host.innerHTML='';
   for(const c of APPR_COLS){
     const row=document.createElement('div'); row.className='skinRow';
     const lab=document.createElement('label'); lab.textContent=c.label; row.appendChild(lab);
     const inp=document.createElement('input'); inp.type='color'; inp.id='skcol_'+c.key; inp.value=hex2css(skinDraft.col[c.key]);
-    inp.addEventListener('input',()=>{ skinDraft.col[c.key]=css2hex(inp.value); skinPreviewRebuild(); });
+    inp.addEventListener('input',()=>{ skinLastPart=c.key; skinDraft.col[c.key]=css2hex(inp.value); skinPreviewRebuild(); });
+    inp.addEventListener('change',()=>pushRecent(skinDraft.col[c.key]));   // remember on commit
     row.appendChild(inp); host.appendChild(row);
   }
+  renderSkinRecent();
 }
 function syncSkinControls(){ renderSkinColors(); renderSkinOptions(); }
 /* free-color helper + RANDOMIZE: roll random shapes + vivid colors for an
