@@ -2234,7 +2234,7 @@ const prodAccum={fe:0,cy:0,bio:0,ch:0,pe:0};
 let prodSaveT=0, prodHumT=0;
 function updateProduction(dt){
   const exts=placedByType.extractor||[];
-  if(!exts.length) return;
+  if(!exts.length){ SND.humSet(0); return; }
   const key=curP().res;
   let running=0;
   for(const e of exts){
@@ -2242,9 +2242,11 @@ function updateProduction(dt){
     running++;
     if(Math.random()<dt*2.2) spawnBurst(e.x,e.y+2.3,e.z,curP().nodeCol,1,1.0,1.8,0.55,5);   // production puff
   }
+  /* persistent power hum scales with how much of the network is running */
+  SND.humSet(running>0?Math.min(1,running/4):0);
   if(running<=0) return;
-  /* soft running hum (throttled) */
-  prodHumT-=dt; if(prodHumT<=0){ prodHumT=0.9+Math.random()*0.5; SND.tone(120+running*6,0.12,'sine',0.018); }
+  /* subtle extractor working tick over the hum */
+  prodHumT-=dt; if(prodHumT<=0){ prodHumT=0.7+Math.random()*0.6; SND.extractTick(); }
   if(NET.active) return;   // co-op: server grants via prog; client just shows the visuals
   prodAccum[key]+=running*CAT.extractor.rate*dt;
   if(prodAccum[key]>=1){
@@ -2717,35 +2719,115 @@ SND.poof=function(){ this._play(0.24,({ctx,t,out,osc,noise,filter,gain,hit,send}
   const o=osc('triangle',320); o.frequency.exponentialRampToValueAtTime(120,t+0.16); const og=gain(0); hit(og.gain,0.035,0.005,0.16); o.connect(og); og.connect(out);
   send(0.1);
 }); };
-/* ---- Outpost piece sounds (P6) ---- */
-SND.teleport=function(){ this.tone(360,0.16,'sine',0.07,980); setTimeout(()=>this.tone(980,0.22,'sine',0.055,1520),70); };
-SND.jump=function(){ this.tone(240,0.16,'triangle',0.08,640); };
-SND.liftStart=function(){ this.tone(160,0.22,'triangle',0.05,230); };
-SND.liftStop=function(){ this.tone(230,0.14,'triangle',0.05,150); };
-SND.airlock=function(){ this.tone(120,0.3,'sawtooth',0.045,70); setTimeout(()=>this.tone(2400,0.25,'sine',0.018,3000),80); };
-SND.navPing=function(){ this.tone(1180,0.16,'sine',0.035,1160); };
-/* per-planet ambient bed: looping filtered noise, OFF by default (S.amb) */
+/* ---- Outpost / building piece sounds (Resonance P3) ---- */
+SND.teleport=function(){ this._play(0.5,({ctx,t,out,osc,noise,filter,gain,hit,adsr,sweep,send})=>{
+  const o=osc('sine',300); sweep(o.frequency,300,1600,0.25); const g=gain(0); adsr(g.gain,0.05,0.02,0.1,0.03,0.05,0.2); o.connect(g); g.connect(out);
+  const o2=osc('triangle',1600); sweep(o2.frequency,1600,400,0.22,t+0.26); const g2=gain(0); hit(g2.gain,0.05,0.02,0.22,t+0.26); o2.connect(g2); g2.connect(out);
+  const n=noise(); const nf=filter('bandpass',2000,1); sweep(nf.frequency,800,4000,0.45); const ng=gain(0); hit(ng.gain,0.02,0.05,0.4); n.connect(nf); nf.connect(ng); ng.connect(out);
+  send(0.22);
+}); };
+SND.jump=function(){ this._play(0.28,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('triangle',220); o.frequency.exponentialRampToValueAtTime(680,t+0.22); const f=filter('lowpass',2200,1); const g=gain(0); hit(g.gain,0.07,0.005,0.26); o.connect(f); f.connect(g); g.connect(out);
+  const s=osc('sine',90); const sg=gain(0); hit(sg.gain,0.04,0.004,0.1); s.connect(sg); sg.connect(out);
+  send(0.1);
+}); };
+SND.liftStart=function(){ this._play(0.4,({ctx,t,out,osc,filter,gain,hit,sweep,send})=>{
+  const o=osc('sawtooth',90); o.frequency.exponentialRampToValueAtTime(170,t+0.35); const f=filter('lowpass',600,3); sweep(f.frequency,300,1200,0.35); const g=gain(0); hit(g.gain,0.05,0.02,0.38); o.connect(f); f.connect(g); g.connect(out); send(0.1);
+}); };
+SND.liftStop=function(){ this._play(0.3,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('sawtooth',180); o.frequency.exponentialRampToValueAtTime(70,t+0.22); const f=filter('lowpass',800,2); const g=gain(0); hit(g.gain,0.05,0.005,0.26); o.connect(f); f.connect(g); g.connect(out); send(0.1);
+}); };
+SND.airlock=function(){ this._play(0.6,({ctx,t,out,osc,noise,filter,gain,hit,sweep,send})=>{
+  const o=osc('sawtooth',120); o.frequency.exponentialRampToValueAtTime(60,t+0.18); const f=filter('lowpass',700,2); const g=gain(0); hit(g.gain,0.05,0.004,0.2); o.connect(f); f.connect(g); g.connect(out);
+  const n=noise(); const nf=filter('highpass',2200,0.6); sweep(nf.frequency,1400,4000,0.5,t+0.12); const ng=gain(0); hit(ng.gain,0.035,0.06,0.45,t+0.12); n.connect(nf); nf.connect(ng); ng.connect(out);
+  send(0.16);
+}); };
+SND.navPing=function(){ this._play(0.4,({ctx,t,out,osc,gain,hit,send})=>{
+  const o=osc('sine',1180); const g=gain(0); hit(g.gain,0.05,0.005,0.38); o.connect(g); g.connect(out);
+  const o2=osc('sine',1770); const g2=gain(0); hit(g2.gain,0.015,0.005,0.2); o2.connect(g2); g2.connect(out);
+  send(0.3);
+}); };
+/* extractor working tick — subtle mechanical pulse layered over the power hum */
+SND.extractTick=function(){ this._play(0.1,({ctx,t,out,osc,filter,gain,hit})=>{
+  const o=osc('square',180+Math.random()*30); o.frequency.exponentialRampToValueAtTime(110,t+0.08); const f=filter('bandpass',600,2); const g=gain(0); hit(g.gain,0.02,0.003,0.09); o.connect(f); f.connect(g); g.connect(out);
+}); };
+/* power/generator HUM — one persistent evolving low drone whose level tracks
+   the number of running extractors. Routed through the ambience bus so it sits
+   under the action, fades in/out, and fades with distance/when off-planet. */
+SND.hum=null;
+SND.humSet=function(level){
+  if(!this.on||!this.ctx){ if(this.hum) this.humStop(); return; }
+  if(level<=0){ this.humStop(); return; }
+  if(!this._ready) this._setup();
+  const ctx=this.ctx, target=Math.min(0.05,0.016+level*0.012);
+  if(!this.hum){
+    try{
+      const o=ctx.createOscillator(); o.type='sawtooth'; o.frequency.value=58;
+      const o2=ctx.createOscillator(); o2.type='sine'; o2.frequency.value=116;
+      const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=320; f.Q.value=2;
+      const lfo=ctx.createOscillator(); lfo.type='sine'; lfo.frequency.value=0.18;
+      const lfoG=ctx.createGain(); lfoG.gain.value=70; lfo.connect(lfoG); lfoG.connect(f.frequency);
+      const g=ctx.createGain(); g.gain.setValueAtTime(0.0001,ctx.currentTime); g.gain.linearRampToValueAtTime(target,ctx.currentTime+0.8);
+      o.connect(f); o2.connect(f); f.connect(g); g.connect(this.ambBus||this.master);
+      o.start(); o2.start(); lfo.start();
+      this.hum={o,o2,f,lfo,lfoG,g};
+    }catch(e){}
+  } else { try{ const n=ctx.currentTime; this.hum.g.gain.cancelScheduledValues(n); this.hum.g.gain.linearRampToValueAtTime(target,n+0.3); }catch(e){} }
+};
+SND.humStop=function(){
+  if(!this.hum) return; const h=this.hum; this.hum=null;
+  try{ const ctx=this.ctx, n=ctx.currentTime; h.g.gain.cancelScheduledValues(n); h.g.gain.setValueAtTime(Math.max(h.g.gain.value,0.0001),n); h.g.gain.linearRampToValueAtTime(0.0001,n+0.5);
+    setTimeout(()=>{ try{ h.o.stop(); h.o2.stop(); h.lfo.stop(); h.g.disconnect(); }catch(e){} },600);
+  }catch(e){ try{ h.o.stop(); h.o2.stop(); h.lfo.stop(); }catch(e2){} }
+};
+/* per-planet ambient bed (+ a cosmic space drone): a filtered-noise wind
+   bed gently swept by a slow LFO, plus an optional low mood drone. Two
+   evolving sources max — cheap. Started/stopped on land/launch, toggleable. */
 SND.amb=null;
 SND.ambStart=function(planet){
   this.ambStop();
   if(!this.on||!S.amb||!this.ctx) return;
+  if(!this._ready) this._setup();
   try{
-    const ctx=this.ctx, buf=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate);
-    const d=buf.getChannelData(0);
-    for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
-    const src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
-    const f=ctx.createBiquadFilter(); f.type='lowpass';
-    const cfg={rust:[420,0.045],glacius:[300,0.04],verdant:[750,0.04],pelagos:[520,0.05],
-               cinder:[260,0.05],umbra:[620,0.04],noctis:[180,0.045]}[planet]||[420,0.04];
-    f.frequency.value=cfg[0];
-    const g=ctx.createGain();
-    g.gain.setValueAtTime(0.0001,ctx.currentTime);
-    g.gain.linearRampToValueAtTime(cfg[1],ctx.currentTime+1.5);   // fade in
-    src.connect(f); f.connect(g); g.connect(ctx.destination); src.start();
-    this.amb={src,gain:g};
+    const ctx=this.ctx, t=ctx.currentTime;
+    /* [filterFreq, filterType, windLevel, droneFreq, droneLevel, droneType] */
+    const C={
+      rust:    [420, 'lowpass', 0.05,  0,    0,     null],
+      cinder:  [300, 'lowpass', 0.055, 49,   0.03,  'sawtooth'],
+      glacius: [1300,'highpass',0.03,  1568, 0.012, 'sine'],
+      verdant: [820, 'bandpass',0.045, 131,  0.012, 'triangle'],
+      pelagos: [520, 'lowpass', 0.05,  65,   0.02,  'sine'],
+      umbra:   [620, 'bandpass',0.038, 92,   0.022, 'sawtooth'],
+      noctis:  [240, 'lowpass', 0.05,  41,   0.032, 'sawtooth'],
+      space:   [700, 'bandpass',0.022, 55,   0.02,  'sine'],
+    }[planet]||[420,'lowpass',0.045,0,0,null];
+    const nodes={};
+    const src=ctx.createBufferSource(); src.buffer=this._noiseBuf; src.loop=true; src.playbackRate.value=0.7+Math.random()*0.3;
+    const f=ctx.createBiquadFilter(); f.type=C[1]; f.frequency.value=C[0]; f.Q.value=0.7;
+    const lfo=ctx.createOscillator(); lfo.type='sine'; lfo.frequency.value=0.06+Math.random()*0.05;
+    const lfoG=ctx.createGain(); lfoG.gain.value=C[0]*0.25; lfo.connect(lfoG); lfoG.connect(f.frequency);
+    const g=ctx.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(C[2],t+2.0);
+    src.connect(f); f.connect(g); g.connect(this.ambBus); src.start(); lfo.start();
+    nodes.src=src; nodes.lfo=lfo; nodes.g=g;
+    if(C[5]){
+      const o=ctx.createOscillator(); o.type=C[5]; o.frequency.value=C[3];
+      const o2=ctx.createOscillator(); o2.type='sine'; o2.frequency.value=C[3]*2.01;   // slight detune = slow beating
+      const df=ctx.createBiquadFilter(); df.type='lowpass'; df.frequency.value=Math.max(C[3]*6,360);
+      const dg=ctx.createGain(); dg.gain.setValueAtTime(0.0001,t); dg.gain.linearRampToValueAtTime(C[4],t+3.0);
+      o.connect(df); o2.connect(df); df.connect(dg); dg.connect(this.ambBus); o.start(); o2.start();
+      nodes.o=o; nodes.o2=o2; nodes.dg=dg;
+    }
+    this.amb=nodes;
   }catch(e){}
 };
-SND.ambStop=function(){ if(this.amb&&this.amb.src){ try{ this.amb.src.stop(); }catch(e){} } this.amb=null; };
+SND.ambStop=function(){
+  if(!this.amb) return; const a=this.amb; this.amb=null;
+  try{
+    const ctx=this.ctx, n=ctx.currentTime;
+    [a.g,a.dg].forEach(g=>{ if(g){ try{ g.gain.cancelScheduledValues(n); g.gain.setValueAtTime(Math.max(g.gain.value,0.0001),n); g.gain.linearRampToValueAtTime(0.0001,n+0.8); }catch(e){} } });
+    setTimeout(()=>{ [a.src,a.lfo,a.o,a.o2].forEach(s=>{ if(s){ try{ s.stop(); }catch(e){} } }); [a.g,a.dg].forEach(g=>{ if(g){ try{ g.disconnect(); }catch(e){} } }); },900);
+  }catch(e){ [a.src,a.lfo,a.o,a.o2].forEach(s=>{ if(s){ try{ s.stop(); }catch(e){} } }); }
+};
 
 let driving=null;          // rover entity when seated (Phase 4)
 let weaponCd=0, swingT=0, fireHeld=false;
@@ -4709,7 +4791,7 @@ $('btnBob').addEventListener('click',()=>{ S.headbob=!S.headbob; $('btnBob').tex
 $('btnFx').addEventListener('click',()=>{ S.fx=!S.fx; applyFx(); $('btnFx').textContent='Effects (Bloom): '+(S.fx?'ON':'OFF'); SND.blip(); saveGame(); });
 $('btnAmb').addEventListener('click',()=>{
   S.amb=!S.amb;
-  if(S.amb&&S.running&&S.mode==='surface') SND.ambStart(S.planet); else SND.ambStop();
+  if(S.amb&&S.running) SND.ambStart(S.mode==='space'?'space':S.planet); else SND.ambStop();
   $('btnAmb').textContent='Planet Ambience: '+(S.amb?'ON':'OFF'); SND.blip(); saveGame();
 });
 $('btnCine').addEventListener('click',()=>{
@@ -4815,6 +4897,7 @@ function enterSpace(fromPlanetKey,fromSave){
   }
   refreshMobileUI();
   renderMission();
+  SND.humSet(0); SND.ambStart('space');   // no production hum in orbit; faint cosmic drone
   if(S.pendingCutscene) setTimeout(()=>{ if(S.mode==='space'&&S.running) startShieldCutscene(S.pendingCutscene); },1200);
 }
 function doLand(planetKey){
@@ -4834,7 +4917,7 @@ function doLaunch(){
   if(transitioning) return;
   if(missionOn()&&S.intro.step===3) missionAdvance();   // launching counts as opening the world
   resetEmisBoost();   // night emissive boost is surface-only; mats are shared with space
-  SND.ambStop();
+  SND.ambStop(); SND.humStop();   // planet bed + production hum are surface-only
   fadeTo('LAUNCHING',()=>{ enterSpace(S.planet,false); saveGame(); });
 }
 function doBlackout(){
@@ -6203,7 +6286,7 @@ function secretTap(){
 
 /* effects default + initial pipeline state (after save-load had its chance) */
 if(typeof S.fx!=='boolean') S.fx=fxDefault();
-if(typeof S.amb!=='boolean') S.amb=false;   // planet ambience is opt-in
+if(typeof S.amb!=='boolean') S.amb=true;    // Resonance: subtle ambient bed defaults ON (quiet); existing saves keep their stored choice
 if(['low','med','high'].indexOf(S.neon)<0) S.neon='med';
 if(!S.intro) S.intro={done:true,step:99,cineSeen:true};   // pre-start safety; resetState/applySave set the real value
 if(typeof S.cine!=='boolean') S.cine=false;
