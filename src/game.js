@@ -34,27 +34,181 @@ const smooth=(a,b,v)=>{const t=clamp((v-a)/(b-a),0,1);return t*t*(3-2*t);};
 const $=id=>document.getElementById(id);
 
 /* ---------- audio (procedural, WebAudio) ---------- */
-const SND={ctx:null,on:true,
-  ensure(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
-    if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(()=>{}); },
-  tone(f,dur,type,vol,slide){ if(!this.on||!this.ctx)return; try{
-    const t=this.ctx.currentTime,o=this.ctx.createOscillator(),g=this.ctx.createGain();
-    o.type=type||'sine'; o.frequency.setValueAtTime(f,t);
-    if(slide)o.frequency.linearRampToValueAtTime(slide,t+dur);
-    g.gain.setValueAtTime(vol||0.08,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
-    o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+dur+0.02);}catch(e){} },
-  blip(){this.tone(880,0.07,'square',0.05);},
-  place(){this.tone(330,0.12,'triangle',0.09,440);},
-  remove(){this.tone(280,0.15,'sawtooth',0.06,120);},
-  mine(){this.tone(170+Math.random()*60,0.08,'sawtooth',0.045);},
-  collect(){this.tone(660,0.1,'sine',0.09,990);},
-  klaxon(){this.tone(620,0.28,'sawtooth',0.07,420);},
-  impact(){this.tone(90,0.4,'sawtooth',0.12,40);},
-  denied(){this.tone(220,0.18,'square',0.07,160);},
-  tierUp(){const n=[523,659,784,1046];n.forEach((f,i)=>setTimeout(()=>this.tone(f,0.25,'triangle',0.1),i*110));},
-  victory(){const n=[523,659,784,1046,1318,1568];n.forEach((f,i)=>setTimeout(()=>this.tone(f,0.4,'triangle',0.1),i*150));},
-  o2warn(){this.tone(980,0.12,'sine',0.06);},
+/* ============================================================
+   SND — procedural audio engine (Astravox "Resonance" overhaul)
+   No audio files. Every sound is composed from reusable building
+   blocks: layered oscillators + filtered noise + ADSR envelopes
+   + filter sweeps, summed through category buses and a shared
+   subtle reverb. Voices auto-clean (no leaking nodes) and are
+   capped so dense combat stays at 60fps / mobile doesn't choke.
+   ============================================================ */
+const SND={ctx:null,on:true,master:null,sfx:null,ambBus:null,reverb:null,revGain:null,
+  _noiseBuf:null,_voices:0,_max:24,_ready:false,
+  ensure(){
+    if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} this._setup(); }
+    if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(()=>{});
+  },
+  /* build the shared routing graph once: per-voice -> sfx/ambBus -> master -> out,
+     plus one shared convolver reverb send. Cheap; created on first ensure(). */
+  _setup(){
+    if(!this.ctx||this._ready) return;
+    const ctx=this.ctx;
+    try{
+      if(/Mobi|Android|iPhone|iPad/i.test((navigator&&navigator.userAgent)||'')) this._max=14;
+      this.master=ctx.createGain(); this.master.gain.value=0.85; this.master.connect(ctx.destination);
+      this.sfx=ctx.createGain(); this.sfx.gain.value=1.0; this.sfx.connect(this.master);
+      this.ambBus=ctx.createGain(); this.ambBus.gain.value=0.6; this.ambBus.connect(this.master);
+      this.reverb=ctx.createConvolver(); this.reverb.buffer=this._impulse(0.55,2.4);
+      this.revGain=ctx.createGain(); this.revGain.gain.value=0.16; this.reverb.connect(this.revGain); this.revGain.connect(this.master);
+      const n=Math.floor(ctx.sampleRate*1.5), nb=ctx.createBuffer(1,n,ctx.sampleRate), nd=nb.getChannelData(0);
+      for(let i=0;i<n;i++) nd[i]=Math.random()*2-1;
+      this._noiseBuf=nb;
+      this._ready=true;
+    }catch(e){}
+  },
+  /* exponentially-decaying noise impulse response for the reverb */
+  _impulse(dur,decay){
+    const ctx=this.ctx, len=Math.max(1,Math.floor(ctx.sampleRate*dur)), buf=ctx.createBuffer(2,len,ctx.sampleRate);
+    for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay); }
+    return buf;
+  },
+  /* voice orchestrator — build() composes a short sound from the supplied
+     toolkit; every source is auto start/stopped and the whole subtree is
+     disconnected on end so nothing leaks. Drops the voice if over the cap. */
+  _play(dur,build,bus){
+    if(!this.on||!this.ctx) return;
+    if(!this._ready){ this._setup(); if(!this._ready) return; }
+    if(this._voices>=this._max) return;
+    try{
+      const ctx=this.ctx, t=ctx.currentTime, out=ctx.createGain();
+      out.connect(bus||this.sfx);
+      const srcs=[];
+      const api={ ctx, t, out,
+        osc:(type,f,t0)=>{ const o=ctx.createOscillator(); o.type=type||'sine'; o.frequency.setValueAtTime(f,t0||t); srcs.push(o); return o; },
+        noise:()=>{ const s=ctx.createBufferSource(); s.buffer=this._noiseBuf; s.loop=true; s.playbackRate.value=0.8+Math.random()*0.5; srcs.push(s); return s; },
+        filter:(type,f,q)=>{ const bf=ctx.createBiquadFilter(); bf.type=type||'lowpass'; bf.frequency.value=f; if(q!=null) bf.Q.value=q; return bf; },
+        gain:(v)=>{ const g=ctx.createGain(); g.gain.value=(v==null?1:v); return g; },
+        /* percussive: 0 -> peak over a, exp-decay to silence by a+d */
+        hit:(p,peak,a,d,t0)=>{ t0=t0||t; p.setValueAtTime(0.0001,t0); p.linearRampToValueAtTime(peak,t0+a); p.exponentialRampToValueAtTime(0.0001,t0+a+d); },
+        /* sustained ADSR with an explicit hold */
+        adsr:(p,peak,a,d,sus,hold,r,t0)=>{ t0=t0||t; const s=Math.max(sus,0.0001); p.setValueAtTime(0.0001,t0); p.linearRampToValueAtTime(peak,t0+a); p.exponentialRampToValueAtTime(s,t0+a+d); p.setValueAtTime(s,t0+a+d+hold); p.exponentialRampToValueAtTime(0.0001,t0+a+d+hold+r); },
+        /* exponential glide of any frequency param */
+        sweep:(p,from,to,d,t0)=>{ t0=t0||t; p.setValueAtTime(Math.max(from,20),t0); p.exponentialRampToValueAtTime(Math.max(to,20),t0+d); },
+        /* tap this voice into the shared reverb */
+        send:(amt)=>{ if(!this.reverb) return; const sg=ctx.createGain(); sg.gain.value=amt; out.connect(sg); sg.connect(this.reverb); },
+      };
+      build(api);
+      this._voices++;
+      const end=t+dur+0.05;
+      let pending=srcs.length;
+      const done=()=>{ if(--pending>0) return; try{ out.disconnect(); }catch(e){} this._voices--; };
+      if(pending===0){ setTimeout(()=>{ try{ out.disconnect(); }catch(e){} this._voices--; },(dur+0.12)*1000); }
+      else for(const s of srcs){ try{ s.start(t); }catch(e){} try{ s.stop(end); }catch(e){} s.onended=done; }
+    }catch(e){}
+  },
+  /* back-compat: single-osc tone, now routed + auto-cleaned through the engine */
+  tone(f,dur,type,vol,slide){ this._play(dur,({t,out,osc})=>{
+    const o=osc(type||'sine',f); if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(slide,20),t+dur);
+    out.gain.setValueAtTime(vol||0.08,t); out.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.connect(out);
+  }); },
 };
+
+/* ---------- SND feedback sounds (Resonance P1) ----------
+   The sounds a player hears most — designed, layered, pitch-varied. */
+/* UI: crisp + subtle */
+SND.blip=function(){ this._play(0.09,({ctx,t,out,osc,hit})=>{
+  const o=osc('triangle',840); o.frequency.exponentialRampToValueAtTime(1240,t+0.05);
+  hit(out.gain,0.05,0.004,0.085); o.connect(out);
+}); };
+SND.hover=function(){ this._play(0.05,({out,osc,hit})=>{ const o=osc('sine',1280); hit(out.gain,0.02,0.003,0.045); o.connect(out); }); };
+SND.denied=function(){ this._play(0.2,({t,out,osc,filter,hit,sweep})=>{
+  const o=osc('sawtooth',300); sweep(o.frequency,300,150,0.16);
+  const f=filter('lowpass',1100,3); hit(out.gain,0.055,0.005,0.19); o.connect(f); f.connect(out);
+}); };
+/* mining: chunky, pitch-varied tick — noise crack + short tonal body + sub */
+SND.mine=function(){ this._play(0.13,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const p=0.9+Math.random()*0.25;
+  const n=noise(), nf=filter('bandpass',1500*p,1.4), ng=gain(0); hit(ng.gain,0.06,0.002,0.06); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const o=osc('square',150*p); o.frequency.exponentialRampToValueAtTime(90*p,t+0.1); const og=gain(0); hit(og.gain,0.05,0.004,0.11); const lf=filter('lowpass',900,1); o.connect(lf); lf.connect(og); og.connect(out);
+  const s=osc('sine',70); const sg=gain(0); hit(sg.gain,0.045,0.004,0.09); s.connect(sg); sg.connect(out);
+  send(0.06);
+}); };
+/* resource pickup / mining completion chime */
+SND.collect=function(){ this._play(0.22,({ctx,t,out,osc,gain,hit,send})=>{
+  const o=osc('sine',660); o.frequency.exponentialRampToValueAtTime(990,t+0.09); const g=gain(0); hit(g.gain,0.07,0.005,0.14); o.connect(g); g.connect(out);
+  const o2=osc('triangle',1320); o2.frequency.exponentialRampToValueAtTime(1980,t+0.09); const g2=gain(0); hit(g2.gain,0.03,0.006,0.2,t+0.02); o2.connect(g2); g2.connect(out);
+  send(0.14);
+}); };
+/* build / place confirm: noise click + rising tonal body + sub thump */
+SND.place=function(){ this._play(0.18,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const n=noise(), nf=filter('bandpass',1900,1.1), ng=gain(0); hit(ng.gain,0.045,0.002,0.05); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const o=osc('triangle',300); o.frequency.exponentialRampToValueAtTime(540,t+0.12); const og=gain(0); hit(og.gain,0.07,0.006,0.16); o.connect(og); og.connect(out);
+  const s=osc('sine',88); const sg=gain(0); hit(sg.gain,0.05,0.004,0.1); s.connect(sg); sg.connect(out);
+  send(0.12);
+}); };
+/* remove / pick-up piece: descending de-resolve */
+SND.remove=function(){ this._play(0.18,({ctx,t,out,osc,noise,filter,gain,hit})=>{
+  const o=osc('triangle',420); o.frequency.exponentialRampToValueAtTime(150,t+0.15); const og=gain(0); hit(og.gain,0.06,0.005,0.17); o.connect(og); og.connect(out);
+  const n=noise(), nf=filter('bandpass',1200,1.0); nf.frequency.exponentialRampToValueAtTime(400,t+0.15); const ng=gain(0); hit(ng.gain,0.025,0.003,0.13); n.connect(nf); nf.connect(ng); ng.connect(out);
+}); };
+/* craft success — small bright arpeggio with body */
+SND.craft=function(){ if(!this.on) return; [0,80,160].forEach((ms,i)=>setTimeout(()=>this._play(0.3,({ctx,t,out,osc,gain,hit,send})=>{
+  const f=[392,587,784][i];
+  const o=osc('triangle',f); const g=gain(0); hit(g.gain,0.06,0.006,0.26); o.connect(g); g.connect(out);
+  const o2=osc('sine',f*2); const g2=gain(0); hit(g2.gain,0.02,0.006,0.18); o2.connect(g2); g2.connect(out);
+  send(0.16);
+}),ms)); };
+/* heal — warm ascending shimmer */
+SND.heal=function(){ if(!this.on) return; [0,70,150].forEach((ms,i)=>setTimeout(()=>this._play(0.32,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const f=[523,659,880][i];
+  const o=osc('sine',f); const g=gain(0); hit(g.gain,0.06,0.02,0.28); o.connect(g); g.connect(out);
+  const o2=osc('triangle',f*1.5); const g2=gain(0); hit(g2.gain,0.018,0.02,0.2); const lf=filter('lowpass',2600,0.7); o2.connect(lf); lf.connect(g2); g2.connect(out);
+  send(0.2);
+}),ms)); };
+/* tier-up — triumphant flourish (stacked chord + a swelling pad) */
+SND.tierUp=function(){ if(!this.on) return;
+  [523,659,784,1046].forEach((f,i)=>setTimeout(()=>this._play(0.45,({ctx,t,out,osc,gain,hit,send})=>{
+    const o=osc('triangle',f); const g=gain(0); hit(g.gain,0.08,0.006,0.4); o.connect(g); g.connect(out);
+    const o2=osc('sine',f*2); const g2=gain(0); hit(g2.gain,0.025,0.01,0.3); o2.connect(g2); g2.connect(out);
+    send(0.2);
+  }),i*100));
+  setTimeout(()=>this._play(1.1,({ctx,t,out,osc,filter,gain,adsr,send})=>{   // low swelling pad
+    const o=osc('sawtooth',131); const f=filter('lowpass',500,1); f.frequency.exponentialRampToValueAtTime(1400,t+0.5);
+    const g=gain(0); adsr(g.gain,0.05,0.18,0.3,0.03,0.2,0.4); o.connect(f); f.connect(g); g.connect(out); send(0.25);
+  }),60);
+};
+/* claim / conquest fanfare — big, layered, satisfying */
+SND.claimFanfare=function(){ if(!this.on) return;
+  const seq=[392,523,659,784,1046,1318,1568,2093];
+  seq.forEach((f,i)=>setTimeout(()=>this._play(0.55,({ctx,t,out,osc,gain,hit,send})=>{
+    const o=osc('triangle',f); const g=gain(0); hit(g.gain,0.075,0.008,0.5); o.connect(g); g.connect(out);
+    const o2=osc('sine',f*0.5); const g2=gain(0); hit(g2.gain,0.03,0.01,0.4); o2.connect(g2); g2.connect(out);
+    send(0.22);
+  }),i*130));
+  setTimeout(()=>this._play(2.6,({ctx,t,out,osc,filter,gain,adsr,send})=>{   // triumphant low pad
+    const o=osc('sawtooth',98); const o2=osc('sawtooth',98*1.5);
+    const f=filter('lowpass',420,1.2); f.frequency.exponentialRampToValueAtTime(1600,t+1.4);
+    const g=gain(0); adsr(g.gain,0.06,0.4,0.5,0.04,0.8,0.7); o.connect(f); o2.connect(f); f.connect(g); g.connect(out); send(0.3);
+  }),180);
+  setTimeout(()=>{ [523,659,784,1046].forEach((f,i)=>setTimeout(()=>this._play(1.0,({out,osc,gain,hit,send})=>{
+    const o=osc('sine',f); const g=gain(0); hit(g.gain,0.05,0.02,0.95); o.connect(g); g.connect(out); send(0.25);
+  }),i*45)); },1450);
+};
+SND.victory=function(){ if(!this.on) return; [523,659,784,1046,1318,1568].forEach((f,i)=>setTimeout(()=>this._play(0.5,({out,osc,gain,hit,send})=>{
+  const o=osc('triangle',f); const g=gain(0); hit(g.gain,0.08,0.008,0.46); o.connect(g); g.connect(out);
+  const o2=osc('sine',f*0.5); const g2=gain(0); hit(g2.gain,0.03,0.01,0.36); o2.connect(g2); g2.connect(out); send(0.24);
+}),i*140)); };
+/* O2 / low-health warning — tense two-tone, soft (not piercing) */
+SND.o2warn=function(){ this._play(0.34,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('sine',860); const g=gain(0); hit(g.gain,0.05,0.01,0.14); const f=filter('lowpass',1800,0.8); o.connect(f); f.connect(g); g.connect(out);
+  const o2=osc('sine',760); const g2=gain(0); hit(g2.gain,0.05,0.01,0.16,t+0.16); o2.connect(g2); g2.connect(out);
+  send(0.18);
+}); };
+/* klaxon — alert sweep, urgent but musical */
+SND.klaxon=function(){ this._play(0.34,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('sawtooth',440); o.frequency.exponentialRampToValueAtTime(660,t+0.16); o.frequency.exponentialRampToValueAtTime(440,t+0.32);
+  const f=filter('bandpass',700,2); const g=gain(0); hit(g.gain,0.07,0.008,0.32); o.connect(f); f.connect(g); g.connect(out); send(0.12);
+}); };
 
 /* PLANETS / RES_NAMES / RES_DOTS imported from shared/world.js */
 /* TIERS imported from shared/tiers.js */
@@ -305,12 +459,7 @@ function claimStoryLine(pl){
     noctis:'The stronghold is yours. Across the system, the faction\'s lights blink out — for now.',
   }[pl]||PLANETS[pl].name+' has joined your colony network.';
 }
-SND.claimFanfare=function(){
-  const seq=[392,523,659,784,1046,1318,1568,2093];
-  seq.forEach((f,i)=>setTimeout(()=>this.tone(f,0.5,'triangle',0.09),i*130));
-  setTimeout(()=>this.tone(98,2.4,'sawtooth',0.05,96),200);                       // low triumphant pad
-  setTimeout(()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>this.tone(f,0.9,'sine',0.06),i*40));},1350);  // closing chord
-};
+/* claimFanfare defined in the Resonance P1 feedback block */
 function onTurretFire(m){
   if(S.mode!=='surface') return;
   const st=S.structures.find(s=>s.id===m.id&&s.t==='turret');
@@ -2530,8 +2679,7 @@ SND.swing=function(){ this.tone(430,0.12,'sawtooth',0.06,170); };
 SND.shoot=function(){ this.tone(720,0.07,'square',0.05,300); };
 SND.shootHvy=function(){ this.tone(540,0.07,'square',0.05,240); };
 SND.hurt=function(){ this.tone(200,0.16,'square',0.08,90); };
-SND.heal=function(){ [440,660,880].forEach((f,i)=>setTimeout(()=>this.tone(f,0.12,'sine',0.07),i*70)); };
-SND.craft=function(){ [330,494,660].forEach((f,i)=>setTimeout(()=>this.tone(f,0.13,'triangle',0.08),i*80)); };
+/* heal / craft defined in the Resonance P1 feedback block */
 SND.poof=function(){ this.tone(300,0.18,'sine',0.05,90); setTimeout(()=>this.tone(170,0.16,'triangle',0.04,70),40); };
 /* ---- Outpost piece sounds (P6) ---- */
 SND.teleport=function(){ this.tone(360,0.16,'sine',0.07,980); setTimeout(()=>this.tone(980,0.22,'sine',0.055,1520),70); };
@@ -6034,7 +6182,8 @@ function loop(now){
 requestAnimationFrame(loop);
 
 /* debug / automation hook */
-window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,drones,DRONES,
+window.SND=SND;   // expose the audio engine for the Playwright sound harness
+window.__SF={S,CAT,PLANETS,meteorState,surf,player,cs,ship,keys,NET,remotes,critters,CRITTERS,drones,DRONES,SND,
   WEAPONS,SLOT_KEYS,throwables,shieldWalls,SHIELDED,shieldGroups,
   STATION,STATION_KEYS,STATION_POS,stationCore,stationGroup,
   day:()=>todNow(), setDay:(v)=>{dayClock=v*CYCLE_S;}, applyDayNight:()=>applyDayNight()};
