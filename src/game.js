@@ -816,7 +816,21 @@ window.addEventListener('resize',()=>{
    set (threshold 0.85), OutputPass applies ACES + sRGB. fx OFF: the direct
    renderer path, pixel-identical to pre-P4. Default: on for desktop, off for
    touch. Built lazily so fx-off devices never pay for the render targets. */
-function fxDefault(){ return !(('ontouchstart' in window)||navigator.maxTouchPoints>0); }
+/* Strong "this is actually a phone/tablet" signal — NOT mere touch capability.
+   True when a mobile UA is reported, OR there's a coarse pointer with no fine pointer
+   (no mouse) on a small screen. A touchscreen PC (fine pointer present, desktop UA,
+   large screen) returns false → desktop scheme by default. Function declaration so it's
+   hoisted for fxDefault() and the scheme detection below. */
+function mobileHeuristic(){
+  const ua=navigator.userAgent||'';
+  if(/Android|iPhone|iPad|iPod|Windows Phone|webOS|BlackBerry|Opera Mini|IEMobile|Mobile/i.test(ua)) return true;
+  const mm=window.matchMedia;
+  if(!mm) return false;
+  const coarse=mm('(pointer: coarse)').matches, noFine=!mm('(any-pointer: fine)').matches;
+  const small=Math.min(window.innerWidth,window.innerHeight)<=820;
+  return coarse&&noFine&&small;
+}
+function fxDefault(){ return !mobileHeuristic(); }
 /* per-planet mood: ACES exposure + a gentle linear-space tint */
 const FX_MOOD={
   rust:   {exposure:1.06, tint:[1.04,0.97,1.00]},
@@ -4596,8 +4610,27 @@ $('btnVicClose').addEventListener('click',()=>{ $('victory').classList.add('hidd
 /* ============================================================
    INPUT — desktop + mobile
    ============================================================ */
-const isTouch=('ontouchstart' in window)||navigator.maxTouchPoints>0;
-if(isTouch) document.body.classList.add('touch');
+/* Control scheme: default to DESKTOP (mouse + keyboard + pointer-lock) and only use the
+   mobile touch UI when there's a real mobile signal — touch *capability* alone is NOT one
+   (touchscreen laptops/PCs are touch-capable but mouse-driven). The active scheme then
+   adapts live to the input actually used: a genuine touch switches to the touch UI, moving
+   the mouse switches back — driven by pointerType, which reliably tells real mouse from touch. */
+const touchCapable=('ontouchstart' in window)||navigator.maxTouchPoints>0;
+let mobileUI=mobileHeuristic();
+document.body.classList.toggle('touch',mobileUI);
+function setScheme(mobile){
+  if(mobile===mobileUI) return;
+  mobileUI=mobile;
+  document.body.classList.toggle('touch',mobileUI);
+  if(mobileUI&&document.pointerLockElement) document.exitPointerLock();
+  clearTouchState();    // reset joystick/look so nothing sticks across a switch
+  refreshMobileUI();    // re-evaluate which on-screen buttons show for the active scheme
+}
+window.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='mouse') setScheme(false);
+  else if(e.pointerType==='touch'||e.pointerType==='pen') setScheme(true);
+},true);
+window.addEventListener('pointermove',e=>{ if(e.pointerType==='mouse') setScheme(false); },true);
 const keys={};
 let justE=false, joy={x:0,y:0,active:false,id:-1}, lookTouch={id:-1,lx:0,ly:0};
 
@@ -4646,7 +4679,7 @@ document.addEventListener('mousemove',e=>{ if(bpSelecting&&bpStart){ const d=$('
   d.style.width=Math.abs(e.clientX-bpStart.x)+'px'; d.style.height=Math.abs(e.clientY-bpStart.y)+'px'; } });
 document.addEventListener('mouseup',e=>{ if(bpSelecting&&bpStart){ finishBpSelect(bpStart.x,bpStart.y,e.clientX,e.clientY); bpStart=null; } });
 document.addEventListener('mousedown',e=>{
-  if(!S.running||isTouch||anyPanelOpen()||bpSelecting) return;
+  if(!S.running||mobileUI||anyPanelOpen()||bpSelecting) return;
   if(e.target!==canvas) return;
   SND.ensure();
   if(!document.pointerLockElement){
@@ -4800,14 +4833,14 @@ $('gearBtn').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettin
    Defaults: expanded during the intro (so new players see the steps), collapsed for the ongoing
    conquest thread (keeps the left column clear) — until the player taps to choose for themselves. */
 let missionUserToggled=false;
-if(isTouch){
-  $('missionCard').classList.add('collapsed');
+if(touchCapable){
+  if(mobileUI) $('missionCard').classList.add('collapsed');
   $('missionTitle').addEventListener('click',()=>{ missionUserToggled=true; $('missionCard').classList.toggle('collapsed'); SND.blip(); });
 }
 /* one-time, dismissible "Add to Home Screen for fullscreen" hint — only for mobile web
    users who haven't already installed it (and never nag once seen/dismissed) */
 (function(){
-  if(!isTouch) return;
+  if(!mobileHeuristic()) return;
   const INSTALL_KEY='astravox_install_hint';
   const standalone = window.navigator.standalone===true
     || (window.matchMedia&&(window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: fullscreen)').matches));
@@ -5095,7 +5128,7 @@ function renderMission(){
     /* First Light onboarding keeps priority (surface only, as before) */
     if(S.mode!=='surface'){ card.classList.add('hidden'); return; }
     card.classList.remove('hidden');
-    if(isTouch&&!missionUserToggled) card.classList.remove('collapsed');   // intro: keep steps visible by default
+    if(mobileUI&&!missionUserToggled) card.classList.remove('collapsed');   // intro: keep steps visible by default
     $('missionTitle').textContent='ESTABLISH YOUR OUTPOST';
     $('missionSkip').style.display='';
     const list=$('missionSteps'); list.innerHTML='';
@@ -5132,7 +5165,7 @@ function conquestHint(m){
 function renderConquest(m){
   const card=$('missionCard');
   card.classList.remove('hidden');
-  if(isTouch&&!missionUserToggled) card.classList.add('collapsed');   // conquest: collapsed by default to keep the left column clear
+  if(mobileUI&&!missionUserToggled) card.classList.add('collapsed');   // conquest: collapsed by default to keep the left column clear
   $('missionTitle').textContent='FACTION CONQUEST';
   $('missionSkip').style.display=m.kind==='done'?'':'none';
   let html='';
@@ -5444,7 +5477,7 @@ function updateEva(dt){
   const fwd=evaForward(_evf), right=evaRight(_evr);
   let mvx=0,mvy=0,mvz=0;
   const add=(v,s)=>{ mvx+=v.x*s; mvy+=v.y*s; mvz+=v.z*s; };
-  if(!isTouch){ if(keys.KeyW||keys.ArrowUp) add(fwd,1); if(keys.KeyS||keys.ArrowDown) add(fwd,-1); if(keys.KeyD||keys.ArrowRight) add(right,1); if(keys.KeyA||keys.ArrowLeft) add(right,-1); }
+  if(!mobileUI){ if(keys.KeyW||keys.ArrowUp) add(fwd,1); if(keys.KeyS||keys.ArrowDown) add(fwd,-1); if(keys.KeyD||keys.ArrowRight) add(right,1); if(keys.KeyA||keys.ArrowLeft) add(right,-1); }
   if(joy.active){ add(fwd,-joy.y); add(right,joy.x); }
   if(keys.Space) mvy+=1; if(keys.ShiftLeft) mvy-=1;
   const ml=Math.hypot(mvx,mvy,mvz);
