@@ -1057,15 +1057,18 @@ const APPR_VER=2;
 /* number of valid values for each shape/accessory option id (values 0..n-1);
    the builder reads these to lay out its selectors. 0 is the "stock" choice
    for each (EXCEPT pack, whose stock is 1). Vanguard P2 widens these. */
-const APPR_OPTS={helmetStyle:3, antenna:2, pack:3, trim:2, expression:3};
+/* Vanguard P2: independent shape slots multiply for huge variety (helmet ×
+   visor × body × shoulders × pack × expression × free colors). All the same
+   overall height — variety is shape/detail/color only, never scale. */
+const APPR_OPTS={helmetStyle:6, visorType:5, bodyStyle:4, shoulders:4, pack:5, expression:3, antenna:2, trim:2};
 function defaultAppr(slot){
   return {v:APPR_VER,
     col:{ body:0xd8dde4, limbs:0xc6ccd4, visor:0x9fd8ff, accent:SLOT_COLORS[(slot|0)%4], eye:0x6fe8ff },
-    helmetStyle:0, antenna:0, pack:1, trim:0, expression:0 };
+    helmetStyle:0, visorType:1, bodyStyle:0, shoulders:0, pack:1, expression:0, antenna:0, trim:0 };
 }
 /* shape-affecting fields — any change here rebuilds the avatar; everything
-   else is a live recolor. Vanguard P2 appends its new shape slots. */
-const SHAPE_KEYS=['helmetStyle','antenna','pack','trim','expression'];
+   else (the 5 colors) is a live recolor. */
+const SHAPE_KEYS=['helmetStyle','visorType','bodyStyle','shoulders','pack','expression','antenna','trim'];
 function sanitizeAppr(a,slot){
   const d=defaultAppr(slot);
   if(!a||typeof a!=='object') return d;
@@ -1073,8 +1076,10 @@ function sanitizeAppr(a,slot){
   const opt=(v,n,dv)=>{ v=(v==null?dv:v|0); return (v>=0&&v<n)?v:dv; };
   return {v:APPR_VER,
     col:{ body:hx(c.body,d.col.body), limbs:hx(c.limbs,d.col.limbs), visor:hx(c.visor,d.col.visor), accent:hx(c.accent,d.col.accent), eye:hx(c.eye,d.col.eye) },
-    helmetStyle:opt(a.helmetStyle,APPR_OPTS.helmetStyle,0), antenna:opt(a.antenna,APPR_OPTS.antenna,0),
-    pack:opt(a.pack,APPR_OPTS.pack,1), trim:opt(a.trim,APPR_OPTS.trim,0), expression:opt(a.expression,APPR_OPTS.expression,0) };
+    helmetStyle:opt(a.helmetStyle,APPR_OPTS.helmetStyle,0), visorType:opt(a.visorType,APPR_OPTS.visorType,1),
+    bodyStyle:opt(a.bodyStyle,APPR_OPTS.bodyStyle,0), shoulders:opt(a.shoulders,APPR_OPTS.shoulders,0),
+    pack:opt(a.pack,APPR_OPTS.pack,1), expression:opt(a.expression,APPR_OPTS.expression,0),
+    antenna:opt(a.antenna,APPR_OPTS.antenna,0), trim:opt(a.trim,APPR_OPTS.trim,0) };
 }
 /* local player's saved looks — up to 4 slots + which is active. The ACTIVE
    slot resolves to S.appr (null = stock, so uncustomized players are
@@ -1152,51 +1157,89 @@ function buildAvatar(slot,name,appr){
   const add=(...a)=>{ const m=mk(...a); g.add(m); return m; };
   const B=GEO.box,C=GEO.cyl,S=GEO.sphere;
 
-  /* ---- torso: paneled chest, ab, seam, belt, chest greebles ---- */
-  add(B,bodyMat,0.5,0.5,0.34, 0,0.96,0);          // chest core
-  add(B,bodyMat,0.42,0.26,0.3, 0,0.67,0);         // abdomen
+  const ico=GEO.ico||S;
+  /* ---- TORSO silhouette (bodyStyle) — same height, different bulk ---- */
+  const bs=appr.bodyStyle|0;
+  if(bs===1){               // bulky / armored
+    add(B,bodyMat,0.62,0.5,0.42, 0,0.97,0); add(B,bodyMat,0.5,0.26,0.36, 0,0.68,0);
+    add(B,bodyMat,0.22,0.3,0.14, -0.22,1.0,-0.16); add(B,bodyMat,0.22,0.3,0.14, 0.22,1.0,-0.16); // chest armor slabs
+  } else if(bs===2){        // paneled / techy
+    add(B,bodyMat,0.52,0.5,0.34, 0,0.96,0); add(B,bodyMat,0.44,0.26,0.3, 0,0.67,0);
+    add(B,dark,0.5,0.035,0.35, 0,0.86,0); add(B,dark,0.5,0.035,0.35, 0,0.63,0);   // panel lines
+  } else if(bs===3){        // ranger / slim
+    add(B,bodyMat,0.44,0.5,0.3, 0,0.96,0); add(B,bodyMat,0.38,0.26,0.26, 0,0.67,0);
+    add(B,dark,0.1,0.16,0.12, -0.21,0.66,-0.08); add(B,dark,0.1,0.16,0.12, 0.21,0.66,-0.08); // hip pouches
+  } else {                  // 0 sleek (default)
+    add(B,bodyMat,0.5,0.5,0.34, 0,0.96,0); add(B,bodyMat,0.42,0.26,0.3, 0,0.67,0);
+  }
+  /* common torso details + hips */
   add(B,dark,0.47,0.07,0.33, 0,0.79,0);           // mid seam
   add(B,dark,0.5,0.09,0.36, 0,0.5,0);             // belt
   add(B,accentMat,0.16,0.28,0.05, 0,1.0,-0.18);   // chest accent strip (front = -z)
   add(B,dark,0.3,0.12,0.05, 0,1.16,-0.17);        // collar plate
-  add(B,metal,0.1,0.1,0.05, -0.16,0.9,-0.18);     // chest greeble L
-  add(B,metal,0.1,0.1,0.05, 0.16,0.9,-0.18);      // chest greeble R
+  add(B,metal,0.1,0.1,0.05, -0.16,0.9,-0.18); add(B,metal,0.1,0.1,0.05, 0.16,0.9,-0.18);
   add(B,bodyMat,0.42,0.18,0.3, 0,0.42,0);         // hips
 
-  /* ---- base shoulder pauldrons ---- */
-  add(S,bodyMat,0.18,0.16,0.18, -0.35,1.2,0);
-  add(S,bodyMat,0.18,0.16,0.18, 0.35,1.2,0);
-
-  /* ---- accessory / pack options ---- */
-  if(appr.pack===1){          // backpack
-    add(B,dark,0.4,0.5,0.2, 0,0.98,0.27);
-    add(B,accentMat,0.3,0.08,0.05, 0,1.12,0.38);
-  } else if(appr.pack===2){   // jetpack: twin thrusters + glowing nozzles
-    add(B,dark,0.38,0.46,0.18, 0,1.0,0.27);
-    for(const sx of [-0.17,0.17]){ add(C,metal,0.08,0.5,0.08, sx,0.94,0.32); add(S,eyeMat,0.07,0.06,0.07, sx,0.67,0.32); }
-  }                            // pack===0: bare
-
-  /* ---- head: neck, helmet shell, dark face recess, visor band, eyes ---- */
-  add(C,dark,0.1,0.09,0.1, 0,1.33,0);                 // neck
-  add(S,bodyMat,0.42,0.45,0.42, 0,1.56,0);            // helmet shell
-  add(B,dark,0.36,0.22,0.12, 0,1.52,-0.24);           // face recess (dark, front = -z)
-  add(B,visorMat,0.38,0.06,0.05, 0,1.62,-0.3);        // visor brow band
-  add(S,metal,0.08,0.11,0.1, -0.41,1.54,0);           // ear pod L
-  add(S,metal,0.08,0.11,0.1, 0.41,1.54,0);            // ear pod R
-  /* expression = emissive eye-glow shape (front = -z) */
-  const ex=appr.expression|0;
-  if(ex===1){                 // wide / alert
-    add(S,eyeMat,0.055,0.06,0.04, -0.1,1.54,-0.31); add(S,eyeMat,0.055,0.06,0.04, 0.1,1.54,-0.31);
-  } else if(ex===2){          // focused / narrow slits
-    const l=mk(B,eyeMat,0.13,0.028,0.03,-0.1,1.55,-0.31); l.rotation.z=0.34; g.add(l);
-    const r=mk(B,eyeMat,0.13,0.028,0.03,0.1,1.55,-0.31); r.rotation.z=-0.34; g.add(r);
-  } else {                    // calm (default)
-    add(B,eyeMat,0.11,0.05,0.03, -0.1,1.54,-0.31); add(B,eyeMat,0.11,0.05,0.03, 0.1,1.54,-0.31);
+  /* ---- SHOULDERS ---- */
+  const sh=appr.shoulders|0;
+  if(sh===3){               // slim joints
+    add(S,dark,0.1,0.1,0.1, -0.35,1.18,0); add(S,dark,0.1,0.1,0.1, 0.35,1.18,0);
+  } else if(sh===2){        // broad box pauldrons
+    add(B,bodyMat,0.24,0.16,0.28, -0.39,1.2,0); add(B,bodyMat,0.24,0.16,0.28, 0.39,1.2,0);
+  } else if(sh===1){        // spiked
+    for(const sx of [-0.35,0.35]){ add(S,bodyMat,0.17,0.15,0.17, sx,1.2,0); const sp=mk(C,accentMat,0.05,0.18,0.05, sx,1.33,0); g.add(sp); }
+  } else {                  // 0 standard rounded
+    add(S,bodyMat,0.18,0.16,0.18, -0.35,1.2,0); add(S,bodyMat,0.18,0.16,0.18, 0.35,1.2,0);
   }
 
-  /* ---- helmet shape extras (Vanguard P2 widens these) ---- */
-  if(appr.helmetStyle>=1) add(B,accentMat,0.05,0.16,0.34, 0,1.82,-0.02);   // crest fin
-  if(appr.helmetStyle>=2){ add(B,bodyMat,0.08,0.3,0.08, -0.34,1.74,0); add(B,bodyMat,0.08,0.3,0.08, 0.34,1.74,0); } // horns
+  /* ---- PACK / ACCESSORY (back = +z) ---- */
+  const pk=appr.pack|0;
+  if(pk===1){               // backpack
+    add(B,dark,0.4,0.5,0.2, 0,0.98,0.27); add(B,accentMat,0.3,0.08,0.05, 0,1.12,0.38);
+  } else if(pk===2){        // jetpack: twin thrusters + glowing nozzles
+    add(B,dark,0.38,0.46,0.18, 0,1.0,0.27);
+    for(const sx of [-0.17,0.17]){ add(C,metal,0.08,0.5,0.08, sx,0.94,0.32); add(S,eyeMat,0.07,0.06,0.07, sx,0.67,0.32); }
+  } else if(pk===3){        // antenna array
+    add(B,dark,0.3,0.34,0.16, 0,1.0,0.26);
+    for(const sx of [-0.1,0,0.1]){ add(C,metal,0.014,0.3,0.014, sx,1.32,0.28); add(S,eyeMat,0.04,0.04,0.04, sx,1.49,0.28); }
+  } else if(pk===4){        // side canisters
+    for(const sx of [-0.24,0.24]){ add(C,metal,0.09,0.42,0.09, sx,0.95,0.22); add(S,accentMat,0.06,0.05,0.06, sx,0.75,0.22); }
+  }                          // pk===0: bare back
+
+  /* ---- HEAD: neck + helmet shell (helmetStyle) + adornments ---- */
+  add(C,dark,0.1,0.09,0.1, 0,1.33,0);             // neck
+  const hs=appr.helmetStyle|0;
+  if(hs===1) add(ico,bodyMat,0.46,0.47,0.46, 0,1.56,0);        // faceted
+  else if(hs===3) add(B,bodyMat,0.46,0.46,0.44, 0,1.56,0);     // heavy boxy
+  else add(S,bodyMat,0.42,0.45,0.42, 0,1.56,0);                // rounded (0,2,4,5)
+  if(hs===2) add(B,accentMat,0.05,0.2,0.34, 0,1.84,-0.02);                                  // crest fin
+  if(hs===4){ add(B,bodyMat,0.08,0.3,0.08, -0.33,1.76,0); add(B,bodyMat,0.08,0.3,0.08, 0.33,1.76,0); } // horns
+  if(hs===5){ add(B,visorMat,0.46,0.1,0.18, 0,1.64,-0.2); add(B,bodyMat,0.28,0.14,0.16, 0,1.4,-0.18); } // knight: brow + chin
+  add(S,metal,0.08,0.11,0.1, -0.41,1.54,0); add(S,metal,0.08,0.11,0.1, 0.41,1.54,0);        // ear pods
+  add(B,dark,0.36,0.22,0.12, 0,1.52,-0.24);       // face recess (dark, front = -z)
+
+  /* ---- FACE: visor/eye type × expression (emissive, front = -z) ---- */
+  const vt=appr.visorType|0, ex=appr.expression|0;
+  const eyeAt=(x)=>{
+    if(ex===1) return add(S,eyeMat,0.055,0.06,0.04, x,1.54,-0.31);                 // wide/alert
+    if(ex===2){ const m=mk(B,eyeMat,0.13,0.028,0.03, x,1.55,-0.31); m.rotation.z=(x<0?0.34:-0.34); g.add(m); return m; } // narrow
+    return add(B,eyeMat,0.11,0.05,0.03, x,1.54,-0.31);                             // calm
+  };
+  if(vt===0){               // single visor bar
+    add(B,visorMat,0.4,0.1,0.04, 0,1.55,-0.29); add(B,eyeMat,0.3,0.05,0.04, 0,1.55,-0.31);
+  } else if(vt===2){        // scanner bar (cyclops) with notches
+    add(B,eyeMat,0.34,0.045,0.04, 0,1.55,-0.31);
+    add(B,dark,0.03,0.06,0.05, -0.08,1.55,-0.33); add(B,dark,0.03,0.06,0.05, 0.08,1.55,-0.33);
+  } else if(vt===3){        // goggles: dark frames + eyes
+    add(S,dark,0.1,0.1,0.06, -0.1,1.54,-0.27); add(S,dark,0.1,0.1,0.06, 0.1,1.54,-0.27);
+    eyeAt(-0.1); eyeAt(0.1);
+  } else if(vt===4){        // T-visor
+    add(B,eyeMat,0.05,0.2,0.04, 0,1.55,-0.31); add(B,eyeMat,0.28,0.05,0.04, 0,1.63,-0.31);
+  } else {                  // 1 twin eyes (default)
+    eyeAt(-0.1); eyeAt(0.1);
+  }
+
+  /* ---- extra toggles ---- */
   if(appr.antenna){ add(C,metal,0.016,0.34,0.016, 0.22,1.86,-0.04); add(S,eyeMat,0.05,0.05,0.05, 0.22,2.05,-0.04); }
   if(appr.trim){ add(S,accentMat,0.1,0.07,0.1, -0.35,1.27,0); add(S,accentMat,0.1,0.07,0.1, 0.35,1.27,0); } // accent shoulder caps
 
@@ -5692,10 +5735,22 @@ const PRESETS=[
   {name:'Solar',    a:{col:{body:0xf0e6d0,limbs:0xe8dcc0,visor:0xffd060,accent:0xff8a00},helmetStyle:0,antenna:0,pack:1,trim:1}},
   {name:'Tideborn', a:{col:{body:0xcfe0ff,limbs:0xbcd0f0,visor:0x00e5ff,accent:0x00bfff},helmetStyle:1,antenna:0,pack:0,trim:0}},
 ];
-const OPT_LABELS={
-  helmetStyle:['Dome','Shell','Crest'], antenna:['None','Antenna'],
-  pack:['None','Backpack','Jetpack'], trim:['None','Pads'],
-};
+/* data-driven builder: every shape slot + colorable part renders itself, so
+   adding options is a one-line change. labels index = the option id value. */
+const APPR_SLOTS=[
+  {key:'helmetStyle',label:'Helmet',labels:['Round','Faceted','Crested','Heavy','Horned','Knight']},
+  {key:'visorType',label:'Visor',labels:['Bar','Eyes','Scanner','Goggles','T-Visor']},
+  {key:'expression',label:'Eyes',labels:['Calm','Wide','Narrow']},
+  {key:'bodyStyle',label:'Body',labels:['Sleek','Bulky','Paneled','Ranger']},
+  {key:'shoulders',label:'Shoulders',labels:['Standard','Spiked','Broad','Slim']},
+  {key:'pack',label:'Back',labels:['None','Backpack','Jetpack','Antennas','Canisters']},
+  {key:'antenna',label:'Antenna',labels:['Off','On']},
+  {key:'trim',label:'Trim',labels:['Off','On']},
+];
+const APPR_COLS=[
+  {key:'body',label:'Body'},{key:'limbs',label:'Limbs'},{key:'visor',label:'Visor'},
+  {key:'accent',label:'Accent'},{key:'eye',label:'Eyes'},
+];
 let skinDraft=null, skinPrev=null;   // draft appr being edited; preview {renderer,scene,cam,avatar,raf,drag}
 const hex2css=v=>'#'+('000000'+(v>>>0).toString(16)).slice(-6);
 const css2hex=s=>parseInt(s.slice(1),16)|0;
@@ -5773,29 +5828,53 @@ function renderSkinPresets(){
     el.appendChild(b);
   });
 }
-const OPT_HOST={helmetStyle:'skHelmet', antenna:'skAntenna', pack:'skPack', trim:'skTrim'};
 function renderSkinOptions(){
-  for(const key of ['helmetStyle','antenna','pack','trim']){
-    const host=$(OPT_HOST[key]); host.innerHTML='';
-    OPT_LABELS[key].forEach((lab,idx)=>{
-      const b=document.createElement('button'); b.textContent=lab; b.dataset.v=idx;
-      b.className=(skinDraft[key]===idx?'on':'');
-      b.addEventListener('click',()=>{ skinDraft[key]=idx; renderSkinOptions(); skinPreviewRebuild(); SND.blip(); });
-      host.appendChild(b);
+  const host=$('skinOptions'); host.innerHTML='';
+  for(const slot of APPR_SLOTS){
+    const row=document.createElement('div'); row.className='skinRow';
+    const lab=document.createElement('label'); lab.textContent=slot.label; row.appendChild(lab);
+    const opt=document.createElement('div'); opt.className='skinOpt';
+    slot.labels.forEach((txt,idx)=>{
+      const b=document.createElement('button'); b.textContent=txt; b.dataset.v=idx; b.dataset.k=slot.key;
+      b.className=(skinDraft[slot.key]===idx?'on':'');
+      b.addEventListener('click',()=>{ skinDraft[slot.key]=idx; renderSkinOptions(); skinPreviewRebuild(); SND.blip(); });
+      opt.appendChild(b);
     });
+    row.appendChild(opt); host.appendChild(row);
   }
 }
-function syncSkinControls(){
-  $('skBody').value=hex2css(skinDraft.col.body);
-  $('skLimbs').value=hex2css(skinDraft.col.limbs);
-  $('skVisor').value=hex2css(skinDraft.col.visor);
-  $('skAccent').value=hex2css(skinDraft.col.accent);
-  renderSkinOptions();
+function renderSkinColors(){
+  const host=$('skinColors'); host.innerHTML='';
+  for(const c of APPR_COLS){
+    const row=document.createElement('div'); row.className='skinRow';
+    const lab=document.createElement('label'); lab.textContent=c.label; row.appendChild(lab);
+    const inp=document.createElement('input'); inp.type='color'; inp.id='skcol_'+c.key; inp.value=hex2css(skinDraft.col[c.key]);
+    inp.addEventListener('input',()=>{ skinDraft.col[c.key]=css2hex(inp.value); skinPreviewRebuild(); });
+    row.appendChild(inp); host.appendChild(row);
+  }
 }
-function bindSkinColor(id,part){
-  $(id).addEventListener('input',()=>{ skinDraft.col[part]=css2hex($(id).value); skinPreviewRebuild(); });
+function syncSkinControls(){ renderSkinColors(); renderSkinOptions(); }
+/* free-color helper + RANDOMIZE: roll random shapes + vivid colors for an
+   instant near-unique look (combinatorics, not enforcement, gives uniqueness) */
+function hsl2hex(h,s,l){
+  const a=s*Math.min(l,1-l);
+  const f=n=>{ const k=(n+h*12)%12; const c=l-a*Math.max(-1,Math.min(k-3,9-k,1)); return Math.max(0,Math.min(255,Math.round(255*c))); };
+  return (f(0)<<16)|(f(8)<<8)|f(4);
 }
-bindSkinColor('skBody','body'); bindSkinColor('skLimbs','limbs'); bindSkinColor('skVisor','visor'); bindSkinColor('skAccent','accent');
+function randomizeAppr(){
+  const R=Math.random;
+  const col={
+    body:hsl2hex(R(),0.25+R()*0.5,0.4+R()*0.35),
+    limbs:hsl2hex(R(),0.2+R()*0.45,0.35+R()*0.35),
+    visor:hsl2hex(R(),0.4+R()*0.5,0.45+R()*0.3),
+    accent:hsl2hex(R(),0.7+R()*0.3,0.5+R()*0.15),   // vivid (emissive trim)
+    eye:hsl2hex(R(),0.6+R()*0.4,0.55+R()*0.2),       // bright (glowing eyes)
+  };
+  const a={v:APPR_VER,col};
+  for(const slot of APPR_SLOTS) a[slot.key]=Math.floor(R()*APPR_OPTS[slot.key]);
+  skinDraft=sanitizeAppr(a,0); syncSkinControls(); skinPreviewRebuild(); SND.blip(); $('skinSaveNote').textContent='';
+}
+$('skRandom').addEventListener('click',randomizeAppr);
 function openSkinBuilder(){
   const cur=S.apprSlots[S.apprActive];
   skinDraft=cur?JSON.parse(JSON.stringify(cur)):defaultAppr(0);
@@ -5976,7 +6055,8 @@ Object.assign(window,{
   updateWater,useMed,
   /* Identity update — character appearance (cosmetic) */
   buildAvatar,addRemote,removeRemote,setRemoteAppr,setMyAppearance,defaultAppr,sanitizeAppr,SLOT_COLORS,APPR_OPTS,
-  setActiveSlot,saveDraftToSlot,openSkinBuilder,apprStoreBlob,sanitizeApprStore,adoptAccountAppearance,PRESETS});
+  setActiveSlot,saveDraftToSlot,openSkinBuilder,apprStoreBlob,sanitizeApprStore,adoptAccountAppearance,PRESETS,
+  randomizeAppr,APPR_SLOTS});
 for(const [name,get,set] of [
   ['buildSel',()=>buildSel,v=>{buildSel=v;}],
   ['weaponCd',()=>weaponCd,v=>{weaponCd=v;}],

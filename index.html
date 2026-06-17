@@ -109,6 +109,7 @@
     cursor:pointer; font-size:12px; border-radius:4px; }
   .skinOpt button.on { background:rgba(40,140,200,0.5); border-color:#7fdcff; color:#eaffff; }
   #skinSaveNote { font-size:12px; color:#7fc0da; min-height:16px; margin-top:8px; letter-spacing:0.04em; }
+  .skinHd { color:#9fd6ef; font-size:12px; letter-spacing:0.08em; margin:12px 0 5px; text-transform:uppercase; }
   #blueprintList .bpItem { display:flex; gap:8px; align-items:center; border:1px solid rgba(90,180,220,0.35); padding:8px 10px; margin-bottom:7px; background:rgba(12,30,46,0.55); }
   #blueprintList .bpItem b { flex:1; color:#cfeefe; font-size:13px; }
   #blueprintList .bpItem button, #bpTools button { background:rgba(20,60,90,0.5); border:1px solid #2e8fb8; color:#cfeefe; padding:6px 11px; cursor:pointer; font-size:12px; letter-spacing:0.06em; }
@@ -362,18 +363,13 @@
   <h2>Character Appearance</h2>
   <canvas id="skinPreview"></canvas>
   <div id="skinSlots"></div>
-  <div style="color:#9fd6ef;font-size:12px;letter-spacing:0.08em;margin:4px 0 4px;text-transform:uppercase">Presets</div>
+  <div class="skinHd">Presets <span style="opacity:0.6;text-transform:none;letter-spacing:0">— starting points, tweak freely</span></div>
   <div id="skinPresets"></div>
-  <div style="color:#9fd6ef;font-size:12px;letter-spacing:0.08em;margin:4px 0 4px;text-transform:uppercase">Colors</div>
-  <div class="skinRow"><label>Body</label><input type="color" id="skBody"></div>
-  <div class="skinRow"><label>Limbs</label><input type="color" id="skLimbs"></div>
-  <div class="skinRow"><label>Visor</label><input type="color" id="skVisor"></div>
-  <div class="skinRow"><label>Accent</label><input type="color" id="skAccent"></div>
-  <div style="color:#9fd6ef;font-size:12px;letter-spacing:0.08em;margin:10px 0 4px;text-transform:uppercase">Gear</div>
-  <div class="skinRow"><label>Helmet</label><div class="skinOpt" id="skHelmet"></div></div>
-  <div class="skinRow"><label>Antenna</label><div class="skinOpt" id="skAntenna"></div></div>
-  <div class="skinRow"><label>Back</label><div class="skinOpt" id="skPack"></div></div>
-  <div class="skinRow"><label>Shoulders</label><div class="skinOpt" id="skTrim"></div></div>
+  <button class="menuBtn" id="skRandom" style="width:100%;margin:4px 0 2px">🎲 Randomize</button>
+  <div class="skinHd">Shape</div>
+  <div id="skinOptions"></div>
+  <div class="skinHd">Colors</div>
+  <div id="skinColors"></div>
   <button class="menuBtn" id="skSave" style="width:100%;margin-top:14px">Save &amp; Wear This Look</button>
   <div id="skinSaveNote"></div>
 </div>
