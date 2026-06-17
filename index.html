@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>ASTRAVOX</title>
+<!-- Installable web app: launches fullscreen (no browser chrome) when added to the home screen -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#02050c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Astravox">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#cfeefe; }
@@ -303,6 +312,14 @@
   body.touch #ctrlHelp .desktopOnly { display:none; }
   #ctrlHelp .touchOnly { display:none; }
   body.touch #ctrlHelp .touchOnly { display:inline; }
+
+  /* dismissible "add to home screen" hint (mobile web only, shown once) */
+  #installHint { position:fixed; left:50%; top:calc(12px + env(safe-area-inset-top,0px)); transform:translateX(-50%);
+    z-index:80; display:flex; align-items:center; gap:12px; max-width:92vw;
+    background:rgba(8,28,44,0.94); border:1px solid #2e8fb8; border-radius:9px; padding:10px 12px 10px 16px;
+    color:#cfeefe; font-size:13px; letter-spacing:0.03em; box-shadow:0 0 26px rgba(20,120,180,0.45); }
+  #installHintX { background:none; border:1px solid #3fa9d4; color:#aee8ff; width:28px; height:28px; flex:0 0 auto;
+    border-radius:6px; cursor:pointer; font-size:13px; }
 </style>
 </head>
 <body>
@@ -525,6 +542,11 @@
   <button class="mBtn" id="mMed">+MED</button>
   <button class="mBtn hidden" id="mChat">CHAT</button>
   <button class="mBtn" id="mMap">MAP</button>
+</div>
+
+<div id="installHint" class="hidden">
+  <span>📲 Add to Home Screen for fullscreen landscape play</span>
+  <button id="installHintX" aria-label="dismiss">✕</button>
 </div>
 
 <script type="module" src="/src/game.js"></script>

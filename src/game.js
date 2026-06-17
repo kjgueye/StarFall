@@ -4804,6 +4804,21 @@ if(isTouch){
   $('missionCard').classList.add('collapsed');
   $('missionTitle').addEventListener('click',()=>{ missionUserToggled=true; $('missionCard').classList.toggle('collapsed'); SND.blip(); });
 }
+/* one-time, dismissible "Add to Home Screen for fullscreen" hint — only for mobile web
+   users who haven't already installed it (and never nag once seen/dismissed) */
+(function(){
+  if(!isTouch) return;
+  const INSTALL_KEY='astravox_install_hint';
+  const standalone = window.navigator.standalone===true
+    || (window.matchMedia&&(window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: fullscreen)').matches));
+  let seen=false; try{ seen=!!localStorage.getItem(INSTALL_KEY); }catch(e){}
+  if(standalone||seen) return;
+  const el=$('installHint'); if(!el) return;
+  const done=()=>{ el.classList.add('hidden'); try{ localStorage.setItem(INSTALL_KEY,'1'); }catch(e){} };
+  el.classList.remove('hidden');
+  $('installHintX').addEventListener('click',done);
+  setTimeout(done,12000);   // auto-dismiss so it shows once and never nags
+})();
 
 /* settings */
 function applySfxVol(){ SND.setSfx({low:0.6,med:1.0,high:1.4}[S.sfxVol]||1.0); }
