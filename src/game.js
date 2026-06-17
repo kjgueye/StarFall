@@ -4695,10 +4695,24 @@ function joyEvt(e){
 }
 ['touchstart','touchmove','touchend','touchcancel'].forEach(ev=>joyBase.addEventListener(ev,joyEvt,{passive:false}));
 
-/* mobile look — drag right side */
+/* mobile look — drag the open right-hand area.
+   Robust touch-id tracking so look NEVER sticks and never needs a page refresh:
+   the look touch is distinct from joystick/button touches; it self-heals if a
+   touch is silently lost (iOS drops touchend on system-gesture interrupts,
+   Control Center swipes, notifications, backgrounding), releases on BOTH
+   touchend and touchcancel, and is cleared on blur / tab-hide / rotate. */
+function releaseLook(){ lookTouch.id=-1; }
+function releaseJoy(){ joy.id=-1; joy.active=false; joy.x=joy.y=0; joyKnob.style.left='50%'; joyKnob.style.top='50%'; }
+/* drop any tracked touch that is no longer physically on the screen */
+function healTouches(activeIds){
+  if(lookTouch.id!==-1&&!activeIds.has(lookTouch.id)) releaseLook();
+  if(joy.id!==-1&&!activeIds.has(joy.id)) releaseJoy();
+}
 document.addEventListener('touchstart',e=>{
   SND.ensure();
   if(!S.running) return;
+  const activeIds=new Set(); for(const t of e.touches) activeIds.add(t.identifier);
+  healTouches(activeIds);                                  // self-heal a stale (lost) look/joy touch before claiming a new one
   for(const t of e.changedTouches){
     if(t.target.closest&&(t.target.closest('.mBtn')||t.target.closest('#joyBase')||t.target.closest('.panel')||t.target.closest('#tierBadge')||t.target.closest('#gearBtn'))) continue;
     if(t.clientX>window.innerWidth*0.34&&lookTouch.id===-1){
@@ -4707,11 +4721,13 @@ document.addEventListener('touchstart',e=>{
   }
 },{passive:true});
 document.addEventListener('touchmove',e=>{
-  if(!S.running||anyPanelOpen()||cs.active) return;
+  if(lookTouch.id===-1||!S.running) return;
+  const blocked=anyPanelOpen()||cs.active;
   for(const t of e.changedTouches){
     if(t.identifier!==lookTouch.id) continue;
     const dx=t.clientX-lookTouch.lx, dy=t.clientY-lookTouch.ly;
-    lookTouch.lx=t.clientX; lookTouch.ly=t.clientY;
+    lookTouch.lx=t.clientX; lookTouch.ly=t.clientY;   // always track position (no view jump when a panel/cutscene closes)
+    if(blocked) continue;                              // ...but don't rotate while a panel or cutscene is up
     const sens=0.0052;
     if(S.mode==='surface'){
       player.yaw-=dx*sens; player.pitch=clamp(player.pitch-dy*sens,-1.45,1.45);
@@ -4720,9 +4736,16 @@ document.addEventListener('touchmove',e=>{
     }
   }
 },{passive:true});
-document.addEventListener('touchend',e=>{
-  for(const t of e.changedTouches) if(t.identifier===lookTouch.id) lookTouch.id=-1;
-},{passive:true});
+function endLookTouch(e){
+  for(const t of e.changedTouches) if(t.identifier===lookTouch.id) releaseLook();
+}
+document.addEventListener('touchend',endLookTouch,{passive:true});
+document.addEventListener('touchcancel',endLookTouch,{passive:true});   // <-- was missing; iOS system gestures fire this, leaving look stuck
+/* backgrounding / tab switch / rotate can drop touch events entirely — clear all touch state so nothing sticks */
+function clearTouchState(){ releaseLook(); releaseJoy(); }
+window.addEventListener('blur',clearTouchState);
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) clearTouchState(); });
+window.addEventListener('orientationchange',clearTouchState);
 
 /* mobile buttons */
 function bindHold(id,code){
