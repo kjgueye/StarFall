@@ -5802,6 +5802,9 @@ function skinPreviewRebuild(){
   av.traverse(o=>{ if(o.isSprite) o.visible=false; });   // no name tag in the preview
   p.scene.add(av); p.avatar=av;
 }
+/* color edits recolor the existing preview avatar in place (snappy while
+   dragging the picker); shape edits rebuild */
+function skinPreviewRecolor(){ const p=skinPrev; if(p&&p.avatar) applyApprColors(p.avatar,sanitizeAppr(skinDraft,0)); }
 function skinPreviewLoop(){
   const p=skinPrev; if(!p) return;
   if($('skinBuilder').classList.contains('hidden')){ p.raf=0; return; }   // stop when closed
@@ -5853,7 +5856,7 @@ function renderSkinRecent(){
   const host=$('skinRecent'); if(!host) return; host.innerHTML='';
   for(const hex of skinRecent){
     const sw=document.createElement('div'); sw.className='rsw'; sw.style.background=hex2css(hex);
-    sw.addEventListener('click',()=>{ skinDraft.col[skinLastPart]=hex; const inp=$('skcol_'+skinLastPart); if(inp) inp.value=hex2css(hex); skinPreviewRebuild(); SND.blip(); });
+    sw.addEventListener('click',()=>{ skinDraft.col[skinLastPart]=hex; const inp=$('skcol_'+skinLastPart); if(inp) inp.value=hex2css(hex); skinPreviewRecolor(); SND.blip(); });
     host.appendChild(sw);
   }
 }
@@ -5863,7 +5866,7 @@ function renderSkinColors(){
     const row=document.createElement('div'); row.className='skinRow';
     const lab=document.createElement('label'); lab.textContent=c.label; row.appendChild(lab);
     const inp=document.createElement('input'); inp.type='color'; inp.id='skcol_'+c.key; inp.value=hex2css(skinDraft.col[c.key]);
-    inp.addEventListener('input',()=>{ skinLastPart=c.key; skinDraft.col[c.key]=css2hex(inp.value); skinPreviewRebuild(); });
+    inp.addEventListener('input',()=>{ skinLastPart=c.key; skinDraft.col[c.key]=css2hex(inp.value); skinPreviewRecolor(); });
     inp.addEventListener('change',()=>pushRecent(skinDraft.col[c.key]));   // remember on commit
     row.appendChild(inp); host.appendChild(row);
   }
