@@ -2675,12 +2675,48 @@ $('bpImportGo').addEventListener('click',()=>{ importBlueprint($('bpImportBox').
 /* ============================================================
    COMBAT — weapons, firing, damage, death/loot, safe zone
    ============================================================ */
-SND.swing=function(){ this.tone(430,0.12,'sawtooth',0.06,170); };
-SND.shoot=function(){ this.tone(720,0.07,'square',0.05,300); };
-SND.shootHvy=function(){ this.tone(540,0.07,'square',0.05,240); };
-SND.hurt=function(){ this.tone(200,0.16,'square',0.08,90); };
-/* heal / craft defined in the Resonance P1 feedback block */
-SND.poof=function(){ this.tone(300,0.18,'sine',0.05,90); setTimeout(()=>this.tone(170,0.16,'triangle',0.04,70),40); };
+/* ---------- combat sounds (Resonance P2) — layered, punchy, distinct ---------- */
+/* blade swing: airy whoosh (sweeping bandpass noise) + a faint metallic edge */
+SND.swing=function(){ this._play(0.22,({ctx,t,out,noise,filter,osc,gain,hit,sweep,send})=>{
+  const n=noise(); const f=filter('bandpass',800,1.2); sweep(f.frequency,500,3000,0.18); const g=gain(0); hit(g.gain,0.06,0.02,0.2); n.connect(f); f.connect(g); g.connect(out);
+  const o=osc('sawtooth',300); o.frequency.exponentialRampToValueAtTime(700,t+0.12); const og=gain(0); hit(og.gain,0.02,0.01,0.14); o.connect(og); og.connect(out);
+  send(0.1);
+}); };
+/* blaster/pistol: zap downsweep + noise crack + sub thump, pitch-varied */
+SND.shoot=function(){ this._play(0.16,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const p=0.95+Math.random()*0.12;
+  const o=osc('square',900*p); o.frequency.exponentialRampToValueAtTime(180*p,t+0.1); const f=filter('lowpass',2600,2); const og=gain(0); hit(og.gain,0.05,0.002,0.12); o.connect(f); f.connect(og); og.connect(out);
+  const n=noise(); const nf=filter('highpass',1800,0.7); const ng=gain(0); hit(ng.gain,0.04,0.001,0.05); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const s=osc('sine',120); s.frequency.exponentialRampToValueAtTime(60,t+0.08); const sg=gain(0); hit(sg.gain,0.05,0.003,0.09); s.connect(sg); sg.connect(out);
+  send(0.08);
+}); };
+/* rifle: deeper, punchier, more body */
+SND.shootHvy=function(){ this._play(0.2,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const p=0.95+Math.random()*0.1;
+  const o=osc('sawtooth',520*p); o.frequency.exponentialRampToValueAtTime(120*p,t+0.13); const f=filter('lowpass',2200,3); const og=gain(0); hit(og.gain,0.06,0.003,0.16); o.connect(f); f.connect(og); og.connect(out);
+  const n=noise(); const nf=filter('bandpass',2400,0.6); const ng=gain(0); hit(ng.gain,0.05,0.001,0.06); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const s=osc('sine',90); s.frequency.exponentialRampToValueAtTime(45,t+0.12); const sg=gain(0); hit(sg.gain,0.07,0.004,0.14); s.connect(sg); sg.connect(out);
+  send(0.1);
+}); };
+/* player damage: low thud + darkening noise + sub */
+SND.hurt=function(){ this._play(0.26,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const o=osc('square',220); o.frequency.exponentialRampToValueAtTime(80,t+0.18); const f=filter('lowpass',1200,2); const og=gain(0); hit(og.gain,0.08,0.004,0.22); o.connect(f); f.connect(og); og.connect(out);
+  const n=noise(); const nf=filter('lowpass',900,0.8); nf.frequency.exponentialRampToValueAtTime(300,t+0.2); const ng=gain(0); hit(ng.gain,0.04,0.003,0.18); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const s=osc('sine',70); const sg=gain(0); hit(sg.gain,0.06,0.004,0.16); s.connect(sg); sg.connect(out);
+  send(0.12);
+}); };
+/* heavy impact (ship landing / fall / meteor): deep thump + noise burst */
+SND.impact=function(){ this._play(0.45,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const o=osc('sine',110); o.frequency.exponentialRampToValueAtTime(38,t+0.3); const og=gain(0); hit(og.gain,0.13,0.004,0.4); o.connect(og); og.connect(out);
+  const n=noise(); const nf=filter('lowpass',1400,1); nf.frequency.exponentialRampToValueAtTime(200,t+0.35); const ng=gain(0); hit(ng.gain,0.08,0.003,0.4); n.connect(nf); nf.connect(ng); ng.connect(out);
+  send(0.18);
+}); };
+/* critter death puff: soft noise whoosh + quick falling tone */
+SND.poof=function(){ this._play(0.24,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const n=noise(); const nf=filter('lowpass',1600,0.8); nf.frequency.exponentialRampToValueAtTime(400,t+0.2); const ng=gain(0); hit(ng.gain,0.06,0.006,0.22); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const o=osc('triangle',320); o.frequency.exponentialRampToValueAtTime(120,t+0.16); const og=gain(0); hit(og.gain,0.035,0.005,0.16); o.connect(og); og.connect(out);
+  send(0.1);
+}); };
 /* ---- Outpost piece sounds (P6) ---- */
 SND.teleport=function(){ this.tone(360,0.16,'sine',0.07,980); setTimeout(()=>this.tone(980,0.22,'sine',0.055,1520),70); };
 SND.jump=function(){ this.tone(240,0.16,'triangle',0.08,640); };
@@ -3554,11 +3590,37 @@ function soloSpawnInitial(){
    in co-op (coarse droneSnap, like critters); solo runs the same
    logic locally. Destroyed = sparks + shutdown, never gore.
    ============================================================ */
-SND.droneShoot=function(){ this.tone(1240,0.07,'square',0.045,520); };
-SND.droneDie=function(){ this.tone(880,0.3,'sawtooth',0.07,90); setTimeout(()=>this.tone(220,0.25,'square',0.05,40),120); };
-SND.droneAlert=function(){ this.tone(740,0.09,'square',0.05); setTimeout(()=>this.tone(990,0.11,'square',0.05),110); };
-SND.fnodeHit=function(){ this.tone(360,0.1,'square',0.05,220); };
-SND.fnodeDown=function(){ this.tone(60,0.8,'sawtooth',0.16,24); setTimeout(()=>this.tone(1800,1.2,'sine',0.05,80),150); setTimeout(()=>this.tone(120,0.5,'square',0.08,40),350); };
+/* drone laser: thin zippy zap, pitch-varied, cheap (no reverb — fires often) */
+SND.droneShoot=function(){ this._play(0.12,({ctx,t,out,osc,filter,gain,hit})=>{
+  const p=0.95+Math.random()*0.15;
+  const o=osc('sawtooth',1400*p); o.frequency.exponentialRampToValueAtTime(500*p,t+0.09); const f=filter('bandpass',2000,1.5); const g=gain(0); hit(g.gain,0.04,0.002,0.1); o.connect(f); f.connect(g); g.connect(out);
+}); };
+/* drone shutdown: descending mechanical whine + noise wash */
+SND.droneDie=function(){ this._play(0.5,({ctx,t,out,osc,noise,filter,gain,hit,sweep,send})=>{
+  const o=osc('sawtooth',700); o.frequency.exponentialRampToValueAtTime(80,t+0.45); const f=filter('lowpass',1800,2); sweep(f.frequency,1800,200,0.45); const g=gain(0); hit(g.gain,0.07,0.005,0.46); o.connect(f); f.connect(g); g.connect(out);
+  const n=noise(); const nf=filter('lowpass',1000,1); const ng=gain(0); hit(ng.gain,0.04,0.01,0.4,t+0.1); n.connect(nf); nf.connect(ng); ng.connect(out);
+  send(0.16);
+}); };
+/* drone alert: rising digital two-tone chirp */
+SND.droneAlert=function(){ this._play(0.26,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('square',740); const g=gain(0); hit(g.gain,0.045,0.004,0.1); const f=filter('bandpass',900,3); o.connect(f); f.connect(g); g.connect(out);
+  const o2=osc('square',1100); const g2=gain(0); hit(g2.gain,0.045,0.004,0.12,t+0.12); o2.connect(g2); g2.connect(out);
+  send(0.12);
+}); };
+/* command-node hit: metallic clang, pitch-varied */
+SND.fnodeHit=function(){ this._play(0.18,({ctx,t,out,osc,noise,filter,gain,hit,send})=>{
+  const p=0.92+Math.random()*0.16;
+  const o=osc('square',360*p); o.frequency.exponentialRampToValueAtTime(200*p,t+0.12); const f=filter('bandpass',1400,2); const g=gain(0); hit(g.gain,0.05,0.002,0.14); o.connect(f); f.connect(g); g.connect(out);
+  const n=noise(); const nf=filter('highpass',2000,0.7); const ng=gain(0); hit(ng.gain,0.025,0.001,0.05); n.connect(nf); nf.connect(ng); ng.connect(out);
+  send(0.12);
+}); };
+/* command-node destroyed: core explosion + long power-down whine */
+SND.fnodeDown=function(){ if(!this.on) return;
+  this.boom();
+  setTimeout(()=>this._play(1.4,({ctx,t,out,osc,filter,gain,adsr,sweep,send})=>{
+    const o=osc('sawtooth',1600); o.frequency.exponentialRampToValueAtTime(60,t+1.2); const f=filter('lowpass',3000,3); sweep(f.frequency,3000,150,1.2); const g=gain(0); adsr(g.gain,0.07,0.05,0.2,0.04,0.6,0.4); o.connect(f); f.connect(g); g.connect(out); send(0.25);
+  }),150);
+};
 
 const drones=[];                  // client entities (solo + MP)
 let droneSpawnT=0, soloDroneId=1, droneAlerted=false;
@@ -3851,12 +3913,41 @@ function onFnodeDown(m){
    authoritative (each victim applies to itself), critters go
    through the server like all other critter damage.
    ============================================================ */
-SND.lance=function(){ this.tone(220,0.5,'sawtooth',0.09,1400); setTimeout(()=>this.tone(900,0.18,'square',0.05,300),30); };
-SND.flame=function(){ this.tone(120+Math.random()*60,0.16,'sawtooth',0.035,70); };
-SND.throwG=function(){ this.tone(360,0.12,'triangle',0.06,180); };
-SND.boom=function(){ this.tone(70,0.5,'sawtooth',0.14,28); setTimeout(()=>this.tone(140,0.3,'square',0.07,40),20); };
-SND.shieldUp=function(){ [330,494,659].forEach((f,i)=>setTimeout(()=>this.tone(f,0.16,'sine',0.06),i*55)); };
-SND.shieldHit=function(){ this.tone(720,0.12,'sine',0.05,420); };
+/* lance beam: charged swell (rising sweep) then a bright discharge crack */
+SND.lance=function(){ this._play(0.6,({ctx,t,out,osc,noise,filter,gain,hit,adsr,sweep,send})=>{
+  const o=osc('sawtooth',180); o.frequency.exponentialRampToValueAtTime(900,t+0.3); const f=filter('lowpass',400,4); sweep(f.frequency,400,4000,0.34); const g=gain(0); adsr(g.gain,0.06,0.28,0.1,0.04,0.05,0.18); o.connect(f); f.connect(g); g.connect(out);
+  const n=noise(); const nf=filter('bandpass',3000,0.8); const ng=gain(0); hit(ng.gain,0.06,0.002,0.18,t+0.3); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const d=osc('square',1200); d.frequency.exponentialRampToValueAtTime(400,t+0.5); const dg=gain(0); hit(dg.gain,0.05,0.004,0.22,t+0.3); d.connect(dg); dg.connect(out);
+  send(0.16);
+}); };
+/* inferno: filtered-noise roar, pitch-varied; cheap (no reverb — fires ~9/s) */
+SND.flame=function(){ this._play(0.18,({out,noise,filter,gain,hit})=>{
+  const n=noise(); const f=filter('bandpass',500+Math.random()*400,0.9); const lp=filter('lowpass',1800,0.5); const g=gain(0); hit(g.gain,0.035,0.02,0.16); n.connect(f); f.connect(lp); lp.connect(g); g.connect(out);
+}); };
+/* grenade throw: short airy whoosh + falling tone */
+SND.throwG=function(){ this._play(0.22,({ctx,t,out,noise,filter,osc,gain,hit,sweep})=>{
+  const n=noise(); const f=filter('bandpass',600,1); sweep(f.frequency,1200,300,0.2); const g=gain(0); hit(g.gain,0.045,0.02,0.2); n.connect(f); f.connect(g); g.connect(out);
+  const o=osc('triangle',420); o.frequency.exponentialRampToValueAtTime(180,t+0.18); const og=gain(0); hit(og.gain,0.03,0.01,0.16); o.connect(og); og.connect(out);
+}); };
+/* EXPLOSION: sub-bass boom + mid punch + darkening noise blast + crackle tail.
+   The hardest sound to make rich procedurally — see report (ceiling flagged). */
+SND.boom=function(){ this._play(1.0,({ctx,t,out,osc,noise,filter,gain,hit,sweep,send})=>{
+  const o=osc('sine',120); o.frequency.exponentialRampToValueAtTime(32,t+0.5); const og=gain(0); hit(og.gain,0.16,0.005,0.7); o.connect(og); og.connect(out);
+  const o2=osc('triangle',180); o2.frequency.exponentialRampToValueAtTime(50,t+0.25); const o2g=gain(0); hit(o2g.gain,0.08,0.004,0.3); o2.connect(o2g); o2g.connect(out);
+  const n=noise(); const nf=filter('lowpass',4000,0.7); sweep(nf.frequency,5000,300,0.8); const ng=gain(0); hit(ng.gain,0.13,0.002,0.9); n.connect(nf); nf.connect(ng); ng.connect(out);
+  const n2=noise(); const n2f=filter('bandpass',1200,0.5); const n2g=gain(0); hit(n2g.gain,0.05,0.05,0.85,t+0.05); n2.connect(n2f); n2f.connect(n2g); n2g.connect(out);
+  send(0.3);
+}); };
+/* shield raise: rising shimmer chord */
+SND.shieldUp=function(){ if(!this.on) return; [330,494,659].forEach((f,i)=>setTimeout(()=>this._play(0.3,({ctx,t,out,osc,filter,gain,hit,send})=>{
+  const o=osc('triangle',f); o.frequency.exponentialRampToValueAtTime(f*1.5,t+0.1); const g=gain(0); hit(g.gain,0.05,0.01,0.28); const lp=filter('lowpass',2400,1); o.connect(lp); lp.connect(g); g.connect(out); send(0.2);
+}),i*55)); };
+/* shield deflect: bright metallic ping */
+SND.shieldHit=function(){ this._play(0.2,({ctx,t,out,osc,gain,hit,send})=>{
+  const o=osc('sine',900); o.frequency.exponentialRampToValueAtTime(440,t+0.16); const g=gain(0); hit(g.gain,0.05,0.003,0.18); o.connect(g); g.connect(out);
+  const o2=osc('triangle',1800); const g2=gain(0); hit(g2.gain,0.02,0.002,0.1); o2.connect(g2); g2.connect(out);
+  send(0.18);
+}); };
 
 /* GREN_* / SHIELD_LIFE / SHIELD_CD imported from shared/constants.js */
 let nadeCd=0, shieldCd=0, infDmgT=0, infFlameT=0, infNetT=0;
