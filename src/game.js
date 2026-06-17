@@ -4796,6 +4796,8 @@ function refreshMobileUI(){
 $('tierBadge').addEventListener('click',()=>{ SND.ensure(); SND.blip();
   if($('tierMenu').classList.contains('hidden')){ renderTierList(); openPanel('tierMenu'); } else closePanel('tierMenu'); });
 $('gearBtn').addEventListener('click',()=>{ SND.ensure(); SND.blip(); openSettings(); });
+/* mobile: tap the mission/CONQUEST card title to collapse it (frees screen space on small landscape screens) */
+if(isTouch) $('missionTitle').addEventListener('click',()=>{ $('missionCard').classList.toggle('collapsed'); SND.blip(); });
 
 /* settings */
 function applySfxVol(){ SND.setSfx({low:0.6,med:1.0,high:1.4}[S.sfxVol]||1.0); }
